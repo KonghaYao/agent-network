@@ -1,4 +1,4 @@
-import { Button, Input } from '../../app/lenso-controls';
+import { Button, Chip, FieldError, Input, Label } from '../../app/lenso-controls';
 import * as Ariakit from '@ariakit/react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
@@ -138,21 +138,25 @@ export function GroupCreateDialog({
       }
     >
       <form id="group-form" onSubmit={(event) => void submit(event)}>
-        <label className="field">
-          <span>群名（可选）</span>
+        <div className="field">
+          <Label htmlFor="group-name-input">群名（可选）</Label>
           <Input
             id="group-name-input"
             type="text"
             maxLength={LIMITS.roomTitleMax}
             placeholder="不填则显示“群聊”"
             autoComplete="off"
+            aria-describedby={errors.title ? 'group-name-error' : undefined}
+            aria-invalid={errors.title ? true : undefined}
             {...register('title')}
           />
-        </label>
-        {errors.title ? <p className="field-error">{errors.title.message}</p> : null}
+        </div>
+        {errors.title ? (
+          <FieldError id="group-name-error">{errors.title.message}</FieldError>
+        ) : null}
 
-        <label className="field">
-          <span>添加成员</span>
+        <div className="field">
+          <Label htmlFor="group-search">添加成员</Label>
           <Ariakit.Combobox
             store={combobox}
             id="group-search"
@@ -167,7 +171,7 @@ export function GroupCreateDialog({
               combobox.setInputValue(event.currentTarget.value);
             }}
           />
-        </label>
+        </div>
         <div id="group-contacts" className="spa-combobox-list" role="group" aria-label="好友候选">
           <Ariakit.ComboboxList store={combobox} alwaysVisible>
             {candidates.map((contact) => (
@@ -205,20 +209,22 @@ export function GroupCreateDialog({
             const contact = contacts.contacts.find((entry) => entry.actor_id === id);
             return (
               <span className="spa-chip" key={id}>
-                {contact?.name ?? id}
-                <Button
-                  type="button"
-                  aria-label={`移除 ${contact?.name ?? id}`}
-                  onClick={() => {
-                    setValue(
-                      'members',
-                      selectedIds.filter((value) => value !== id),
-                      { shouldValidate: true },
-                    );
-                  }}
-                >
-                  ×
-                </Button>
+                <Chip size="sm" variant="soft">
+                  {contact?.name ?? id}
+                  <Button
+                    type="button"
+                    aria-label={`移除 ${contact?.name ?? id}`}
+                    onClick={() => {
+                      setValue(
+                        'members',
+                        selectedIds.filter((value) => value !== id),
+                        { shouldValidate: true },
+                      );
+                    }}
+                  >
+                    ×
+                  </Button>
+                </Chip>
               </span>
             );
           })}
@@ -227,11 +233,11 @@ export function GroupCreateDialog({
           已选 {selectedIds.length} 人
         </p>
         {errors.members ? (
-          <p id="group-members-error" className="field-error">
-            {errors.members.message}
-          </p>
+          <FieldError id="group-members-error">{errors.members.message}</FieldError>
         ) : null}
-        {submitError ? <p id="group-error" className="field-error" role="alert">{submitError}</p> : null}
+        {submitError ? (
+          <FieldError id="group-error">{submitError}</FieldError>
+        ) : null}
       </form>
     </Modal>
   );

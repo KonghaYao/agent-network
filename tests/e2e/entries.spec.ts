@@ -478,7 +478,28 @@ test.describe('SPA 剩余入口', () => {
     await login(page, base, owner.token);
     await page.locator('#contact-requests').click();
     await expect(page.locator('#contact-modal')).toBeVisible();
-    await expect(page.locator('#contact-tab-search')).toHaveAttribute('aria-selected', 'true');
+    const searchTab = page.locator('#contact-tab-search');
+    await expect(searchTab).toHaveAttribute('role', 'tab');
+    await expect(searchTab).toHaveAttribute('aria-controls', 'contact-panel-search');
+    await expect(searchTab).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#contact-panel-search')).toHaveAttribute('role', 'tabpanel');
+    await expect(page.locator('#contact-panel-search')).toHaveAttribute(
+      'aria-labelledby',
+      'contact-tab-search',
+    );
+    await searchTab.focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(page.locator('#contact-tab-requests')).toBeFocused();
+    await expect(page.locator('#contact-tab-requests')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#contact-panel-requests')).toBeVisible();
+    await page.keyboard.press('End');
+    await expect(page.locator('#contact-tab-more')).toBeFocused();
+    await expect(page.locator('#contact-tab-more')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#contact-panel-more')).toBeVisible();
+    await page.keyboard.press('Home');
+    await expect(searchTab).toBeFocused();
+    await expect(searchTab).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#contact-panel-search')).toBeVisible();
     await expect(page.locator('#contact-search-input')).toHaveAttribute(
       'data-lenso-slot',
       'search-field-input',
@@ -627,6 +648,68 @@ test.describe('SPA 剩余入口', () => {
     }
   });
 
+  test('Lenso 不可用时好友分类保持整行布局与 roving tab stop', async ({ page }) => {
+    const base = await baseUrl();
+    const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+    const owner = await registerHuman(base, `Fallback Owner ${suffix}`);
+
+    // Lenso 的异步入口是 Vite 生成的共享 index chunk；阻断后所有适配器留在 fallback。
+    await page.route('**/assets/index-*.js', (route) => route.abort());
+    await login(page, base, owner.token);
+    await page.locator('#contact-requests').click();
+    await expect(page.locator('#contact-modal')).toBeVisible();
+
+    const tablist = page.locator('#contact-segments [role="tablist"]');
+    await expect(tablist).toHaveAttribute('data-lenso-slot', 'tabs-list-fallback');
+    const geometry = await page.evaluate(() => {
+      const list = document.querySelector<HTMLElement>('#contact-segments [role="tablist"]')!;
+      const wrapper = document.querySelector<HTMLElement>('#contact-segments')!;
+      const style = getComputedStyle(list);
+      return {
+        display: style.display,
+        alignItems: style.alignItems,
+        width: list.getBoundingClientRect().width,
+        wrapperWidth: wrapper.getBoundingClientRect().width,
+        xstyle: list.getAttribute('xstyle'),
+      };
+    });
+    expect(geometry.xstyle).toBeNull();
+    expect(geometry.display).toBe('flex');
+    expect(geometry.alignItems).toBe('stretch');
+    expect(Math.round(geometry.width)).toBe(Math.round(geometry.wrapperWidth));
+
+    const searchTab = page.locator('#contact-tab-search');
+    const requestsTab = page.locator('#contact-tab-requests');
+    const moreTab = page.locator('#contact-tab-more');
+    await expect(page.locator('#contact-panel-search')).toHaveAttribute('tabindex', '0');
+    await expect(searchTab).toHaveAttribute('tabindex', '0');
+    await expect(requestsTab).toHaveAttribute('tabindex', '-1');
+    await expect(moreTab).toHaveAttribute('tabindex', '-1');
+
+    await searchTab.focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(requestsTab).toBeFocused();
+    await expect(requestsTab).toHaveAttribute('aria-selected', 'true');
+    await expect(requestsTab).toHaveAttribute('tabindex', '0');
+    await expect(searchTab).toHaveAttribute('tabindex', '-1');
+    await expect(moreTab).toHaveAttribute('tabindex', '-1');
+    await expect(page.locator('#contact-panel-requests')).toBeVisible();
+
+    await page.keyboard.press('End');
+    await expect(moreTab).toBeFocused();
+    await expect(moreTab).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#contact-panel-more')).toBeVisible();
+
+    await page.keyboard.press('Home');
+    await expect(searchTab).toBeFocused();
+    await expect(searchTab).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#contact-panel-search')).toBeVisible();
+
+    await page.keyboard.press('ArrowLeft');
+    await expect(moreTab).toBeFocused();
+    await expect(moreTab).toHaveAttribute('aria-selected', 'true');
+  });
+
   test('举报类型使用 Lenso Select 并通过 RHF 提交选中值', async ({ page }) => {
     const base = await baseUrl();
     const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
@@ -660,6 +743,8 @@ test.describe('SPA 剩余入口', () => {
     await expect(page.locator('#report-modal')).toBeVisible();
 
     const category = page.locator('#report-category');
+    await expect(page.locator('label[for="report-category"]')).toBeVisible();
+    await expect(page.locator('label[for="report-note"]')).toBeVisible();
     await expect(category).toHaveAttribute('data-lenso-slot', 'select-trigger');
     await expect(category).toHaveAttribute('role', 'combobox');
     await expect(category).toContainText('其他');
@@ -900,6 +985,9 @@ test.describe('SPA 剩余入口', () => {
     await expect(page.locator('#members-invites-status')).toContainText('已复制邀请链接');
 
     const policyJoin = page.locator('#group-policy-join');
+    await expect(page.locator('#group-policies fieldset')).toHaveCount(1);
+    await expect(page.locator('#group-policies legend')).toHaveText('群策略设置');
+    await expect(page.locator('label[for="group-policy-join"]')).toBeVisible();
     await expect(policyJoin).toHaveAttribute('data-lenso-slot', 'select-trigger');
     await expect(policyJoin).toHaveAttribute('role', 'combobox');
     await expect(policyJoin).toContainText('直接加入');

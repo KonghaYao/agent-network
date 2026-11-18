@@ -1,4 +1,4 @@
-import { Button, Input } from '../../app/lenso-controls';
+import { Button, FieldError, Input, Label } from '../../app/lenso-controls';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
@@ -82,17 +82,21 @@ export function MeRenameDialog({
       }
     >
       <form id="me-rename-form" onSubmit={(event) => void submit(event)}>
-        <label className="field">
-          <span>名称</span>
+        <div className="field">
+          <Label htmlFor="me-rename-input">名称</Label>
           <Input
             id="me-rename-input"
             type="text"
             maxLength={LIMITS.actorNameMax}
             autoComplete="off"
+            aria-describedby={errors.name ? 'me-rename-input-error' : undefined}
+            aria-invalid={errors.name ? true : undefined}
             {...register('name')}
           />
-        </label>
-        {errors.name ? <p className="field-error">{errors.name.message}</p> : null}
+        </div>
+        {errors.name ? (
+          <FieldError id="me-rename-input-error">{errors.name.message}</FieldError>
+        ) : null}
         {submitError ? (
           <p id="me-rename-error" className="field-error" role="alert">
             {submitError}

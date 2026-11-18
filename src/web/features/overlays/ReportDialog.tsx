@@ -1,4 +1,4 @@
-import { Button, Select, TextArea } from '../../app/lenso-controls';
+import { Button, FieldError, Label, Select, TextArea } from '../../app/lenso-controls';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
@@ -92,7 +92,7 @@ export function ReportDialog({
     >
       <form id="report-form" onSubmit={(event) => void submit(event)}>
         <div className="field">
-          <span>类型</span>
+          <Label htmlFor="report-category">类型</Label>
           <Controller
             control={control}
             name="category"
@@ -102,6 +102,7 @@ export function ReportDialog({
                 name="category"
                 aria-label="举报类型"
                 aria-invalid={fieldState.invalid}
+                aria-describedby={errors.category ? 'report-category-error' : undefined}
                 value={field.value}
                 options={CATEGORIES}
                 onChange={field.onChange}
@@ -110,17 +111,23 @@ export function ReportDialog({
             )}
           />
         </div>
-        {errors.category ? <p className="field-error">{errors.category.message}</p> : null}
-        <label className="field">
-          <span>补充说明（可选）</span>
+        {errors.category ? (
+          <FieldError id="report-category-error">{errors.category.message}</FieldError>
+        ) : null}
+        <div className="field">
+          <Label htmlFor="report-note">补充说明（可选）</Label>
           <TextArea
             id="report-note"
             rows={4}
             maxLength={LIMITS.contactReportNoteBytes * 2}
+            aria-describedby={errors.note ? 'report-note-error' : undefined}
+            aria-invalid={errors.note ? true : undefined}
             {...register('note')}
           />
-        </label>
-        {errors.note ? <p className="field-error">{errors.note.message}</p> : null}
+        </div>
+        {errors.note ? (
+          <FieldError id="report-note-error">{errors.note.message}</FieldError>
+        ) : null}
         {status ? (
           <p id="report-status" className="field-error" role="status">
             {status}

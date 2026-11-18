@@ -719,14 +719,10 @@ ${GROUP_STYLE}
   .contact-modal-card { width: min(760px, 96vw); max-height: min(88dvh, 860px);
     box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden; }
   .contact-modal-card h2 { margin-bottom: 12px; }
-  .contact-segments { display: flex; gap: 2px; margin: 0 0 14px; padding: 2px;
-    border-radius: 8px; background: var(--wx-search); flex: 0 0 auto; }
-  .contact-segments button { flex: 1 1 0; min-width: 0; height: 32px; padding: 0 8px;
-    border: 0; border-radius: 6px; background: transparent; color: var(--wx-muted);
-    font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .contact-segments button:hover { background: var(--wx-hover); color: var(--wx-text); }
-  .contact-segments button[aria-selected="true"] { background: var(--wx-panel);
-    color: var(--wx-text); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / 8%); }
+  .contact-segments { display: flex; margin: 0 0 14px; flex: 0 0 auto; }
+  .contact-segments [data-contact-tab] { flex: 1 1 0; min-width: 0;
+    color: var(--wx-text) !important;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .contact-tab-count { display: inline-block; margin-left: 5px; vertical-align: 1px; }
   .contact-tab-count[hidden] { display: none; }
   .contact-panels { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
@@ -859,7 +855,6 @@ ${GROUP_STYLE}
     .contact-modal-card { width: 100%; height: 100dvh; max-height: 100dvh;
       border-radius: 0; padding: 16px; }
     .contact-segments { margin-bottom: 12px; }
-    .contact-segments button { height: 30px; padding: 0 6px; font-size: 12px; }
     .contact-panels { min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
     .contact-search-results, .contact-request-list, .contact-link-list {
       max-height: none; overflow: visible; }

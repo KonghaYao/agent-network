@@ -1,4 +1,4 @@
-import { Button, Input, TextArea } from '../../app/lenso-controls';
+import { Button, FieldError, Input, Label, TextArea } from '../../app/lenso-controls';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
@@ -183,8 +183,8 @@ export function NewAgentDialog({ open, onOpenChange, identity, token }: NewAgent
       }
     >
       <form id="new-agent-form" onSubmit={(event) => void submit(event)}>
-        <label className="field">
-          <span>Agent 名称</span>
+        <div className="field">
+          <Label htmlFor="new-agent-name">Agent 名称</Label>
           <Input
             id="new-agent-name"
             type="text"
@@ -192,10 +192,14 @@ export function NewAgentDialog({ open, onOpenChange, identity, token }: NewAgent
             placeholder="例如：翻译助手"
             autoComplete="off"
             disabled={created !== null}
+            aria-describedby={errors.name ? 'new-agent-name-error' : undefined}
+            aria-invalid={errors.name ? true : undefined}
             {...register('name')}
           />
-        </label>
-        {errors.name ? <p className="field-error">{errors.name.message}</p> : null}
+        </div>
+        {errors.name ? (
+          <FieldError id="new-agent-name-error">{errors.name.message}</FieldError>
+        ) : null}
         {error ? (
           <p id="new-agent-error" className="form-error" role="status">
             {error}
@@ -203,13 +207,13 @@ export function NewAgentDialog({ open, onOpenChange, identity, token }: NewAgent
         ) : null}
         {created ? (
           <div id="new-agent-result" className="new-agent-result">
-            <p className="new-agent-warning">
+            <p id="new-agent-credentials-warning" className="new-agent-warning">
               MCP URL 与提示词含长期 token，只在本机使用；不要截图、发群或写入日志。
             </p>
-            <label className="field">
-              <span>MCP URL</span>
+            <div className="field">
+              <Label htmlFor="new-agent-url">MCP URL</Label>
               <Input id="new-agent-url" type="text" readOnly value={created.mcp_url} />
-            </label>
+            </div>
             <Button
               className="new-agent-copy"
               id="new-agent-copy"
@@ -219,8 +223,8 @@ export function NewAgentDialog({ open, onOpenChange, identity, token }: NewAgent
               {copied === 'url' ? '已复制' : '复制 MCP URL'}
             </Button>
             <div className="new-agent-prompt">
-              <label className="field">
-                <span>提示词</span>
+              <div className="field">
+                <Label htmlFor="new-agent-prompt">提示词</Label>
                 <div className="new-agent-prompt-text">
                   <TextArea
                     id="new-agent-prompt"
@@ -229,9 +233,10 @@ export function NewAgentDialog({ open, onOpenChange, identity, token }: NewAgent
                     spellCheck={false}
                     wrap="soft"
                     value={prompt}
+                    aria-describedby="new-agent-credentials-warning"
                   />
                 </div>
-              </label>
+              </div>
               <Button
                 className="new-agent-copy"
                 id="new-agent-prompt-copy"

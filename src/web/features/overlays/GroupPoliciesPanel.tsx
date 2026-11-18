@@ -1,4 +1,4 @@
-import { Button, Select as LensoSelect } from '../../app/lenso-controls';
+import { Button, Fieldset, FieldsetLegend, Label, Select as LensoSelect } from '../../app/lenso-controls';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState, type FormEvent } from 'react';
 
@@ -63,7 +63,7 @@ function Select<T extends string>({
 }) {
   return (
     <div className="field">
-      <span>{label}</span>
+      <Label htmlFor={id}>{label}</Label>
       <LensoSelect
         id={id}
         aria-label={label}
@@ -148,78 +148,99 @@ export function GroupPoliciesPanel({
       <div className="members-section-head">
         <h3>群策略</h3>
       </div>
-      <form className="group-policy-form" onSubmit={(event) => void submit(event)}>
-        <Select
-          id="group-policy-message"
-          label="普通成员发言"
-          value={form.member_message}
-          disabled={busy}
-          options={[
-            { value: 'members', label: '所有成员' },
-            { value: 'owner_admin', label: '仅群主/管理员' },
-          ]}
-          onChange={(value) => setForm((current) => ({ ...current, member_message: value }))}
-        />
-        <Select
-          id="group-policy-invite"
-          label="普通成员邀请"
-          value={form.member_invite}
-          disabled={busy}
-          options={[
-            { value: 'members', label: '所有成员' },
-            { value: 'owner_admin', label: '仅群主/管理员' },
-          ]}
-          onChange={(value) => setForm((current) => ({ ...current, member_invite: value }))}
-        />
-        <Select
-          id="group-policy-history"
-          label="新成员历史"
-          value={form.member_history}
-          disabled={busy}
-          options={[
-            { value: 'full', label: '全部历史' },
-            { value: 'from_join', label: '仅加入后' },
-          ]}
-          onChange={(value) => setForm((current) => ({ ...current, member_history: value }))}
-        />
-        <Select
-          id="group-policy-join"
-          label="入群方式"
-          value={form.member_join}
-          disabled={busy}
-          options={[
-            { value: 'open', label: '直接加入' },
-            { value: 'approval', label: '需要审批' },
-          ]}
-          onChange={(value) => setForm((current) => ({ ...current, member_join: value }))}
-        />
-        <Select
-          id="group-policy-profile"
-          label="群资料编辑"
-          value={form.member_profile}
-          disabled={busy}
-          options={[
-            { value: 'members', label: '所有成员' },
-            { value: 'owner_admin', label: '仅群主/管理员' },
-          ]}
-          onChange={(value) => setForm((current) => ({ ...current, member_profile: value }))}
-        />
-        <Select
-          id="group-policy-mention-all"
-          label="@所有人"
-          value={form.member_mention_all}
-          disabled={busy}
-          options={[
-            { value: 'owner_admin', label: '仅群主/管理员' },
-            { value: 'members', label: '所有成员' },
-          ]}
-          onChange={(value) => setForm((current) => ({ ...current, member_mention_all: value }))}
-        />
-        <div className="row">
-          <Button id="group-policy-save" className="primary" type="submit" disabled={busy}>
-            {busy ? '正在保存…' : '保存策略'}
-          </Button>
-        </div>
+      <form onSubmit={(event) => void submit(event)}>
+        <Fieldset style={{ border: 0, margin: 0, minWidth: 0, padding: 0 }}>
+          <FieldsetLegend
+            style={{
+              position: 'absolute',
+              width: 1,
+              height: 1,
+              margin: -1,
+              padding: 0,
+              overflow: 'hidden',
+              clip: 'rect(0 0 0 0)',
+              whiteSpace: 'nowrap',
+              border: 0,
+            }}
+          >
+            群策略设置
+          </FieldsetLegend>
+          <div className="group-policy-form">
+            <Select
+              id="group-policy-message"
+              label="普通成员发言"
+              value={form.member_message}
+              disabled={busy}
+              options={[
+                { value: 'members', label: '所有成员' },
+                { value: 'owner_admin', label: '仅群主/管理员' },
+              ]}
+              onChange={(value) => setForm((current) => ({ ...current, member_message: value }))}
+            />
+            <Select
+              id="group-policy-invite"
+              label="普通成员邀请"
+              value={form.member_invite}
+              disabled={busy}
+              options={[
+                { value: 'members', label: '所有成员' },
+                { value: 'owner_admin', label: '仅群主/管理员' },
+              ]}
+              onChange={(value) => setForm((current) => ({ ...current, member_invite: value }))}
+            />
+            <Select
+              id="group-policy-history"
+              label="新成员历史"
+              value={form.member_history}
+              disabled={busy}
+              options={[
+                { value: 'full', label: '全部历史' },
+                { value: 'from_join', label: '仅加入后' },
+              ]}
+              onChange={(value) => setForm((current) => ({ ...current, member_history: value }))}
+            />
+            <Select
+              id="group-policy-join"
+              label="入群方式"
+              value={form.member_join}
+              disabled={busy}
+              options={[
+                { value: 'open', label: '直接加入' },
+                { value: 'approval', label: '需要审批' },
+              ]}
+              onChange={(value) => setForm((current) => ({ ...current, member_join: value }))}
+            />
+            <Select
+              id="group-policy-profile"
+              label="群资料编辑"
+              value={form.member_profile}
+              disabled={busy}
+              options={[
+                { value: 'members', label: '所有成员' },
+                { value: 'owner_admin', label: '仅群主/管理员' },
+              ]}
+              onChange={(value) => setForm((current) => ({ ...current, member_profile: value }))}
+            />
+            <Select
+              id="group-policy-mention-all"
+              label="@所有人"
+              value={form.member_mention_all}
+              disabled={busy}
+              options={[
+                { value: 'owner_admin', label: '仅群主/管理员' },
+                { value: 'members', label: '所有成员' },
+              ]}
+              onChange={(value) =>
+                setForm((current) => ({ ...current, member_mention_all: value }))
+              }
+            />
+            <div className="row">
+              <Button id="group-policy-save" className="primary" type="submit" disabled={busy}>
+                {busy ? '正在保存…' : '保存策略'}
+              </Button>
+            </div>
+          </div>
+        </Fieldset>
       </form>
       <p
         id="group-policy-status"

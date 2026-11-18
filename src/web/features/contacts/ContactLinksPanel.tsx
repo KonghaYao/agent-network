@@ -221,11 +221,7 @@ export function ContactLinksPanel({
 
   return (
     <section
-      id="contact-panel-more"
       className="contact-panel contact-more-panel"
-      role="tabpanel"
-      aria-labelledby="contact-tab-more"
-      tabIndex={0}
       hidden={!active}
     >
       <section className="contact-link-panel" aria-label="好友链接">

@@ -317,19 +317,21 @@
 
 .spa-chip {
   display: inline-flex;
-  align-items: center;
-  gap: 4px;
   max-width: 100%;
-  padding: 3px 4px 3px 8px;
+}
+
+.spa-chip > [data-lenso-slot='chip-fallback'] {
+  padding: 3px 8px;
   border: 1px solid var(--wx-line);
   border-radius: 999px;
   background: var(--wx-search);
   font-size: 12px;
 }
 
-.spa-chip > button {
+.spa-chip button {
   width: 20px;
   height: 20px;
+  margin-left: 2px;
   padding: 0;
   border: 0;
   border-radius: 50%;
@@ -339,7 +341,7 @@
   line-height: 1;
 }
 
-.spa-chip > button:hover {
+.spa-chip button:hover {
   background: var(--wx-hover);
   color: var(--wx-text);
 }
