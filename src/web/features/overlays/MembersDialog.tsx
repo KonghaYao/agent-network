@@ -1,4 +1,4 @@
-import { Button, FieldError, SearchInput, Select } from '../../app/lenso-controls';
+import { Button, Checkbox, FieldError, SearchInput, Select } from '../../app/lenso-controls';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 
@@ -615,19 +615,14 @@ export function MembersDialog({
               ) : (
                 <>
                   {candidates.map((contact) => (
-                    <label
+                    <Checkbox
                       className={`contact-choice${selectedSet.has(contact.actor_id) ? ' selected' : ''}`}
                       key={contact.actor_id}
+                      value={contact.actor_id}
+                      checked={selectedSet.has(contact.actor_id)}
+                      disabled={busy !== null}
+                      onCheckedChange={(checked) => toggleCandidate(contact.actor_id, checked)}
                     >
-                      <input
-                        type="checkbox"
-                        value={contact.actor_id}
-                        checked={selectedSet.has(contact.actor_id)}
-                        disabled={busy !== null}
-                        onChange={(event) =>
-                          toggleCandidate(contact.actor_id, event.target.checked)
-                        }
-                      />
                       <MemberAvatar
                         name={contact.name}
                         kind={contact.kind}
@@ -637,7 +632,7 @@ export function MembersDialog({
                       <span className="contact-kind">
                         {contact.kind === 'agent' ? 'Agent' : '人'}
                       </span>
-                    </label>
+                    </Checkbox>
                   ))}
                   {contacts.loading ? (
                     <p className="members-empty">正在读取好友…</p>

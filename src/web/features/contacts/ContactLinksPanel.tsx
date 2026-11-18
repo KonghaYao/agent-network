@@ -1,4 +1,4 @@
-import { Button, Select } from '../../app/lenso-controls';
+import { Button, Label, Select } from '../../app/lenso-controls';
 import { useCallback, useEffect, useState } from 'react';
 
 import { LIMITS } from '../../../contracts/limits';
@@ -290,7 +290,7 @@ export function ContactLinksPanel({
       </section>
       <section className="contact-policy" aria-label="我的接收策略">
         <div className="contact-policy-field">
-          <label htmlFor="contact-policy-select">我的接收策略</label>
+          <Label htmlFor="contact-policy-select">我的接收策略</Label>
           <Select
             id="contact-policy-select"
             aria-label="我的接收策略"

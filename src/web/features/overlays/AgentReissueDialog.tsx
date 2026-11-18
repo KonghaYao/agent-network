@@ -1,4 +1,4 @@
-import { Button, TextArea } from '../../app/lenso-controls';
+import { Button, Description, Label, TextArea } from '../../app/lenso-controls';
 import { useState } from 'react';
 
 import { copyText } from '../../lib/files';
@@ -58,21 +58,22 @@ export function AgentReissueDialog({
         </div>
       }
     >
-      <p className="contact-link-hint">
+      <Description id="agent-reissue-hint" className="contact-link-hint">
         {agentName} 的新 token 已生成，旧 token 已失效。只复制下面的提示词，不会再次更换 token。
-      </p>
-      <label className="field">
-        <span>新提示词</span>
+      </Description>
+      <div className="field">
+        <Label htmlFor="room-menu-reissue-text">新提示词</Label>
         <div className="room-menu-reissue-text">
           <TextArea
             id="room-menu-reissue-text"
+            aria-describedby="agent-reissue-hint"
             rows={8}
             readOnly
             value={prompt}
             onFocus={(event) => event.currentTarget.select()}
           />
         </div>
-      </label>
+      </div>
       <div className="row">
         <Button id="room-menu-reissue-copy-prompt" className="primary" type="button" onClick={() => void copy()}>
           {copied ? '已复制' : '复制提示词'}

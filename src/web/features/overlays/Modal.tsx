@@ -144,6 +144,7 @@ function RadixModal({
         <DialogPrimitive.Overlay className="spa-dialog-overlay" />
         <DialogPrimitive.Content
           id={contentId}
+          aria-labelledby={titleId}
           data-modal-shell={shell === 'radix' ? 'radix' : 'fallback'}
           className={`modal-card spa-dialog-content ${className}`.trim()}
           aria-describedby={undefined}

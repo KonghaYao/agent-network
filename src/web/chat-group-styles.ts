@@ -63,7 +63,12 @@ export const GROUP_STYLE = `
   .contact-choice { display: flex; align-items: center; gap: 9px; padding: 8px;
     border-radius: 4px; font-size: 14px; }
   .members-card .contact-choice { gap: 8px; padding: 7px 8px; font-size: 13px;
+    width: 100%; min-height: 44px; box-sizing: border-box; text-align: left;
+    color: var(--wx-text); background: transparent;
     border: 1px solid transparent; cursor: pointer; }
+  #members-contacts [data-lenso-slot="checkbox-content"] { display: flex; align-items: center;
+    gap: 8px; width: 100%; min-width: 0; }
+  #members-contacts [data-lenso-slot="checkbox-control"] { flex: 0 0 auto; }
   .members-card .contact-avatar { flex: 0 0 auto; width: 24px; height: 24px;
     border-radius: 5px; font-size: 11px; }
   .contact-choice:hover { background: var(--wx-hover); }
@@ -127,7 +132,7 @@ export const GROUP_STYLE = `
     line-height: 1.6; color: var(--wx-muted); border-bottom: 1px solid var(--wx-line); }
   .members-invite-form { display: flex; flex-wrap: wrap; align-items: center;
     gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--wx-line); }
-  .members-invite-form label { display: flex; align-items: center; gap: 4px;
+  .members-invite-field { display: flex; align-items: center; gap: 4px;
     font-size: 12px; color: var(--wx-muted); }
   .members-invite-form input { width: 64px; box-sizing: border-box; padding: 4px 6px;
     border: 1px solid var(--wx-line); border-radius: 4px; background: var(--wx-search);

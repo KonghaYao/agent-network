@@ -457,12 +457,17 @@ test.describe('Agent 记忆弹窗', () => {
     expect(contextCalls().at(-1)?.args.kind).toBe('bound');
 
     await page.locator('[data-memory-tab="recall"]').click();
+    await expect(page.locator('label[for="memory-recall-query"]')).toHaveAttribute('data-lenso-slot', 'label');
+    await expect(page.locator('#memory-recall-query')).toHaveAccessibleName('查询');
     await page.fill('#memory-recall-query', '发布流程');
     await page.locator('#memory-recall-form button[type="submit"]').click();
     await expect.poll(() => calls.filter((call) => call.name === 'network_memory_recall').length).toBe(1);
     const recall = calls.find((call) => call.name === 'network_memory_recall');
     expect(recall?.args.mode).toBe('reflect');
     expect(recall?.args).not.toHaveProperty('minimum_evidence');
+    await page.locator('[data-memory-tab="host"]').click();
+    await expect(page.locator('label[for="memory-manifest-id"]')).toHaveAttribute('data-lenso-slot', 'label');
+    await expect(page.locator('#memory-manifest-id')).toHaveAccessibleName('manifest_id');
   });
 
   test('Tabs 与面板撑满卡片内容宽度，桌面与移动端均无横向溢出', async ({ page }) => {

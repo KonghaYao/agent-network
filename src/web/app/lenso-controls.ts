@@ -382,7 +382,8 @@ export function NumberInput({
   onValueChange,
 }: NumberInputProps) {
   const lenso = useLenso();
-  if (!lenso) {
+  const scope = useLensoBackendScope();
+  if (!lenso || scope === 'fallback') {
     return createElement('input', {
       id,
       type: 'number',
@@ -730,6 +731,7 @@ export interface CheckboxAdapterProps {
   className?: string;
   disabled?: boolean;
   name?: string;
+  value?: string;
   children?: ReactNode;
   'aria-label'?: string;
   'data-task-only'?: boolean;
@@ -931,7 +933,8 @@ function fieldPrimitive(
   const slot = primitiveSlot(name);
   return (props: PrimitiveProps): ReactElement => {
     const lenso = useLenso();
-    if (!lenso) {
+    const scope = useLensoBackendScope();
+    if (!lenso || scope === 'fallback') {
       return createElement(
         tag as 'p',
         nativePrimitiveProps(tag, slot, fallbackDefaults, props) as ComponentPropsWithRef<'p'>,

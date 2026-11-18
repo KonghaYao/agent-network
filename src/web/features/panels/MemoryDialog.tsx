@@ -1,12 +1,4 @@
-import {
-  Badge,
-  Button,
-  Card,
-  Input,
-  Pagination,
-  Select,
-  Surface,
-} from '../../app/lenso-controls';
+import { Badge, Button, Card, Input, Label, Pagination, Select, Surface } from '../../app/lenso-controls';
 import { Tabs } from '../../app/lenso-tabs';
 import {
   CONTEXT_KIND_OPTIONS,
@@ -622,8 +614,8 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                               onChange={setRecallMode}
                             />
                           </div>
-                          <label className="memory-field">
-                            查询
+                          <div className="memory-field">
+                            <Label htmlFor="memory-recall-query">查询</Label>
                             <Input
                               id="memory-recall-query"
                               type="text"
@@ -633,7 +625,7 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                               value={recallQuery}
                               onChange={(event) => setRecallQuery(event.target.value)}
                             />
-                          </label>
+                          </div>
                           <div className="memory-field">
                             <span>最低证据</span>
                             <Select
@@ -816,8 +808,8 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                           </p>
                         </div>
                         <form id="memory-manifest-form" className="memory-form" onSubmit={(event) => void submitManifest(event)}>
-                          <label className="memory-field">
-                            manifest_id
+                          <div className="memory-field">
+                            <Label htmlFor="memory-manifest-id">manifest_id</Label>
                             <Input
                               id="memory-manifest-id"
                               type="text"
@@ -827,7 +819,7 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                               value={manifestId}
                               onChange={(event) => setManifestId(event.target.value)}
                             />
-                          </label>
+                          </div>
                           <Button className="primary memory-submit" type="submit">
                             查询清单状态
                           </Button>

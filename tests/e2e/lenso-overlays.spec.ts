@@ -141,6 +141,11 @@ for (const item of consumers) {
     for (const close of ['button', 'escape', 'backdrop']) {
       await item.open(page);
       const dialog = await contract(page, item);
+      const field = ({ ForwardDialog: ['forward-search', '选择转发会话'], AgentReissueDialog: ['room-menu-reissue-text', '新提示词'], MessageSearchDialog: ['message-search-input', '搜索消息内容'] } as Record<string, string[]>)[item.name];
+      if (field) {
+        await expect(page.locator(`label[for="${field[0]}"]`)).toHaveAttribute('data-lenso-slot', 'label');
+        await expect(page.locator(`#${field[0]}`)).toHaveAccessibleName(field[1]!);
+      }
       await expect.poll(() => dialog.evaluate((node) => node.contains(document.activeElement))).toBe(true);
       if (close === 'button') await dialog.locator('.spa-dialog-close').click();
       else if (close === 'escape') await page.keyboard.press('Escape');
@@ -290,6 +295,8 @@ for (const item of consumers) {
       await item.open(page);
       const dialog = page.locator(`#${item.id}`);
       await expect(dialog).toHaveAttribute('data-modal-shell', 'fallback');
+      const migratedLabel = ({ ForwardDialog: 'forward-search', AgentReissueDialog: 'room-menu-reissue-text', MessageSearchDialog: 'message-search-input' } as Record<string, string>)[item.name];
+      if (migratedLabel) await expect(dialog.locator(`label[for="${migratedLabel}"]`)).toHaveAttribute('data-lenso-slot', 'label-fallback');
       expect(intercepted).toBeGreaterThan(0);
       if (item.name === 'TransferDialog') await expect(page.locator('#transfer-successor-search')).toBeVisible();
       // 真正保存全部控件节点引用，验证模块到达不替换编辑/菜单节点。
