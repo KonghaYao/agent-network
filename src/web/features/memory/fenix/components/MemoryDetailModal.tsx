@@ -6,6 +6,8 @@
  * 揭示入口在 `MemoryDetailBody`。
  */
 
+import { useEffect } from "react";
+
 import { EmptyState } from "../ui/empty-state";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
 import { Spinner } from "../ui/spinner";
@@ -44,12 +46,32 @@ export function MemoryDetailModal({ memoryId, onClose }: MemoryDetailModalProps)
   const failure = loadError ? toHindsightFailure(loadError) : null;
 
   const isOpen = memoryId !== null;
+  useEffect(() => {
+    if (!isOpen) return;
+    // Lenso top layer 会吞掉 body 的 pointer-events；点击抽屉空白角落时
+    // 事件目标可能是 html，Radix 收不到 outside 交互。这里只负责关闭详情，
+    // 父抽屉由 dismissible 门控保持打开。
+    const closeOutside = (event: PointerEvent) => {
+      const content = document.querySelector('[data-memory-detail-dialog]');
+      if (event.target instanceof Node && content?.contains(event.target)) return;
+      onClose();
+    };
+    window.addEventListener('pointerdown', closeOutside, true);
+    return () => window.removeEventListener('pointerdown', closeOutside, true);
+  }, [isOpen, onClose]);
+  // Lenso Drawer 的内容位于 top layer；详情若继续 portal 到 body 会落在抽屉下方，
+  // 被内容区拦截点击。收进记忆内容容器后仍在抽屉 stacking context 内，遮罩与
+  // 关闭按钮都可达；Radix fallback 下容器同样存在，行为不变。
+  const portalContainer =
+    typeof document === 'undefined' ? null : document.getElementById('agent-memory-content');
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
         className="z-[70] max-w-2xl max-h-[80vh] overflow-hidden flex flex-col"
         overlayClassName="z-[70]"
+        portalContainer={portalContainer}
+        data-memory-detail-dialog=""
       >
         <DialogHeader>
           <DialogTitle>{memory ? memoryTypeTitle(t, memory.type) : t("memoryDetail.defaultTitle")}</DialogTitle>

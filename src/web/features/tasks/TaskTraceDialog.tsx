@@ -1,12 +1,40 @@
 import { Button } from '../../app/lenso-controls';
+import {
+  LensoBackendProvider,
+  useBackendLease,
+  useLenso,
+} from '../../app/lenso-runtime';
+import {
+  getTopModalShell,
+  registerModalShell,
+  type ModalShell,
+} from '../../app/modal-shell';
 import { Modal } from '../overlays/Modal';
 import { useTaskTrace } from '../../hooks/useTaskTrace';
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 
 function timeLabel(value: string): string {
   const timestamp = Number(value);
   if (!Number.isFinite(timestamp)) return '';
   return new Date(timestamp).toLocaleString();
 }
+
+/** Lenso 升级会替换触发按钮节点；记录稳定选择器供关闭时找回同一入口。 */
+function restoreSelector(element: HTMLElement): string | null {
+  if (element.id) return `#${CSS.escape(element.id)}`;
+  const rootId = element.closest('[data-task-root]')?.getAttribute('data-task-root');
+  return rootId
+    ? `[data-task-root="${CSS.escape(rootId)}"] .task-dock-item-trigger`
+    : null;
+}
+
+type Trace = ReturnType<typeof useTaskTrace>;
 
 /**
  * Task Trace 抽屉：按原消息顺序双向分页。
@@ -34,33 +62,33 @@ export function TaskTraceDialog({
   onJump: (messageId: string) => void;
 }) {
   const trace = useTaskTrace({ open, roomId, rootId, focusId, token });
+  const title = trace.summary?.preview || 'Task';
+
+  return (
+    <TaskTraceShell
+      open={open}
+      onOpenChange={onOpenChange}
+      title={title}
+      content={<TraceContent trace={trace} onJump={onJump} onOpenChange={onOpenChange} />}
+      footer={<TraceFooter onClose={() => onOpenChange(false)} />}
+    />
+  );
+}
+
+function TraceContent({
+  trace,
+  onJump,
+  onOpenChange,
+}: {
+  trace: Trace;
+  onJump: (messageId: string) => void;
+  onOpenChange: (open: boolean) => void;
+}) {
   const summary = trace.summary;
   const busy = trace.busy;
 
   return (
-    <Modal
-      // TODO(N2b/N2c): 随 MessageSearch 嵌套浮层迁移恢复默认 Lenso；本轮保留抽屉几何。
-      shell="radix"
-      open={open}
-      onOpenChange={onOpenChange}
-      title={summary?.preview || 'Task'}
-      titleId="task-trace-title"
-      contentId="task-trace-drawer"
-      className="task-trace-card"
-      footer={
-        <div className="row modal-actions">
-          <Button
-            id="task-trace-close"
-            type="button"
-            variant="bordered"
-            size="md"
-            onClick={() => onOpenChange(false)}
-          >
-            关闭
-          </Button>
-        </div>
-      }
-    >
+    <>
       <p id="task-trace-meta" className="task-trace-meta">
         {summary
           ? `${summary.message_count} 条消息 · ${summary.participant_count} 个 Agent 参与${
@@ -155,6 +183,174 @@ export function TaskTraceDialog({
           {trace.items.length} / {trace.count || trace.items.length} 条已加载
         </p>
       ) : null}
-    </Modal>
+    </>
+  );
+}
+
+function TraceFooter({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="row modal-actions">
+      <Button id="task-trace-close" type="button" variant="bordered" size="md" onClick={onClose}>
+        关闭
+      </Button>
+    </div>
+  );
+}
+
+type ShellProps = {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  title: string;
+  content: ReactNode;
+  footer: ReactNode;
+};
+
+/**
+ * Trace 的壳在打开瞬间锁定：顶层是 Radix（MessageSearch/上下文）时沿用
+ * Radix，避免兄弟浮层混用两套焦点与滚动锁；页面级（TaskDock/预览）才升级
+ * 为 Lenso Drawer。打开周期内模块到达或父层关闭都不换壳。
+ */
+function TaskTraceShell({ open, onOpenChange, title, content, footer }: ShellProps) {
+  const backend = useBackendLease(open);
+  const lenso = useLenso();
+  const restoreFocus = useRef<HTMLElement | null>(null);
+  const restoreBy = useRef<string | null>(null);
+  const lease = useRef<{ open: boolean; shell: ModalShell } | null>(null);
+
+  if (open && !lease.current?.open) {
+    const active = document.activeElement;
+    restoreFocus.current = active instanceof HTMLElement ? active : null;
+    restoreBy.current = active instanceof HTMLElement ? restoreSelector(active) : null;
+    lease.current = {
+      open: true,
+      shell:
+        getTopModalShell() === 'radix' || backend !== 'lenso' || !lenso
+          ? 'radix'
+          : 'lenso',
+    };
+  } else if (!open && lease.current?.open) {
+    lease.current.open = false;
+  }
+  const shell = lease.current?.shell ?? 'radix';
+  const resolveReturnFocus = () => {
+    const captured = restoreFocus.current;
+    if (captured?.isConnected) return captured;
+    return restoreBy.current
+      ? document.querySelector<HTMLElement>(restoreBy.current)
+      : null;
+  };
+  const returnFocusRef = {
+    get current() {
+      return resolveReturnFocus();
+    },
+  } as RefObject<HTMLElement | null>;
+
+  return (
+    <LensoBackendProvider backend={backend}>
+      {shell === 'lenso' && lenso ? (
+        <LensoTraceDrawer
+          open={open}
+          onOpenChange={onOpenChange}
+          title={title}
+          content={content}
+          footer={footer}
+          drawer={lenso.Drawer}
+          restoreFocus={resolveReturnFocus}
+        />
+      ) : (
+        <Modal
+          shell="radix"
+          open={open}
+          onOpenChange={onOpenChange}
+          title={title}
+          titleId="task-trace-title"
+          contentId="task-trace-drawer"
+          className="task-trace-card"
+          footer={footer}
+          returnFocusRef={returnFocusRef}
+        >
+          {content}
+        </Modal>
+      )}
+    </LensoBackendProvider>
+  );
+}
+
+function LensoTraceDrawer({
+  open,
+  onOpenChange,
+  title,
+  content,
+  footer,
+  drawer: Drawer,
+  restoreFocus,
+}: ShellProps & {
+  drawer: NonNullable<ReturnType<typeof useLenso>>['Drawer'];
+  restoreFocus: () => HTMLElement | null;
+}) {
+  const wasOpen = useRef(open);
+  useLayoutEffect(() => {
+    if (open) return registerModalShell('lenso');
+  }, [open]);
+  useEffect(() => {
+    if (wasOpen.current && !open) {
+      const target = restoreFocus();
+      const frame = target ? requestAnimationFrame(() => target.focus()) : null;
+      wasOpen.current = open;
+      return () => {
+        if (frame !== null) cancelAnimationFrame(frame);
+      };
+    }
+    wasOpen.current = open;
+  }, [open, restoreFocus]);
+  // 关闭时立即卸载，避免 Lenso 退出动画期间吞掉下一次点击。
+  if (!open) return null;
+
+  return (
+    <Drawer.Root
+      open={open}
+      modal
+      side="end"
+      closeOnOutsidePress
+      onOpenChange={onOpenChange}
+    >
+      <Drawer.Backdrop
+        variant="opaque"
+        render={(props) => (
+          <div
+            {...props}
+            className={`${String(props.className ?? '')} spa-dialog-overlay task-trace-overlay`.trim()}
+          />
+        )}
+      />
+      <Drawer.Content
+        id="task-trace-drawer"
+        data-task-trace-shell="lenso"
+        data-drawer-no-drag=""
+        aria-labelledby="task-trace-title"
+        aria-describedby={undefined}
+        initialFocus="auto"
+        finalFocus={() => restoreFocus()}
+        style={{ width: 'min(560px, 100vw)', maxWidth: '100vw' }}
+        render={(props) => (
+          <div {...props} className={`${String(props.className ?? '')} task-trace-drawer`.trim()} />
+        )}
+      >
+        <Drawer.Title
+          id="task-trace-title"
+          render={(props) => <h2 {...props}>{title}</h2>}
+        />
+        {content}
+        {footer}
+        <Drawer.Close
+          aria-label="关闭"
+          render={(props) => (
+            <button {...props} className="spa-dialog-close">
+              ×
+            </button>
+          )}
+        />
+      </Drawer.Content>
+    </Drawer.Root>
   );
 }

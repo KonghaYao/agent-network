@@ -845,9 +845,156 @@ test.describe('Agent 记忆弹窗', () => {
     await page.locator('#memory-avatar-open').click();
     await expect(page.locator('#members-modal')).toBeHidden();
     await expect(page.locator('#agent-memory-dialog')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('#agent-memory-dialog')).toHaveAttribute(
+      'data-agent-memory-shell',
+      'lenso',
+    );
     await page.locator('#agent-memory-close').click();
     await expect(page.locator('#members-button')).toBeFocused();
   });
+
+  test('页面级 AgentMemory Lenso Drawer：几何、暗色、焦点围栏与滚动锁', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 844 });
+    await page.emulateMedia({ colorScheme: 'dark' });
+    const calls: MemoryCall[] = [];
+    await installMemoryFenixStub(page, calls, { actorName: agentName, actorId: agentId });
+    await login(page, base, tokenA);
+    await page.goto(`${base}/c/${groupRoom}`);
+    // 确认 Lenso 已就绪，本次打开才应进入 Drawer。
+    await expect(page.locator('#message-search-button')).toHaveAttribute('data-lenso-slot', 'button');
+    await expect(page.locator('#members-button')).toBeVisible({ timeout: 15_000 });
+    await page.locator('#members-button').click();
+    await expect(page.locator('#members-modal')).toBeVisible();
+    const member = page.locator('.member-roster-item').filter({ hasText: agentName });
+    await member.locator('.memory-avatar-trigger').click({ button: 'right' });
+    await page.locator('#memory-avatar-open').click();
+
+    // 裁决 1：Members 仍是打开记忆前主动关闭，不能改成新的堆叠时序。
+    await expect(page.locator('#members-modal')).toHaveCount(0);
+    const drawer = page.locator('#agent-memory-dialog');
+    await expect(drawer).toBeVisible({ timeout: 15_000 });
+    await expect(drawer).toHaveAttribute('data-agent-memory-shell', 'lenso');
+    await expect(drawer).toHaveAttribute('role', 'dialog');
+    await expect(drawer).toHaveAttribute('aria-labelledby', 'agent-memory-title');
+    await expect(page.locator('#agent-memory-title')).toHaveText('Agent 记忆');
+    await expect(page.locator('#agent-memory-target')).toHaveText(agentName);
+    await expect(page.locator('#agent-memory-readonly')).toHaveText('只读');
+    await expect(page.locator('.agent-memory-overlay')).toBeVisible();
+
+    const geometry = await drawer.evaluate((element) => {
+      const rect = (node: Element | null) => {
+        if (!node) return null;
+        const box = node.getBoundingClientRect();
+        return { x: box.x, y: box.y, width: box.width, height: box.height, right: box.right, bottom: box.bottom };
+      };
+      return {
+        drawer: rect(element),
+        overlay: rect(document.querySelector('.agent-memory-overlay')),
+        background: getComputedStyle(element).backgroundColor,
+        itemsOverflow: getComputedStyle(document.getElementById('agent-memory-content')!).overflowY,
+      };
+    });
+    const box = geometry.drawer!;
+    expect(box.x).toBeGreaterThanOrEqual(-0.5);
+    expect(box.x).toBeLessThanOrEqual(0.5);
+    expect(box.width).toBeGreaterThanOrEqual(1279.5);
+    expect(box.width).toBeLessThanOrEqual(1280.5);
+    expect(box.height).toBeGreaterThanOrEqual(843.5);
+    expect(box.height).toBeLessThanOrEqual(844.5);
+    expect(box.right).toBeGreaterThanOrEqual(1279.5);
+    expect(box.right).toBeLessThanOrEqual(1280.5);
+    expect(geometry.overlay).toEqual({ x: 0, y: 0, width: 1280, height: 844, right: 1280, bottom: 844 });
+    const channels = geometry.background.match(/\d+/gu)!.slice(0, 3).map(Number);
+    expect(channels.every((channel) => channel < 120)).toBe(true);
+    expect(geometry.itemsOverflow).toBe('hidden');
+
+    await expect.poll(() =>
+      drawer.evaluate((node) => node.contains(document.activeElement)),
+    ).toBe(true);
+    for (let index = 0; index < 10; index += 1) {
+      await page.keyboard.press(index < 5 ? 'Tab' : 'Shift+Tab');
+      await expect.poll(() =>
+        drawer.evaluate((node) => node.contains(document.activeElement)),
+      ).toBe(true);
+    }
+    expect(
+      await page.evaluate(() =>
+        [document.body, document.documentElement].some(
+          (node) => getComputedStyle(node).overflowY === 'hidden',
+        ),
+      ),
+    ).toBe(true);
+
+    await page.keyboard.press('Escape');
+    await expect(drawer).toBeHidden();
+    await expect(page.locator('.agent-memory-overlay')).toHaveCount(0);
+    await expect(page.locator('#members-button')).toBeFocused();
+  });
+
+  for (const mode of ['blocked', 'delayed'] as const) {
+    test(`AgentMemory ${mode}：本次打开锁定 Radix，关闭重开升级 Drawer`, async ({ page }) => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      let intercepted = 0;
+      const errors: string[] = [];
+      page.on('pageerror', (error) => errors.push(error.message));
+      await page.route('**/assets/index-*.js', async (route) => {
+        intercepted += 1;
+        if (mode === 'blocked') return route.abort('failed');
+        await gate;
+        await route.continue();
+      });
+      try {
+        const calls: MemoryCall[] = [];
+        await installMemoryFenixStub(page, calls, { actorName: agentName, actorId: agentId });
+        await login(page, base, tokenA);
+        await openRowMemory(page, directRoom);
+        const drawer = page.locator('#agent-memory-dialog');
+        await expect(drawer).toBeVisible({ timeout: 15_000 });
+        await expect(drawer).toHaveAttribute('data-agent-memory-shell', 'radix');
+        await drawer.evaluate((node) => {
+          const probe = window as unknown as {
+            __agentMemoryNode?: Element;
+            __agentMemoryFocus?: Element | null;
+          };
+          probe.__agentMemoryNode = node;
+          probe.__agentMemoryFocus = document.activeElement;
+        });
+        if (mode === 'delayed') {
+          release();
+          await expect.poll(() =>
+            page.locator('[data-lenso-slot="button"]').count(),
+          ).toBeGreaterThan(0);
+          expect(await page.evaluate(() => {
+            const probe = window as unknown as {
+              __agentMemoryNode?: Element;
+              __agentMemoryFocus?: Element | null;
+            };
+            return Boolean(probe.__agentMemoryNode?.isConnected) &&
+              probe.__agentMemoryFocus === document.activeElement;
+          })).toBe(true);
+          await expect(drawer).toHaveAttribute('data-agent-memory-shell', 'radix');
+        }
+        expect(intercepted).toBeGreaterThan(0);
+        await page.keyboard.press('Escape');
+        await expect(drawer).toBeHidden();
+        await expect(row(page, directRoom)).toBeFocused();
+
+        await openRowMemory(page, directRoom);
+        await expect(drawer).toBeVisible({ timeout: 15_000 });
+        if (mode === 'delayed') {
+          await expect(drawer).toHaveAttribute('data-agent-memory-shell', 'lenso');
+        } else {
+          await expect(drawer).toHaveAttribute('data-agent-memory-shell', 'radix');
+        }
+        await page.keyboard.press('Escape');
+        await expect(drawer).toBeHidden();
+        expect(errors).toEqual([]);
+      } finally {
+        release?.();
+      }
+    });
+  }
 
   test('Agent 自身账号头像右键打开记忆', async ({ page }) => {
     const calls: MemoryCall[] = [];

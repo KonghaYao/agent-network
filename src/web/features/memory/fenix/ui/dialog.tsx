@@ -62,6 +62,7 @@ function DialogContent({
   showOverlay = true,
   disableOverlayClose,
   disableEscapeClose,
+  portalContainer,
   ref,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
@@ -75,10 +76,12 @@ function DialogContent({
   disableOverlayClose?: boolean;
   /** 禁止 ESC 关闭 */
   disableEscapeClose?: boolean;
+  /** 父层使用 top layer（Lenso Drawer）时，把 portal 收进父层内容才能保持可点击。 */
+  portalContainer?: HTMLElement | null;
   ref?: React.Ref<HTMLDivElement>;
 }) {
   return (
-    <DialogPortal data-slot="dialog-portal">
+    <DialogPortal data-slot="dialog-portal" container={portalContainer ?? undefined}>
       {showOverlay && <DialogOverlay className={overlayClassName} />}
       <DialogPrimitive.Content
         ref={ref}

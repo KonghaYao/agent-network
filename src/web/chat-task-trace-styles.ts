@@ -73,6 +73,18 @@ export const TASK_TRACE_STYLE = `
     border-left: 1px solid var(--wx-line); box-shadow: var(--wx-shadow);
     padding-top: env(safe-area-inset-top);
     padding-bottom: env(safe-area-inset-bottom); }
+  /* Lenso Drawer 的 side 内容自带边缘 margin / 24px 内距；Trace 要求右侧
+     560px 且贴边满高，这里接管壳几何，与 S11 Memory 抽屉同一模式。 */
+  .task-trace-drawer[data-task-trace-shell='lenso'] { position: relative !important;
+    inset: 0 !important; display: flex; flex-direction: column; box-sizing: border-box;
+    width: min(560px, 100vw) !important; height: 100% !important;
+    max-width: 100vw; max-height: 100%; margin: 0 !important;
+    padding: env(safe-area-inset-top) 20px env(safe-area-inset-bottom);
+    border: 0; border-left: 1px solid var(--wx-line); border-radius: 0;
+    background: var(--wx-panel) !important; color: var(--wx-text); overflow: hidden;
+    box-shadow: var(--wx-shadow); }
+  .task-trace-drawer[data-task-trace-shell='lenso'] > h2 { margin: 0 0 14px;
+    padding-right: 36px; font-size: 17px; font-weight: 600; }
   .task-trace-head { flex: 0 0 auto; display: flex; align-items: flex-start;
     gap: 8px; padding: 12px 14px 8px; border-bottom: 1px solid var(--wx-line); }
   .task-trace-heading { flex: 1 1 auto; min-width: 0; }
@@ -131,6 +143,9 @@ export const TASK_TRACE_STYLE = `
 
   @media (max-width: 759px) {
     .task-trace-card { width: 100%; border-left: 0; }
+    .task-trace-drawer[data-task-trace-shell='lenso'] { width: 100vw !important;
+      padding: calc(16px + env(safe-area-inset-top)) 16px
+        calc(16px + env(safe-area-inset-bottom)); }
     .task-trace-close { width: 44px; height: 44px; }
     .task-bar { min-height: 44px; }
     .task-search-result { min-height: 44px; }

@@ -772,6 +772,204 @@ test.describe('浮动 Task dock', () => {
     await expect(page.locator('#task-dock-count')).toHaveText('20', { timeout: 10_000 });
   });
 
+  test('页面级 TaskTrace 使用 Lenso Drawer：560/390、暗色、焦点与滚动锁', async ({ page }) => {
+    const base = await baseUrl();
+    const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+    const fixture = await setupTaskRoom(base, suffix, { roots: 1, replies: 2 });
+    const rootId = fixture.roots[0];
+    if (!rootId) throw new Error('Task fixture 缺少 root');
+
+    await page.setViewportSize({ width: 1280, height: 844 });
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await openRoom(page, base, fixture.owner.token, fixture.roomId);
+    await expect(page.locator('#message-search-button')).toHaveAttribute('data-lenso-slot', 'button');
+    await expandDock(page);
+
+    const trigger = itemLocator(page, rootId).locator('.task-dock-item-trigger');
+    const popover = page.locator(`#task-preview-${rootId}`);
+    await trigger.click();
+    await expect(popover).toBeVisible();
+    await popover.getByRole('button', { name: /查看全部 \d+ 条消息/ }).click();
+
+    const trace = page.locator('#task-trace-drawer');
+    await expect(trace).toBeVisible({ timeout: 15_000 });
+    await expect(trace).toHaveAttribute('data-task-trace-shell', 'lenso');
+    await expect(trace).toHaveAttribute('role', 'dialog');
+    await expect(trace).toHaveAttribute('aria-labelledby', 'task-trace-title');
+    await expect(page.locator('.task-trace-overlay')).toBeVisible();
+    await expect(page.locator('#task-trace-items .task-trace-item')).toHaveCount(3);
+
+    const geometry = await trace.evaluate((element) => {
+      const rect = (node: Element | null) => {
+        if (!node) return null;
+        const box = node.getBoundingClientRect();
+        return { x: box.x, y: box.y, width: box.width, height: box.height, right: box.right, bottom: box.bottom };
+      };
+      return {
+        drawer: rect(element),
+        overlay: rect(document.querySelector('.task-trace-overlay')),
+        background: getComputedStyle(element).backgroundColor,
+        itemsOverflow: getComputedStyle(document.getElementById('task-trace-items')!).overflowY,
+      };
+    });
+    const box = geometry.drawer!;
+    expect(box.x).toBeGreaterThanOrEqual(719);
+    expect(box.x).toBeLessThanOrEqual(721);
+    expect(box.width).toBeGreaterThanOrEqual(559);
+    expect(box.width).toBeLessThanOrEqual(561);
+    expect(box.height).toBeGreaterThanOrEqual(843);
+    expect(box.height).toBeLessThanOrEqual(845);
+    expect(box.right).toBeGreaterThanOrEqual(1279);
+    expect(box.right).toBeLessThanOrEqual(1280);
+    expect(geometry.overlay).toEqual({ x: 0, y: 0, width: 1280, height: 844, right: 1280, bottom: 844 });
+    const channels = geometry.background.match(/\d+/gu)!.slice(0, 3).map(Number);
+    expect(channels.every((channel) => channel < 120)).toBe(true);
+    expect(geometry.itemsOverflow).toBe('auto');
+
+    await expect.poll(() =>
+      trace.evaluate((node) => node.contains(document.activeElement)),
+    ).toBe(true);
+    for (let index = 0; index < 10; index += 1) {
+      await page.keyboard.press(index < 5 ? 'Tab' : 'Shift+Tab');
+      await expect.poll(() =>
+        trace.evaluate((node) => node.contains(document.activeElement)),
+      ).toBe(true);
+    }
+    expect(
+      await page.evaluate(() =>
+        [document.body, document.documentElement].some(
+          (node) => getComputedStyle(node).overflowY === 'hidden',
+        ),
+      ),
+    ).toBe(true);
+
+    await page.keyboard.press('Escape');
+    await expect(trace).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await trigger.click();
+    await expect(popover).toBeVisible();
+    await popover.getByRole('button', { name: /查看全部 \d+ 条消息/ }).click();
+    await expect(trace).toBeVisible({ timeout: 15_000 });
+    await expect.poll(async () => Math.round((await trace.boundingBox())?.x ?? -1)).toBe(0);
+    await expect.poll(async () => Math.round((await trace.boundingBox())?.width ?? 0)).toBe(390);
+    const mobile = (await trace.boundingBox())!;
+    expect(mobile.x).toBeGreaterThanOrEqual(-0.5);
+    expect(mobile.x).toBeLessThanOrEqual(0.5);
+    expect(mobile.width).toBeGreaterThanOrEqual(389.5);
+    expect(mobile.width).toBeLessThanOrEqual(390.5);
+    expect(mobile.height).toBeGreaterThanOrEqual(843.5);
+    expect(mobile.height).toBeLessThanOrEqual(844.5);
+    await page.locator('#task-trace-close').click();
+    await expect(trace).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+  });
+
+  test('MessageSearch 内 TaskTrace 保持 Radix 壳，不改变既有父层时序', async ({ page }) => {
+    const base = await baseUrl();
+    const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+    const fixture = await setupTaskRoom(base, suffix, { roots: 1, replies: 1 });
+    await openRoom(page, base, fixture.owner.token, fixture.roomId);
+    await expect(page.locator('#message-search-button')).toHaveAttribute('data-lenso-slot', 'button');
+
+    await page.locator('#message-search-button').click();
+    const search = page.locator('#message-search-dialog');
+    await expect(search).toBeVisible();
+    await page.locator('#message-search-input').fill('待办');
+    await page.getByRole('checkbox', { name: '只看任务' }).check();
+    await page.locator('#message-search-form button[type=submit]').click();
+    await page.locator('.task-search-result').first().click();
+
+    const trace = page.locator('#task-trace-drawer');
+    await expect(trace).toBeVisible({ timeout: 15_000 });
+    await expect(trace).toHaveAttribute('data-modal-shell', 'radix');
+    await expect(trace).toHaveClass(/spa-dialog-content/u);
+    expect(await trace.getAttribute('data-task-trace-shell')).toBeNull();
+    // 既有 Task 分支先关闭搜索再打开 Trace；Radix 子层只随自身关闭。
+    await expect(search).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(trace).toHaveCount(0);
+    await expect(page.locator('#message-search-dialog')).toHaveCount(0);
+    await expect(page.locator('#task-dock')).toBeVisible();
+  });
+
+  for (const mode of ['blocked', 'delayed'] as const) {
+    test(`TaskTrace 页面级 ${mode}：本次打开锁定 Radix，关闭重开升级 Drawer`, async ({ page }) => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      let intercepted = 0;
+      const errors: string[] = [];
+      page.on('pageerror', (error) => errors.push(error.message));
+      await page.route('**/assets/index-*.js', async (route) => {
+        intercepted += 1;
+        if (mode === 'blocked') return route.abort('failed');
+        await gate;
+        await route.continue();
+      });
+      try {
+        const base = await baseUrl();
+        const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+        const fixture = await setupTaskRoom(base, suffix, { roots: 1 });
+        const rootId = fixture.roots[0];
+        if (!rootId) throw new Error('Task fixture 缺少 root');
+        await openRoom(page, base, fixture.owner.token, fixture.roomId);
+        await expandDock(page);
+
+        const trigger = itemLocator(page, rootId).locator('.task-dock-item-trigger');
+        const popover = page.locator(`#task-preview-${rootId}`);
+        await trigger.click();
+        await expect(popover).toBeVisible();
+        await popover.getByRole('button', { name: /查看全部 \d+ 条消息/ }).click();
+        const trace = page.locator('#task-trace-drawer');
+        await expect(trace).toBeVisible({ timeout: 15_000 });
+        await expect(trace).toHaveAttribute('data-modal-shell', 'radix');
+        await trace.evaluate((node) => {
+          const probe = window as unknown as {
+            __taskTraceNode?: Element;
+            __taskTraceFocus?: Element | null;
+          };
+          probe.__taskTraceNode = node;
+          probe.__taskTraceFocus = document.activeElement;
+        });
+        if (mode === 'delayed') {
+          release();
+          await expect.poll(() =>
+            page.locator('[data-lenso-slot="button"]').count(),
+          ).toBeGreaterThan(0);
+          expect(await page.evaluate(() => {
+            const probe = window as unknown as {
+              __taskTraceNode?: Element;
+              __taskTraceFocus?: Element | null;
+            };
+            return Boolean(probe.__taskTraceNode?.isConnected) &&
+              probe.__taskTraceFocus === document.activeElement;
+          })).toBe(true);
+          await expect(trace).toHaveAttribute('data-modal-shell', 'radix');
+        }
+        expect(intercepted).toBeGreaterThan(0);
+        await page.keyboard.press('Escape');
+        await expect(trace).toHaveCount(0);
+        await expect(trigger).toBeFocused();
+
+        await trigger.click();
+        await expect(popover).toBeVisible();
+        await popover.getByRole('button', { name: /查看全部 \d+ 条消息/ }).click();
+        await expect(trace).toBeVisible({ timeout: 15_000 });
+        if (mode === 'delayed') {
+          await expect(trace).toHaveAttribute('data-task-trace-shell', 'lenso');
+        } else {
+          await expect(trace).toHaveAttribute('data-modal-shell', 'radix');
+        }
+        await page.keyboard.press('Escape');
+        await expect(trace).toHaveCount(0);
+        expect(errors).toEqual([]);
+      } finally {
+        release?.();
+      }
+    });
+  }
+
   test('过期游标自动重建首页并提示', async ({ page }) => {
     const base = await baseUrl();
     const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
