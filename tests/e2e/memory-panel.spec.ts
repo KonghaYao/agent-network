@@ -291,6 +291,62 @@ test.describe('Agent 记忆弹窗', () => {
     await expect(page.locator('.memory-chip [data-lenso-slot="chip"]').first()).toBeVisible();
     await expect(page.locator('.memory-stat-grid [data-lenso-slot="card"]').first()).toBeVisible();
 
+    // Badge 必须内联在能力标题行内：不能沿用 Lenso 默认的 top-right 绝对定位。
+    const badge = page.locator('#memory-capability [data-lenso-slot="badge"]');
+    await expect(badge).toHaveText('已启用');
+    const badgeLayout = await badge.evaluate((element) => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      const head = element.closest('.memory-capability-head')?.getBoundingClientRect();
+      const close = document.querySelector('#memory-close')?.getBoundingClientRect();
+      if (!head || !close) throw new Error('缺少能力标题或关闭按钮');
+      return {
+        position: style.position,
+        transform: style.transform,
+        visible: rect.width > 0 && rect.height > 0,
+        insideHead:
+          rect.left >= head.left - 1 &&
+          rect.right <= head.right + 1 &&
+          rect.top >= head.top - 1 &&
+          rect.bottom <= head.bottom + 1,
+        intersectsClose:
+          rect.left < close.right &&
+          rect.right > close.left &&
+          rect.top < close.bottom &&
+          rect.bottom > close.top,
+      };
+    });
+    expect(badgeLayout.position).toBe('static');
+    expect(badgeLayout.transform).toBe('none');
+    expect(badgeLayout.visible).toBe(true);
+    expect(badgeLayout.insideHead).toBe(true);
+    expect(badgeLayout.intersectsClose).toBe(false);
+
+    // 统计卡与会话列表由原生 wrapper 承载本地 class，视觉不随 Lenso className 丢失。
+    const stat = page.locator('.memory-stat-grid .memory-stat').first();
+    await expect(stat).toBeVisible();
+    expect(
+      await stat.evaluate((element) => {
+        const style = getComputedStyle(element);
+        return { padding: style.padding, borderRadius: style.borderRadius };
+      }),
+    ).toEqual({ padding: '7px 8px', borderRadius: '8px' });
+    await expect(page.locator('#memory-panel-context .memory-list')).toHaveCount(1);
+
+    // Tabs 的 id / aria-selected / keepMounted 契约保持不变。
+    await expect(page.locator('#memory-tabs [role="tab"]')).toHaveCount(5);
+    await expect(page.locator('[data-memory-tab="recall"]')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('[data-memory-tab="context"]')).toHaveAttribute('aria-selected', 'false');
+    await expect(page.locator('#memory-panel-recall')).toBeVisible();
+    await expect(page.locator('#memory-panel-context')).toBeAttached();
+    await expect(page.locator('#memory-panel-context')).toBeHidden();
+    expect(
+      await page.locator('[data-memory-tab="recall"]').evaluate((element) => {
+        const style = getComputedStyle(element);
+        return { height: style.height, borderRadius: style.borderRadius, fontSize: style.fontSize };
+      }),
+    ).toEqual({ height: '36px', borderRadius: '999px', fontSize: '12px' });
+
     const mode = page.locator('#memory-recall-mode');
     await expect(mode).toHaveAttribute('data-lenso-slot', 'select-trigger');
     await expect(mode).toHaveAttribute('role', 'combobox');
@@ -325,6 +381,9 @@ test.describe('Agent 记忆弹窗', () => {
     await expect(contextTab).toHaveAttribute('aria-selected', 'false');
     await contextTab.click();
     await expect(contextTab).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#memory-panel-context')).toBeVisible();
+    await expect(page.locator('#memory-panel-recall')).toBeAttached();
+    await expect(page.locator('#memory-panel-recall')).toBeHidden();
     await expect(page.locator('#memory-context-list')).toHaveAttribute('data-lenso-slot', 'surface');
     const contextKind = page.locator('#memory-context-kind');
     await expect(contextKind).toContainText('全部');

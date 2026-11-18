@@ -62,13 +62,21 @@ export const MEMORY_STYLE = `
   .memory-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 10px;
     border-bottom: 1px solid var(--wx-line); }
   .memory-tabs[hidden] { display: none; }
-  .memory-tab { min-height: 36px; padding: 5px 10px; border: 1px solid transparent;
-    border-radius: 999px; background: var(--wx-search); color: var(--wx-text);
-    font-size: 12px; cursor: pointer; }
-  .memory-tab:hover { background: var(--wx-hover); }
-  .memory-tab[aria-selected="true"] { background: var(--wx-green);
-    border-color: var(--wx-green); color: var(--lenso-label-on-tint); }
-  .memory-tab:focus-visible { outline: 2px solid var(--wx-green); outline-offset: 2px; }
+  /* Lenso Tabs 会覆盖根 className；用稳定的 data-memory-tab 属性承载本地 tab
+     视觉。StyleX 用高特异性选择器保护属性，因此与现有 Select 覆盖一致使用
+     !important，确保本地尺寸/颜色和选中态不被 Lenso 指示层覆盖。 */
+  #memory-tabs [data-memory-tab] { position: relative; z-index: 4 !important;
+    width: auto !important; min-width: 0 !important; height: 36px !important;
+    min-height: 36px !important; padding: 5px 10px !important;
+    border: 1px solid transparent !important; border-radius: 999px !important;
+    background: var(--wx-search) !important; color: var(--wx-text) !important;
+    font-size: 12px !important; font-weight: 400 !important; cursor: pointer; }
+  #memory-tabs [data-memory-tab]:hover { background: var(--wx-hover) !important; }
+  #memory-tabs [data-memory-tab][aria-selected="true"] {
+    background: var(--wx-green) !important; border-color: var(--wx-green) !important;
+    color: var(--lenso-label-on-tint) !important; }
+  #memory-tabs [data-memory-tab]:focus-visible {
+    outline: 2px solid var(--wx-green) !important; outline-offset: 2px !important; }
   .memory-panel { padding: 12px 14px 22px; }
   .memory-panel[hidden] { display: none; }
   .memory-panels[hidden] { display: none; }
@@ -173,6 +181,7 @@ export const MEMORY_STYLE = `
     .memory-card { width: 100%; border-left: 0; }
     .memory-panel { padding-bottom: calc(22px + env(safe-area-inset-bottom)); }
     .memory-tabs { gap: 3px; }
-    .memory-tab { flex: 1 1 auto; padding-left: 6px; padding-right: 6px; }
+    #memory-tabs [data-memory-tab] { flex: 1 1 auto !important;
+      padding-left: 6px !important; padding-right: 6px !important; }
   }
 `;
