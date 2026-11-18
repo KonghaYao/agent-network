@@ -899,13 +899,85 @@ test.describe('SPA 剩余入口', () => {
     await page.locator('#members-invite-copy').click();
     await expect(page.locator('#members-invites-status')).toContainText('已复制邀请链接');
 
-    await page.locator('#group-policy-join').selectOption('approval');
+    const policyJoin = page.locator('#group-policy-join');
+    await expect(policyJoin).toHaveAttribute('data-lenso-slot', 'select-trigger');
+    await expect(policyJoin).toHaveAttribute('role', 'combobox');
+    await expect(policyJoin).toContainText('直接加入');
+    const policyHitHeight = await policyJoin.evaluate((element) =>
+      Number.parseFloat(getComputedStyle(element, '::after').height),
+    );
+    expect(policyHitHeight).toBeGreaterThanOrEqual(44);
+
+    await policyJoin.focus();
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('listbox')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('listbox')).toBeHidden();
+    await expect(policyJoin).toBeFocused();
+
+    await policyJoin.click();
+    await page.getByRole('option', { name: '需要审批', exact: true }).click();
+    await expect(policyJoin).toContainText('需要审批');
+
+    let releasePolicy: () => void = () => undefined;
+    const policyGate = new Promise<void>((resolve) => {
+      releasePolicy = resolve;
+    });
+    await page.route('**/mcp', async (route) => {
+      if (route.request().method() === 'POST') {
+        try {
+          const body = JSON.parse(route.request().postData() ?? 'null') as {
+            params?: { name?: string };
+          };
+          if (body.params?.name === 'network_room_policy_set') await policyGate;
+        } catch {
+          // 非 JSON 请求直接放行。
+        }
+      }
+      await route.continue();
+    });
     await page.locator('#group-policy-save').click();
+    await expect(page.locator('#group-policy-save')).toBeDisabled();
+    await expect(policyJoin).toBeDisabled();
+    await expect(page.locator('#group-policy-status')).toContainText('正在保存群策略');
+    releasePolicy();
     await expect(page.locator('#group-policy-status')).toContainText('已保存群策略');
+    await expect(policyJoin).toBeEnabled();
+    await page.unroute('**/mcp');
+
     const detail = await callTool<RoomDetailView>(base, owner.token, 'network_room_get', {
       room_id: groupId,
     });
     expect(detail.room.policies?.member_join).toBe('approval');
+
+    // 保存失败时表单回滚到服务端值，页面不会留下未提交的选择。
+    await page.route('**/mcp', async (route) => {
+      if (route.request().method() === 'POST') {
+        try {
+          const body = JSON.parse(route.request().postData() ?? 'null') as {
+            params?: { name?: string };
+          };
+          if (body.params?.name === 'network_room_policy_set') {
+            await route.abort('failed');
+            return;
+          }
+        } catch {
+          // 非 JSON 请求直接放行。
+        }
+      }
+      await route.continue();
+    });
+    await policyJoin.click();
+    await page.getByRole('option', { name: '直接加入', exact: true }).click();
+    await expect(policyJoin).toContainText('直接加入');
+    await page.locator('#group-policy-save').click();
+    await expect(page.locator('#group-policy-status')).toContainText('保存失败');
+    await expect(policyJoin).toContainText('需要审批');
+    const afterFailure = await callTool<RoomDetailView>(base, owner.token, 'network_room_get', {
+      room_id: groupId,
+    });
+    expect(afterFailure.room.policies?.member_join).toBe('approval');
+    await page.unroute('**/mcp');
     await page.locator('#members-close').click();
 
     const root = page.locator(`#messages [data-message-id="${rootId}"]`);

@@ -220,6 +220,54 @@
   letter-spacing: normal !important;
 }
 
+/* 群策略沿用原来的 180px 控件宽度；Lenso trigger 不参与字段行的整行拉伸。 */
+.group-policies .field [data-lenso-slot='select-trigger'] {
+  flex: 0 1 180px;
+  width: auto !important;
+  height: 34px !important;
+  min-height: 34px !important;
+  padding: 4px 8px !important;
+  font-size: 13px !important;
+}
+
+/* 群主转让下拉保持原生控件的紧凑尺寸，命中区仍由 ::after 扩到 44px。 */
+#members-transfer-select {
+  width: auto !important;
+  min-height: 34px !important;
+  padding: 4px 8px !important;
+  border: 1px solid var(--wx-line) !important;
+  border-radius: 4px !important;
+  background: var(--wx-panel) !important;
+  color: var(--wx-text) !important;
+  font-family: inherit !important;
+  font-size: 13px !important;
+  font-weight: 400 !important;
+}
+
+/* Lenso Radio 的命中区：整行可点且不低于 44px。 */
+#transfer-successors .transfer-successor {
+  box-sizing: border-box;
+  min-height: 44px;
+  align-items: center;
+}
+
+#transfer-successors [data-lenso-slot='radio'] {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--wx-text);
+  font: inherit;
+  font-size: 13px;
+  text-align: start;
+  cursor: pointer;
+}
+
 .field-error {
   margin: 0 0 10px;
   font-size: 12px;

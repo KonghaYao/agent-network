@@ -93,8 +93,8 @@ interface RoomDetail {
     room_id: string;
     kind: string;
     my_role: string;
-    owner_transfer: { transfer_id: string; version: number } | null;
   };
+  owner_transfer: { transfer_id: string; version: number; to_actor_id: string } | null;
 }
 
 interface ContactRequestResult {
@@ -120,6 +120,7 @@ test.describe('SPA 右栏与剩余入口', () => {
   let tokenB = '';
   let nameA = '';
   let nameB = '';
+  let actorB = '';
   let roomId = '';
   let groupId = '';
   let agentId = '';
@@ -151,6 +152,7 @@ test.describe('SPA 右栏与剩余入口', () => {
       request_id: requestId('e2e_contact'),
       actor_id: b.actor_id,
     });
+    actorB = b.actor_id;
     const contactRequestId = contact.request?.contact_request_id;
     if (!contactRequestId) throw new Error('好友申请未创建');
     await callTool(base, tokenB, 'network_contact_request_respond', {
@@ -700,6 +702,55 @@ test.describe('SPA 右栏与剩余入口', () => {
     await expect(page.locator('#transfer-modal')).toBeVisible();
     await expect(page.locator('#transfer-summary')).toContainText(agentName);
     await expect(page.locator('#transfer-summary')).toContainText('你是当前管理者');
+
+    const successors = page.locator('#transfer-successors');
+    await expect(successors).toHaveAttribute('data-lenso-slot', 'radio-group');
+    const successor = page.getByRole('radio', { name: nameB, exact: true });
+    await expect(successor).toBeVisible();
+    await expect(successor).toHaveAttribute('data-lenso-slot', 'radio');
+    await expect
+      .poll(async () => (await successor.boundingBox())?.height ?? 0)
+      .toBeGreaterThanOrEqual(44);
+
+    await successor.focus();
+    await page.keyboard.press('Space');
+    await expect(successor).toBeChecked();
+    await successor.click();
+    await expect(successor).toBeChecked();
+    await expect(page.locator('#transfer-propose')).toBeEnabled();
+
+    const transferCalls: Record<string, unknown>[] = [];
+    let releaseTransfer: () => void = () => undefined;
+    const transferGate = new Promise<void>((resolve) => {
+      releaseTransfer = resolve;
+    });
+    await page.route('**/mcp', async (route) => {
+      if (route.request().method() === 'POST') {
+        try {
+          const body = JSON.parse(route.request().postData() ?? 'null') as {
+            params?: { name?: string; arguments?: Record<string, unknown> };
+          };
+          if (body.params?.name === 'network_agent_transfer_propose') {
+            transferCalls.push(body.params.arguments ?? {});
+            await transferGate;
+          }
+        } catch {
+          // 非 JSON 请求直接放行。
+        }
+      }
+      await route.continue();
+    });
+    await page.locator('#transfer-propose').click();
+    await expect(successor).toBeDisabled();
+    releaseTransfer();
+    await expect(page.locator('.transfer-notice')).toContainText(`已发起交接，等待 ${nameB} 确认`);
+    await expect(page.locator('#transfer-pending')).toBeVisible();
+    expect(transferCalls).toHaveLength(1);
+    expect(transferCalls[0]?.to_manager_id).toBe(actorB);
+    await page.unroute('**/mcp');
+
+    await page.locator('#transfer-cancel').click();
+    await expect(page.locator('.transfer-notice')).toContainText('已取消交接');
     await page.locator('#transfer-close').click();
     await expect(page.locator('#transfer-modal')).toBeHidden();
   });
@@ -710,14 +761,57 @@ test.describe('SPA 右栏与剩余入口', () => {
     await page.locator('#members-button').click();
     await expect(page.locator('#members-modal')).toBeVisible();
     await expect(page.locator('#members-transfer')).toBeVisible();
-    await page.selectOption('#members-transfer-select', nameB);
+    const transferSelect = page.locator('#members-transfer-select');
+    await expect(transferSelect).toHaveAttribute('data-lenso-slot', 'select-trigger');
+    await expect(transferSelect).toHaveAttribute('role', 'combobox');
+    await expect(transferSelect).toContainText('选择接任者');
+    const hitHeight = await transferSelect.evaluate((element) =>
+      Number.parseFloat(getComputedStyle(element, '::after').height),
+    );
+    expect(hitHeight).toBeGreaterThanOrEqual(44);
+
+    await transferSelect.focus();
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('listbox')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('listbox')).toBeHidden();
+    await expect(transferSelect).toBeFocused();
+
+    await transferSelect.click();
+    await page.getByRole('option', { name: nameB, exact: true }).click();
+    await expect(transferSelect).toContainText(nameB);
+    await expect(page.locator('#members-transfer-propose')).toBeEnabled();
+
+    let releaseTransfer: () => void = () => undefined;
+    const transferGate = new Promise<void>((resolve) => {
+      releaseTransfer = resolve;
+    });
+    await page.route('**/mcp', async (route) => {
+      if (route.request().method() === 'POST') {
+        try {
+          const body = JSON.parse(route.request().postData() ?? 'null') as {
+            params?: { name?: string };
+          };
+          if (body.params?.name === 'network_room_owner_transfer_propose') {
+            await transferGate;
+          }
+        } catch {
+          // 非 JSON 请求直接放行。
+        }
+      }
+      await route.continue();
+    });
     await page.locator('#members-transfer-propose').click();
+    await expect(transferSelect).toBeDisabled();
+    await expect(page.locator('#members-transfer-propose')).toBeDisabled();
+    releaseTransfer();
     await expect(page.locator('#members-transfer')).toContainText('提议把群主转让给');
+    await page.unroute('**/mcp');
 
     const detail = await callTool<RoomDetail>(base, tokenA, 'network_room_get', {
       room_id: groupId,
     });
-    expect(detail.room.owner_transfer).not.toBeNull();
+    expect(detail.owner_transfer?.to_actor_id).toBe(actorB);
   });
 
   test('right panes and new dialogs have no critical/serious axe violations', async ({ page }) => {

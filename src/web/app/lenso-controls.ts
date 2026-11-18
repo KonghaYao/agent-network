@@ -598,6 +598,115 @@ export function Checkbox({
   );
 }
 
+export interface RadioOption {
+  value: string;
+  label: ReactNode;
+  disabled?: boolean;
+}
+
+export interface RadioGroupAdapterProps {
+  id?: string;
+  name?: string;
+  value: string;
+  options: readonly RadioOption[];
+  onChange: (value: string) => void;
+  disabled?: boolean;
+  required?: boolean;
+  className?: string;
+  itemClassName?: string;
+  'aria-label'?: string;
+  'aria-labelledby'?: string;
+}
+
+/**
+ * 单选组：未就绪时回退原生 radio，就绪后换成 Lenso RadioGroup/Radio。
+ * 根按钮保留可访问名与 role=radio；隐藏原生 radio 继续承担 `name` 表单值。
+ */
+export function RadioGroup({
+  id,
+  name,
+  value,
+  options,
+  onChange,
+  disabled,
+  required,
+  className,
+  itemClassName,
+  'aria-label': ariaLabel,
+  'aria-labelledby': ariaLabelledBy,
+}: RadioGroupAdapterProps) {
+  const lenso = useLenso();
+  if (!lenso) {
+    return createElement(
+      'div',
+      {
+        id,
+        role: 'radiogroup',
+        className,
+        'aria-label': ariaLabel,
+        'aria-labelledby': ariaLabelledBy,
+        'aria-disabled': disabled ? 'true' : undefined,
+        'data-lenso-slot': 'radio-group-fallback',
+      },
+      options.map((option) =>
+        createElement(
+          'label',
+          { key: option.value, className: itemClassName },
+          createElement('input', {
+            type: 'radio',
+            name,
+            value: option.value,
+            checked: value === option.value,
+            disabled: disabled || option.disabled,
+            required,
+            onChange: () => onChange(option.value),
+          }),
+          option.label,
+        ),
+      ),
+    );
+  }
+
+  const Group = lenso.RadioGroup as unknown as ComponentType<Record<string, unknown>>;
+  const Radio = lenso.Radio as unknown as ComponentType<Record<string, unknown>>;
+  const Content = lenso.Radio.Content as unknown as ComponentType<Record<string, unknown>>;
+  const Control = lenso.Radio.Control as unknown as ComponentType<Record<string, unknown>>;
+  const Indicator = lenso.Radio.Indicator as unknown as ComponentType<Record<string, unknown>>;
+  return createElement(
+    Group,
+    {
+      id,
+      value: value === '' ? null : value,
+      name,
+      disabled,
+      required,
+      className,
+      'aria-label': ariaLabel,
+      'aria-labelledby': ariaLabelledBy,
+      'data-lenso-slot': 'radio-group',
+      onValueChange: (next: string | null) => onChange(next ?? ''),
+    },
+    options.map((option) =>
+      createElement(
+        Radio,
+        {
+          key: option.value,
+          value: option.value,
+          disabled: option.disabled,
+          className: itemClassName,
+          'data-lenso-slot': 'radio',
+        },
+        createElement(
+          Content,
+          null,
+          createElement(Control, null, createElement(Indicator)),
+          option.label,
+        ),
+      ),
+    ),
+  );
+}
+
 export function ThemeScope({ className, ...props }: ComponentPropsWithRef<'div'>) {
   const theme = useColorScheme();
   useEffect(() => {

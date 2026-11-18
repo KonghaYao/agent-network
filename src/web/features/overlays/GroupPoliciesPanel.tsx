@@ -1,4 +1,4 @@
-import { Button } from '../../app/lenso-controls';
+import { Button, Select as LensoSelect } from '../../app/lenso-controls';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState, type FormEvent } from 'react';
 
@@ -51,29 +51,28 @@ function Select<T extends string>({
   label,
   value,
   options,
+  disabled,
   onChange,
 }: {
   id: string;
   label: string;
   value: T;
   options: { value: T; label: string }[];
+  disabled?: boolean;
   onChange: (value: T) => void;
 }) {
   return (
-    <label className="field" htmlFor={id}>
+    <div className="field">
       <span>{label}</span>
-      <select
+      <LensoSelect
         id={id}
+        aria-label={label}
         value={value}
-        onChange={(event) => onChange(event.target.value as T)}
-      >
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
-    </label>
+        disabled={disabled}
+        options={options}
+        onChange={(next) => onChange(next as T)}
+      />
+    </div>
   );
 }
 
@@ -136,6 +135,7 @@ export function GroupPoliciesPanel({
       setStatus('已保存群策略。');
       await queryClient.invalidateQueries({ queryKey: queryKeys.room(room.room_id) });
     } catch (failure) {
+      setForm(previous);
       setError(true);
       setStatus(`保存失败：${failureText(failure)}`);
     } finally {
@@ -153,6 +153,7 @@ export function GroupPoliciesPanel({
           id="group-policy-message"
           label="普通成员发言"
           value={form.member_message}
+          disabled={busy}
           options={[
             { value: 'members', label: '所有成员' },
             { value: 'owner_admin', label: '仅群主/管理员' },
@@ -163,6 +164,7 @@ export function GroupPoliciesPanel({
           id="group-policy-invite"
           label="普通成员邀请"
           value={form.member_invite}
+          disabled={busy}
           options={[
             { value: 'members', label: '所有成员' },
             { value: 'owner_admin', label: '仅群主/管理员' },
@@ -173,6 +175,7 @@ export function GroupPoliciesPanel({
           id="group-policy-history"
           label="新成员历史"
           value={form.member_history}
+          disabled={busy}
           options={[
             { value: 'full', label: '全部历史' },
             { value: 'from_join', label: '仅加入后' },
@@ -183,6 +186,7 @@ export function GroupPoliciesPanel({
           id="group-policy-join"
           label="入群方式"
           value={form.member_join}
+          disabled={busy}
           options={[
             { value: 'open', label: '直接加入' },
             { value: 'approval', label: '需要审批' },
@@ -193,6 +197,7 @@ export function GroupPoliciesPanel({
           id="group-policy-profile"
           label="群资料编辑"
           value={form.member_profile}
+          disabled={busy}
           options={[
             { value: 'members', label: '所有成员' },
             { value: 'owner_admin', label: '仅群主/管理员' },
@@ -203,6 +208,7 @@ export function GroupPoliciesPanel({
           id="group-policy-mention-all"
           label="@所有人"
           value={form.member_mention_all}
+          disabled={busy}
           options={[
             { value: 'owner_admin', label: '仅群主/管理员' },
             { value: 'members', label: '所有成员' },

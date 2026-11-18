@@ -1,4 +1,4 @@
-import { Button, SearchInput } from '../../app/lenso-controls';
+import { Button, SearchInput, Select } from '../../app/lenso-controls';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 
@@ -554,19 +554,18 @@ export function MembersDialog({
                       选择一位成员接任群主；对方接受后才会生效。
                     </p>
                     <div className="row">
-                      <select
+                      <Select
                         id="members-transfer-select"
                         aria-label="选择群主接任者"
+                        placeholder="选择接任者"
                         value={successor}
-                        onChange={(event) => setSuccessor(event.target.value)}
-                      >
-                        <option value="">选择接任者</option>
-                        {transferCandidates.map((member) => (
-                          <option value={member.actor_id} key={member.actor_id}>
-                            {member.name}
-                          </option>
-                        ))}
-                      </select>
+                        disabled={busy !== null}
+                        options={transferCandidates.map((member) => ({
+                          value: member.actor_id,
+                          label: member.name,
+                        }))}
+                        onChange={setSuccessor}
+                      />
                       <Button
                         className="primary"
                         id="members-transfer-propose"

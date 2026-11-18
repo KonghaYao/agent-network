@@ -1,4 +1,4 @@
-import { Button, Input, SearchInput } from '../../app/lenso-controls';
+import { Button, Input, RadioGroup, SearchInput } from '../../app/lenso-controls';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { useContacts } from '../../hooks/useContacts';
@@ -254,22 +254,20 @@ export function TransferDialog({
                   onChange={(event) => setSearch(event.target.value)}
                 />
               </div>
-              <ul id="transfer-successors" className="transfer-list" aria-label="接任者候选">
-                {successors.map((contact) => (
-                  <li key={contact.actor_id}>
-                    <label className="transfer-successor">
-                      <input
-                        type="radio"
-                        name="transfer-successor"
-                        value={contact.actor_id}
-                        checked={selected === contact.actor_id}
-                        onChange={() => setSelected(contact.actor_id)}
-                      />
-                      <span>{contact.name}</span>
-                    </label>
-                  </li>
-                ))}
-              </ul>
+              <RadioGroup
+                id="transfer-successors"
+                className="transfer-list"
+                itemClassName="transfer-successor"
+                aria-label="接任者候选"
+                name="transfer-successor"
+                value={selected}
+                disabled={busy}
+                options={successors.map((contact) => ({
+                  value: contact.actor_id,
+                  label: contact.name,
+                }))}
+                onChange={setSelected}
+              />
               {successors.length === 0 ? (
                 <p id="transfer-successors-empty" className="muted">
                   {contacts.contacts.length === 0 ? '没有可交接的好友' : '没有匹配的好友'}
