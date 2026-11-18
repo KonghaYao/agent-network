@@ -1,7 +1,7 @@
 import {
-  createElement, useCallback, useEffect, useId, useRef, useState,
+  createElement, isValidElement, useCallback, useEffect, useId, useRef, useState,
   type ComponentPropsWithRef, type ElementType, type FocusEvent,
-  type HTMLAttributes, type PointerEvent,
+  type HTMLAttributes, type PointerEvent, type ReactNode,
 } from 'react';
 import {
   LensoBackendProvider, useBackendLease, useLenso, useLensoBackendScope,
@@ -14,6 +14,37 @@ export type TooltipProps<T extends ElementType> = {
   delay?: number;
   side?: 'top' | 'right' | 'bottom' | 'left';
 } & Omit<ComponentPropsWithRef<T>, 'as' | 'title'>;
+
+/** 单例控制：同一时刻至多一个提示，新交互先关闭旧提示。不生成全局 DOM。 */
+let activeTooltip: { owner: object; close: () => void } | null = null;
+
+function claimTooltip(owner: object, close: () => void) {
+  if (activeTooltip && activeTooltip.owner !== owner) activeTooltip.close();
+  activeTooltip = { owner, close };
+}
+
+function releaseTooltip(owner: object) {
+  if (activeTooltip?.owner === owner) activeTooltip = null;
+}
+
+/**
+ * 只判断宿主自身有没有内容型可访问名。组件元素只能看到传入的 children；
+ * 图标组件没有文本子节点，按无文本处理，仍可用 hint 补 aria-label。
+ */
+function hasContentName(children: ReactNode): boolean {
+  if (typeof children === 'string') return children.trim().length > 0;
+  if (typeof children === 'number') return true;
+  if (Array.isArray(children)) return children.some(hasContentName);
+  if (!isValidElement(children)) return false;
+  const child = children.props as {
+    children?: ReactNode;
+    'aria-hidden'?: boolean | 'true' | 'false';
+    'aria-label'?: string;
+  };
+  if (child['aria-hidden'] === true || child['aria-hidden'] === 'true') return false;
+  if (typeof child['aria-label'] === 'string' && child['aria-label'].trim()) return true;
+  return hasContentName(child.children);
+}
 
 /**
  * SDK 的 Trigger 会管理自己的定时与宿主；这里用 Content 的公开 anchor API，
@@ -33,8 +64,16 @@ export function Tooltip<T extends ElementType>({
   const origin = useRef<HTMLElement | null>(null);
   const touch = useRef(false);
   const id = useId();
+  const owner = useRef<object | null>(null);
+  if (!owner.current) owner.current = {};
   const original = props as HTMLAttributes<HTMLElement>;
   const lenso = backend === 'lenso' ? module : null;
+  // 显式标签或内容文本都优先于 hint；只有无名称的图标宿主才用 hint 补 aria-label。
+  const explicitLabel = original['aria-label']?.trim() ? original['aria-label'] : undefined;
+  const contentNamed = hasContentName(original.children);
+  const label = explicitLabel ?? (
+    contentNamed || original['aria-labelledby'] ? undefined : hint ?? undefined
+  );
   const localPortal = useCallback((node: HTMLDivElement | null) => {
     if (!node) return;
     // SDK 默认 showPopover 会越过所有 z-index；仅对本提示退回本地 portal 带。
@@ -45,9 +84,15 @@ export function Tooltip<T extends ElementType>({
     });
   }, []);
 
-  const close = () => { setActive(false); setOpen(false); };
+  const close = useCallback(() => {
+    setActive(false);
+    setOpen(false);
+    releaseTooltip(owner.current!);
+  }, []);
+  useEffect(() => () => releaseTooltip(owner.current!), []);
   const start = (element: HTMLElement) => {
     if (!hint || touch.current || !matchMedia('(hover: hover)').matches) return;
+    claimTooltip(owner.current!, close);
     origin.current = element;
     setActive(true);
   };
@@ -75,7 +120,7 @@ export function Tooltip<T extends ElementType>({
     ...props,
     // Lenso 与原生提示互斥；fallback 周期结束后才允许升级。
     title: lenso ? undefined : hint ?? undefined,
-    'aria-label': original['aria-label'] ?? hint ?? undefined,
+    'aria-label': label,
     'aria-describedby': [original['aria-describedby'], open && lenso ? id : null].filter(Boolean).join(' ') || undefined,
     'data-tooltip-backend': lenso ? 'lenso' : 'fallback',
     onPointerEnter: (event: PointerEvent<HTMLElement>) => {

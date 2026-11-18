@@ -5,7 +5,7 @@
 - 基线：`e48cdf1e925e40c8297184109dab5ca1b81bac34`（创建 worktree 时核对 origin/main）。
 - 工作区：`agent-network-worktrees/lenso-tooltip`；分支：`feat/lenso-tooltip`。
 - 只改前端与测试，没有后端、schema、依赖版本或部署改动。
-- 新适配器：`src/web/app/lenso-tooltip.tsx`，116 行。
+- 新适配器：`src/web/app/lenso-tooltip.tsx`，160 行。
 - API：`<Tooltip as={Button | Link | Avatar | 'span' | 'div' | 'a' | 'button'} hint={text} delay={500} side="top" {...原宿主属性} />`。原 ref、id、class、role、点击及菜单事件透传；不增加布局节点，不改变 CSS 命中区。
 - 只从现有 `lenso-runtime.ts` 获取动态模块，不静态引入 `@lenso/ui`。
 
@@ -20,6 +20,8 @@
 - 500ms 定时由适配器管理，覆盖 hover 与 focus，避免 SDK 跨提示 warm-up 跳过延迟；离开、失焦、Esc、按下、点击、contextmenu、pointercancel、滚动、窗口失焦关闭。清理定时与监听。
 - 从交互开始（包含等待延迟）持有现有 `useBackendLease`；fallback 打开期间不升级，下一轮交互可升级。关闭态重新选择 backend，避免父确认框归还焦点后再次重挂按钮。
 - fallback 使用原生 title；Lenso 路径移除 title；可访问名不依赖 title。
+- 可访问名优先宿主自身：显式 `aria-label`/`aria-labelledby` 原样保留；有可见文本的内容型宿主不再写 `aria-label`，提示只在打开时作为 `aria-describedby` 指向 tooltip 内容（fallback 由 title 提供描述）；只有无显式名称且无文本的图标宿主才用 hint 补 `aria-label`。
+- 单例控制：模块级 claim/release，不生成全局 DOM；新的 hover/focus 先关闭旧提示，确保同一时刻最多一个 tooltip，滚动、Esc、失焦与卸载继续清理。
 - SDK 默认使用 native popover top layer，单纯降低 z-index 不够。Content 的局部 ref 在 microtask 中退出 native popover 并移除该节点的 popover 属性，保留 Lenso 内容、定位和 body portal；z-index 使用 `--app-z-portal-local-menu`（99999），低于 Lenso Modal 100000。没有全局选择器或 DOM 扫描。
 - touch / `(hover: none)` 不打开自绘提示，点击和长按不改变原动作。
 
@@ -100,20 +102,20 @@
 新增 `tests/e2e/lenso-tooltips.spec.ts`，9 个场景：
 
 1. hover 250ms 不出现、500ms 后出现，body portal，本地 z-index、非 native top layer，Esc 后不自行重开；Lenso 路径没有 title。
-2. focus 打开、焦点不移动、blur 卸载。
+2. focus 打开、焦点不移动、blur 卸载；焦点仍在首个触发器时 hover 另一个，关闭旧提示且只存在 1 个 tooltip。
 3. route abort 真实 `assets/index-*.js`；断言拦截数、title、无 Lenso 内容，按钮仍能打开建群框。
 4. gate 延迟真实 index chunk；释放后其他控件升级，当前 fallback/title 不切换；离开再进入才走 Lenso。
 5. 390×844、暗色、提示在视口内、页面不横向溢出、可访问名、建群交互。
-6. 会话行菜单说明、监控五个提示与完整安全说明、iframe title、确认框取消后还焦。
+6. 会话行完整内容名（未读、时间、预览）不被 hint 覆盖且 hint 只进入 `aria-describedby`；监控五个提示保留显式 `aria-label`、完整安全说明、iframe title，确认框取消后还焦。
 7. 延迟前离开取消；已打开后离开卸载。
 8. 提示退出 native top layer；真实 Lenso Modal 打开后仍可填输入框。
 9. hasTouch/isMobile/no-hover 点击不留下 tooltip，原动作与名称保持。
 
-现有 `scripts/verify-web.ts` 的未读数量说明断言从原生 title 改读 aria-label；未删除 rooms/sidebar/monitor 的行为断言。
+现有 `scripts/verify-web.ts` 的未读数量说明断言改读提示本身（fallback 的 title 或 Lenso 打开后的 tooltip 内容），不再依赖内容型宿主上的 `aria-label`；未删除 rooms/sidebar/monitor 的行为断言。
 
 ### 测试记录
 
-最终 `bunx playwright test`：**298/298 通过（8.8 分钟，retries=0）**，即原基线 289 + 新增 9；home 10/10。固定 dist 完成整轮，没有并行重建。其他检查：
+最终 `bunx playwright test`：**298/298 通过（8.9 分钟，retries=0）**，即原基线 289 + 新增 9；home 10/10，`lenso-tooltips.spec.ts` 9/9。固定 dist 完成整轮，没有并行重建。其他检查：
 
 - `bun run typecheck` 通过。
 - `bun run test:web`：240。
@@ -126,6 +128,8 @@
 
 ### 失败归因记录
 
+- 复验回归：`d961589` 用 hint 覆盖内容型可访问名，RoomRow 链接名称退化为“房间名（右键或长按…）”。已改为显式 `aria-label`/`aria-labelledby` 与内容文本优先，只有无名称的图标宿主用 hint 补名称；RoomRow 恢复为“未读 Audit Group HH:MM audit message body”，hint 仅在打开时进入 `aria-describedby`。
+- 双提示回归：同一时刻可能有 focus 与 hover 两个 tooltip。已加模块级单例 claim/release（不生成 DOM），新交互先关闭旧提示；e2e 在首个触发器保持焦点时 hover 第二个，断言只剩 1 个提示。
 - 初轮完整运行发现本次新增问题：慢加载后 confirm 归还焦点时 Tooltip 沿用已结束 fallback lease，按钮再次升级导致丢焦。已修正关闭态 backend，并隔离复跑原失败用例通过。
 - 初轮 NewAgent fallback 用例失败，隔离复跑通过；不据此宣布不存在 flake。
 - 初轮完整运行期间错误地重建 dist，导致后半段旧 hash 资源不可用，出现 pagination/panels 连续失败；已主动中止，退出 130。该轮不作最终验收；最终完整运行固定产物，不再并行 build。
@@ -137,8 +141,8 @@
 
 `bun run build:web` + `bun scripts/measure-web-entry.ts`：
 
-- `assets/main-DLPdoj16.js`：729,943 B；静态 JS 闭包同为 729,943 B。
-- 相对给定 727,722 B：+2,221 B。
-- 硬限 972,800 B，余量 242,857 B。
-- Lenso 为 dynamicImports 中的 `_index-DNm0pLcx.js`，未进入静态闭包。
+- `assets/main-COJEBqq7.js`：730,607 B；静态 JS 闭包同为 730,607 B。
+- 相对给定 727,722 B：+2,885 B。
+- 硬限 972,800 B，余量 242,193 B。
+- Lenso 为 dynamicImports 中的 `_index-BMBYPnXT.js`，未进入静态闭包。
 - 没有 push，没有部署。

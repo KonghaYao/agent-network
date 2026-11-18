@@ -59,12 +59,20 @@ test('hover 延迟、portal、本地层级、Esc 与原生 title 互斥', async 
   await expect(popup).toHaveCount(0);
 });
 
-test('focus 打开，blur 关闭且不抢焦点', async ({ page }) => {
+test('focus 打开、blur 关闭，焦点与 hover 切换只保留一个提示', async ({ page }) => {
   const trigger = await home(page);
   await trigger.focus();
   await expect(page.getByRole('tooltip')).toBeVisible();
   await expect(trigger).toBeFocused();
   await page.locator('#room-search').focus();
+  await expect(page.getByRole('tooltip')).toHaveCount(0);
+  // 第一个触发器仍持有焦点时 hover 另一个：新提示打开前先关闭旧提示。
+  await trigger.focus();
+  await expect(page.getByRole('tooltip')).toHaveText('新建群聊');
+  await page.locator('#contact-requests').hover();
+  await expect(page.getByRole('tooltip')).toContainText('添加好友');
+  await expect(page.getByRole('tooltip')).toHaveCount(1);
+  await page.mouse.move(600, 400);
   await expect(page.getByRole('tooltip')).toHaveCount(0);
 });
 
@@ -126,26 +134,44 @@ test('会话行与监控五个提示保留语义、安全说明及确认框还�
   const peer = await tool<{ actor_id: string }>('network_register', { kind: 'human', name: 'S08 agent' }, peerToken);
   const request = await tool<{ request: { contact_request_id: string } }>('network_contact_request', { actor_id: peer.actor_id }, token);
   await tool('network_contact_request_respond', { contact_request_id: request.request.contact_request_id, action: 'accept' }, peerToken);
-  const created = await tool<{ room: { room_id: string } }>('network_room_create', { kind: 'direct', members: [peer.actor_id] }, token);
+  const created = await tool<{ room: { room_id: string } }>('network_room_create', {
+    kind: 'group', title: 'Audit Group', members: [peer.actor_id],
+  }, token);
+  await tool('network_message_send', {
+    client_message_id: crypto.randomUUID(),
+    room_id: created.room.room_id, body: 'audit message body', invoke: [],
+  }, peerToken);
   await page.addInitScript((auth) => localStorage.setItem('agent-network-token', auth), token);
-  await page.goto(`${base}/c/${created.room.room_id}`);
-  const row = page.locator(`[data-room-id="${created.room.room_id}"]`);
+  await page.goto(base);
+  await page.locator('#room-filter-group').click();
+  const row = page.locator(`#room-list [data-room-id="${created.room.room_id}"]`);
   await expect(row).toHaveAttribute('data-tooltip-backend', 'lenso');
+  // hint 只作为描述，不覆盖由未读、时间与预览派生的内容名称。
+  const name = /^未读 Audit Group \d{2}:\d{2} audit message body$/;
+  await expect(row).not.toHaveAttribute('aria-label');
+  await expect(row).toHaveAccessibleName(name);
   await row.hover();
   await expect(page.getByRole('tooltip')).toContainText('右键或长按');
-  await expect(row).toHaveAccessibleName(/S08 agent/);
+  await expect(row).toHaveAccessibleName(name);
+  const describedBy = (await row.getAttribute('aria-describedby'))?.split(/\s+/) ?? [];
+  const tooltipId = await page.locator('[data-app-tooltip]').getAttribute('id');
+  expect(tooltipId).toBeTruthy();
+  expect(describedBy).toContain(tooltipId);
   await page.keyboard.press('Escape');
+  await page.goto(`${base}/c/${created.room.room_id}`);
   await page.locator('#monitor-toggle').click();
-  for (const [id, text] of [
-    ['monitor-save', '保存网页地址（Enter）'], ['monitor-clear', '清除网页地址'],
-    ['monitor-external', 'iframe 未加 sandbox'], ['monitor-refresh', '刷新网页（重新读取地址）'],
-    ['monitor-close', '关闭网页监控'],
-  ]) {
+  for (const [id, hint, name] of [
+    ['monitor-save', '保存网页地址（Enter）', '保存网页地址'],
+    ['monitor-clear', '清除网页地址', '清除网页地址'],
+    ['monitor-external', 'iframe 未加 sandbox', '新标签页打开网页；仅限可信地址，iframe 未加 sandbox，同源页面可读取本页登录凭据'],
+    ['monitor-refresh', '刷新网页（重新读取地址）', '刷新网页'],
+    ['monitor-close', '关闭网页监控', '关闭网页监控'],
+  ] as const) {
     const trigger = page.locator(`#${id}`);
     await trigger.focus();
-    await expect(page.getByRole('tooltip')).toContainText(text!);
+    await expect(page.getByRole('tooltip')).toContainText(hint);
     await expect(trigger).not.toHaveAttribute('title');
-    await expect(trigger).toHaveAccessibleName(/.+/);
+    await expect(trigger).toHaveAccessibleName(name);
     await page.keyboard.press('Escape');
   }
   await expect(page.locator('#monitor-frame')).toHaveAttribute('title', /网页内容/);
