@@ -229,20 +229,19 @@ export function Sidebar(props: SidebarProps) {
                 />
               ))}
         </ol>
-        <EmptyState
-          id="room-list-status"
-          className="list-hint"
-          role="status"
-          hidden={!message}
-          style={{
-            display: message ? undefined : 'none',
-            padding: '32px 20px',
-            color: 'var(--wx-muted)',
-            fontSize: 13,
-          }}
-        >
-          {message}
-        </EmptyState>
+        <div id="room-list-status" className="list-hint" role="status" hidden={!message}>
+          <EmptyState
+            style={{
+              padding: 0,
+              color: 'inherit',
+              fontSize: 'inherit',
+              overflowWrap: 'anywhere',
+              wordBreak: 'break-word',
+            }}
+          >
+            {message}
+          </EmptyState>
+        </div>
         {status === 'logged-out' ? <LoggedOutStart /> : null}
         {showRetry ? (
           <Button id="room-list-retry" className="list-retry" type="button" onClick={onRetry}>
