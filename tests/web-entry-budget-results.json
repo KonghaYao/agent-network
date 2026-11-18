@@ -1,0 +1,65 @@
+{
+  "scope": "S01，仅前端与构建测量，不 push、不部署",
+  "base": "5b8306b",
+  "environment": { "bun": "1.4.2", "vite": "7.3.8", "lockfile": "未修改", "manualChunks": "未修改" },
+  "measurement": "从 dist/web/.vite/manifest.json 定位 src/web/app/main.tsx，stat 原始 byte；递归 imports 并去重统计 JS/CSS，不计动态边为同步闭包",
+  "baseline": { "entryBytes": 951080, "staticJsBytes": 951080, "staticCssBytes": 383044, "staticTotalBytes": 1334124, "targetEntryBytes": 911080 },
+  "steps": [
+    {
+      "name": "S01.1 重控件 renderer",
+      "files": ["src/web/app/lenso-controls.ts", "src/web/app/lenso-control-loader.ts", "src/web/app/lenso-control-renderers.ts"],
+      "entryBefore": 951080, "entryAfter": 950615,
+      "staticJsBytes": 950615, "staticCssBytes": 383044, "staticTotalBytes": 1333659,
+      "savedBytes": 465,
+      "network": "Chromium 冷首页未请求 lenso-control-renderers；pointer/focus/click 意图启动加载，源码锁定本轮 backend。未继续测试首交互，因为收益未达保留门槛。",
+      "checks": ["typecheck 通过", "build:web 通过", "冷首页 Network 1 项通过"],
+      "decision": "低于 2000 B，已撤回；facade/fallback/锁定成本抵消 renderer 收益",
+      "commit": "79de7d9", "revert": "f54cb81"
+    },
+    {
+      "name": "S01.2 ConfirmHost",
+      "files": ["src/web/features/overlays/confirm.tsx", "src/web/features/overlays/ConfirmRenderer.tsx"],
+      "entryBefore": 951080, "entryAfter": 951411,
+      "staticJsBytes": 951411, "staticCssBytes": 383044, "staticTotalBytes": 1334455,
+      "savedBytes": -331,
+      "network": "Chromium 冷首页未请求 ConfirmRenderer；confirmDialog 意图启动加载。未继续首交互测试，因为收益未达门槛。",
+      "checks": ["typecheck 通过", "build:web 通过", "冷首页 Network 1 项通过"],
+      "decision": "低于 2000 B，已撤回；LogoutDialog 等仍静态引用 AlertDialog，无法只由 host 移走依赖",
+      "commit": "5c3aee4", "revert": "361f0de"
+    },
+    {
+      "name": "S01.3 ChatPage 路由懒加载",
+      "files": ["src/web/app/main.tsx", "src/web/app/ChatRouteFallback.tsx", "src/web/app/app.css"],
+      "entryBefore": 951080, "entryAfter": 718523,
+      "staticJsBytes": 718523, "staticCssBytes": 383153, "staticTotalBytes": 1101676,
+      "savedEntryBytes": 232557, "savedStaticTotalBytes": 232448,
+      "roomChunkBytes": 158927,
+      "network": "冷首页不请求 ChatPage；真实会话链接 click 后才请求。既有 AppSidebarDialogs 在首屏立即加载，其共享 combobox-store 77297 B 也会立即请求，未计为全部延后；ChatPage 自身未被倒灌。既有 Lenso index 1331540 B 仍动态请求，不冒称这部分收益。",
+      "fallback": "1280×844：sidebar x=0 width=300，chat x=300 width=620，默认文件栏预留 360；390×844 暗色：sidebar 不可见，chat x=0 width=390。骨架无业务 id/form/订阅；真实页仅一份 sidebar/chat/body。草稿、DOM identity、selectionStart 与焦点保持。",
+      "regressionsFixed": ["第一版路由骨架未预留文件栏 360px；按现有偏好补齐后原几何测试通过", "旧文件卡片实时测试以当前用户 API 发送，却等待 sender 不会收到的通知；改另一成员发送。原静态路由只由首载补拉偶然覆盖；不改通知语义。"],
+      "commit": "2eb2ea4", "testCommit": "5b423f1",
+      "decision": "保留；已超过 40000 B，无需第 4、5 步"
+    }
+  ],
+  "final": { "entryBytes": 718523, "hardLimitBytes": 972800, "headroomBytes": 254277, "savedEntryBytes": 232557, "staticJsDelta": -232557, "staticCssDelta": 109, "staticTotalDelta": -232448 },
+  "verification": {
+    "typecheck": "通过",
+    "playwrightFull": "首轮 198 passed / 1 failed；room-row-menu 等待 #room-filter-group 超时，隔离 repeat-each=3 全通过；第二轮 199 passed（原195+新增4），无重试",
+    "targeted": "chat/chat-files/components/entries/panels/navigation/entry-budget：79 passed",
+    "web": "未通过；连续两次在 scripts/verify-web.ts:5560 等待 #chat-error 超时。测试只使第一次 history 失败，随后首载 ack 补拉已自动恢复；不得声称236通过。未改订阅/恢复语义，也未放宽断言。",
+    "webA11y": "11 项通过；home/room/group-modal critical=0 serious=0",
+    "spaShell": "68 项通过",
+    "units": "完整 test:units 命令退出0",
+    "fenixVendor": "通过，原950KiB阈值未改",
+    "protocol": "本地临时隔离服务，PUBLIC_ORIGIN 匹配基址后957项通过；默认8792无服务的首次尝试失败",
+    "acceptance": "本地隔离服务执行，关闭最后一个连接后成员显示离线超时（scripts/acceptance.ts:1074），未改后端",
+    "diffCheck": "通过",
+    "accountMenuM": "components 正常Lenso、失败fallback、44px、Esc/外部点击、首帧无遮挡与对话框关闭焦点回toggle相关用例通过"
+  },
+  "remaining": [
+    "预算已达标，但全部验收尚未达标：test:web 历史错误注入与自动恢复存在时序冲突；是否将故障持续到点击重试需调用方确认，不能为了显示短暂错误去更改业务恢复语义。verify-web.ts 已超过1000行，本轮未扩改该文件。",
+    "test:acceptance 离线检测超时未修复，后端不在本次授权修改范围。",
+    "未覆盖真实设备、WebKit、真实IME与读屏；浏览器为本机Chromium模拟1280/390。",
+    "未独立记录 transfer/parse CPU 性能数据；已记录原始产物、静态闭包与浏览器请求触发时机。"
+  ]
+}
