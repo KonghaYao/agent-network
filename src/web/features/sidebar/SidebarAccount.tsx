@@ -1,3 +1,4 @@
+import { Tooltip } from '../../app/lenso-tooltip';
 import { lazy, Suspense, useState } from 'react';
 
 import { Avatar, Button, LENSO_AVATAR_FILL } from '../../app/lenso-controls';
@@ -167,21 +168,21 @@ export function SidebarAccount({ me }: { me: WebIdentity | null }) {
               {me ? me.name : '未登录'}
             </span>
             {me ? (
-              <Button
+              <Tooltip as={Button}
                 className="account-edit"
                 id="account-rename"
                 type="button"
                 variant="borderless"
                 isIconOnly
                 aria-label="编辑姓名"
-                title="编辑姓名"
+                hint="编辑姓名"
                 aria-haspopup="dialog"
                 aria-controls="me-rename-dialog"
                 aria-expanded={renameOpen}
                 onClick={() => setRenameOpen(true)}
               >
                 <PencilIcon />
-              </Button>
+              </Tooltip>
             ) : null}
           </div>
           {me ? (
@@ -222,36 +223,36 @@ export function SidebarAccount({ me }: { me: WebIdentity | null }) {
               >
                 记忆
               </Button>
-              <Button
+              <Tooltip as={Button}
                 className="account-icon"
                 id="archived-agents"
                 type="button"
                 variant="borderless"
                 isIconOnly
                 aria-label="已归档 Agents"
-                title="已归档 Agents"
+                hint="已归档 Agents"
                 aria-haspopup="dialog"
                 aria-controls="archive-popover"
                 aria-expanded={archiveOpen}
                 onClick={() => setArchiveOpen(true)}
               >
                 <ArchiveIcon />
-              </Button>
-              <Button
+              </Tooltip>
+              <Tooltip as={Button}
                 className="account-icon"
                 id="logout"
                 type="button"
                 variant="borderless"
                 isIconOnly
                 aria-label="退出登录"
-                title="退出登录"
+                hint="退出登录"
                 aria-haspopup="dialog"
                 aria-controls="logout-modal"
                 aria-expanded={logoutOpen}
                 onClick={() => setLogoutOpen(true)}
               >
                 <LogoutIcon />
-              </Button>
+              </Tooltip>
             </div>
           ) : null}
         </div>

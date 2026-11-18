@@ -1,3 +1,4 @@
+import { Tooltip } from '../../app/lenso-tooltip';
 import { Button, EmptyState } from '../../app/lenso-controls';
 import {
   useEffect,
@@ -262,7 +263,7 @@ export function RoomTaskDock({
         onKeyDown={onSectionKeyDown}
       >
         <div className="task-dock-head">
-          <Button
+          <Tooltip as={Button}
             ref={toggleRef}
             id="task-dock-toggle"
             className="task-dock-toggle"
@@ -278,7 +279,7 @@ export function RoomTaskDock({
                   ? 'Task 正在加载'
                   : `Task ${tasks.totalCount} 个未完成`
             }
-            title={toggleTitle}
+            hint={toggleTitle}
             onClick={onToggle}
           >
             <span className="task-dock-title">Task</span>
@@ -291,7 +292,7 @@ export function RoomTaskDock({
             <span className="task-dock-caret" aria-hidden="true">
               ▾
             </span>
-          </Button>
+          </Tooltip>
         </div>
         <div
           id="task-dock-panel"

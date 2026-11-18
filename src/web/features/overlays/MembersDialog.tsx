@@ -1,3 +1,4 @@
+import { Tooltip } from '../../app/lenso-tooltip';
 import { Button, Checkbox, FieldError, SearchInput, Select } from '../../app/lenso-controls';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type RefObject } from 'react';
@@ -453,40 +454,40 @@ export function MembersDialog({
                       actions.can_remove) ? (
                       <span className="member-roster-actions">
                         {actions.can_set_admin ? (
-                          <Button
+                          <Tooltip as={Button}
                             className="member-action"
                             type="button"
-                            title="设为管理员"
+                            hint="设为管理员"
                             aria-label={`设为管理员 ${member.name}`}
                             disabled={busy !== null}
                             onClick={() => void setRole(member, 'admin')}
                           >
                             管
-                          </Button>
+                          </Tooltip>
                         ) : null}
                         {actions.can_revoke_admin ? (
-                          <Button
+                          <Tooltip as={Button}
                             className="member-action"
                             type="button"
-                            title="撤销管理员"
+                            hint="撤销管理员"
                             aria-label={`撤销管理员 ${member.name}`}
                             disabled={busy !== null}
                             onClick={() => void setRole(member, 'member')}
                           >
                             撤
-                          </Button>
+                          </Tooltip>
                         ) : null}
                         {actions.can_remove ? (
-                          <Button
+                          <Tooltip as={Button}
                             className="member-action danger"
                             type="button"
-                            title="移出群聊"
+                            hint="移出群聊"
                             aria-label={`移除 ${member.name}`}
                             disabled={busy !== null}
                             onClick={() => void remove(member)}
                           >
                             ×
-                          </Button>
+                          </Tooltip>
                         ) : null}
                       </span>
                     ) : null}

@@ -1,3 +1,4 @@
+import { Tooltip } from '../../app/lenso-tooltip';
 import { Button, Menu, type MenuEntry } from '../../app/lenso-controls';
 import { useState, type ElementType, type Ref } from 'react';
 
@@ -117,6 +118,6 @@ export function RoomMenu({
     open={open} onOpenChange={setOpen} align="end" sideOffset={6}
     fallbackAnchor instantCloseOnSelect
     items={buildRoomMenuEntries({ ...items, membersInMenu: false })}
-    trigger={<Button ref={toggleRef} id="room-menu-toggle" className="icon-btn" type="button"
-      aria-label="会话操作" title="会话操作">···</Button>} />;
+    trigger={<Tooltip as={Button} ref={toggleRef} id="room-menu-toggle" className="icon-btn" type="button"
+      aria-label="会话操作" hint="会话操作">···</Tooltip>} />;
 }

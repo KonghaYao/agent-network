@@ -1,3 +1,4 @@
+import { Tooltip } from '../../app/lenso-tooltip';
 import {
   Avatar,
   AvatarGroup,
@@ -193,13 +194,13 @@ export function TaskPreviewPopover({
             <span className="task-dock-avatars" aria-hidden="true">
               <AvatarGroup overlap="ring" style={TASK_AVATAR_GROUP}>
                 {participants.map((participant) => (
-                  <Avatar
+                  <Tooltip as={Avatar}
                     key={participant.actor_id}
-                    title={participant.name}
+                    hint={participant.name}
                     style={taskAvatarStyle(participant.name)}
                   >
                     {firstChar(participant.name)}
-                  </Avatar>
+                  </Tooltip>
                 ))}
               </AvatarGroup>
               {more > 0 ? (

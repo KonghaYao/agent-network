@@ -1,3 +1,4 @@
+import { Tooltip } from '../../app/lenso-tooltip';
 import { Avatar, LENSO_AVATAR_FILL } from '../../app/lenso-controls';
 
 import { Link } from '../../app/router';
@@ -42,10 +43,10 @@ export function RoomRow({
   return (
     <li>
       <RoomRowMenu room={room} onStatus={onStatus}>
-        <Link
+        <Tooltip as={Link}
           className="room-item"
           to={`/c/${encodeURIComponent(room.room_id)}`}
-          title={`${room.name}（右键或长按打开会话操作）`}
+          hint={`${room.name}（右键或长按打开会话操作）`}
           data-room-id={room.room_id}
           data-room-name={room.name}
           data-room-kind={room.kind}
@@ -58,11 +59,11 @@ export function RoomRow({
               <RoomAvatar name={room.name} />
             )}
             {offline ? (
-              <span
+              <Tooltip as="span"
                 className="presence-dot offline"
                 role="img"
                 aria-label="Agent 离线"
-                title="离线"
+                hint="离线"
               />
             ) : null}
             {unread ? (
@@ -94,7 +95,7 @@ export function RoomRow({
                   : '还没有消息'}
             </div>
           </div>
-        </Link>
+        </Tooltip>
       </RoomRowMenu>
     </li>
   );

@@ -1,3 +1,4 @@
+import { Tooltip } from '../../app/lenso-tooltip';
 import {
   Alert,
   Badge,
@@ -171,16 +172,16 @@ export function Sidebar(props: SidebarProps) {
           <Toolbar aria-label="品牌与会话操作" style={{ display: 'contents' }}>
             <h1>WeBots</h1>
             <ContactRequestsButton onOpen={onOpenContacts} />
-            <Button
+            <Tooltip as={Button}
               className="icon-btn"
               id="new-group"
               type="button"
               aria-label="新建群聊"
-              title="新建群聊"
+              hint="新建群聊"
               onClick={onCreateGroup}
             >
               +
-            </Button>
+            </Tooltip>
           </Toolbar>
         </div>
         {/* 视觉 32px、命中区 44px：外层补足上下可点击高度。 */}
@@ -225,15 +226,15 @@ export function Sidebar(props: SidebarProps) {
                   <span id={`room-filter-${entry.value}`} data-room-filter={entry.value}>
                     {entry.label}
                     {count > 0 ? (
-                      <span
+                      <Tooltip as="span"
                         className="room-filter-unread"
                         aria-hidden="true"
-                        title={`${count} 个会话有未读消息`}
+                        hint={`${count} 个会话有未读消息`}
                       >
                         <Badge placement="" style={LENSO_BADGE_FILL}>
                           {count > 99 ? '99+' : count}
                         </Badge>
-                      </span>
+                      </Tooltip>
                     ) : null}
                   </span>
                 ),
@@ -339,11 +340,11 @@ export function Sidebar(props: SidebarProps) {
           }}
         />
         {streamError ? (
-          <span
+          <Tooltip as="span"
             id="stream-dot"
             className="stream-dot"
             role="status"
-            title={streamError}
+            hint={streamError}
             aria-label={streamError}
             data-state={streamError.startsWith('实时连接已停止') ? 'stopped' : undefined}
           />

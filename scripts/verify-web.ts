@@ -5725,7 +5725,7 @@ async function main(): Promise<void> {
           '分类徽标带数量说明',
           (await page
             .locator('#room-filter-group .room-filter-unread')
-            .getAttribute('title'))?.includes('1 个会话') === true,
+            .getAttribute('aria-label'))?.includes('1 个会话') === true,
         );
         checkEqual(
           '分类未读汇总使用 polite aria-live',

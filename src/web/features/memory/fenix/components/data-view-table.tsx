@@ -6,6 +6,7 @@
  * 避免只有 `occurred_at` 的行被显示成空；实体/标签胶囊用更深的文字色满足 WCAG AA。
  */
 
+import { Tooltip } from '../../../../app/lenso-tooltip';
 import { EmptyState } from "../ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import { NS } from "../i18n";
@@ -115,12 +116,12 @@ export function DataViewTable({ factType, rows, currentPage, onPageChange, onRow
                             <TableCell className="py-2 align-middle">
                               {entities.length > 0 ? (
                                 <div className="flex min-w-0 items-center overflow-hidden">
-                                  <span
-                                    title={maskSecrets(entities[0] ?? "")}
+                                  <Tooltip as="span"
+                                    hint={maskSecrets(entities[0] ?? "")}
                                     className="block min-w-0 max-w-full truncate rounded-full bg-primary/10 px-1.5 py-0.5 text-3xs font-medium text-emerald-800 dark:text-emerald-300"
                                   >
                                     {maskSecrets(entities[0] ?? "")}
-                                  </span>
+                                  </Tooltip>
                                   {entities.length > 1 && (
                                     <span className="ml-1 shrink-0 text-3xs text-muted-foreground">
                                       +{entities.length - 1}
@@ -134,12 +135,12 @@ export function DataViewTable({ factType, rows, currentPage, onPageChange, onRow
                             <TableCell className="py-2 align-middle">
                               {tags.length > 0 ? (
                                 <div className="flex min-w-0 items-center overflow-hidden">
-                                  <span
-                                    title={maskSecrets(tags[0] ?? "")}
+                                  <Tooltip as="span"
+                                    hint={maskSecrets(tags[0] ?? "")}
                                     className="block min-w-0 max-w-full truncate rounded-md border border-amber-500/20 bg-amber-500/10 px-1.5 py-0.5 font-mono text-3xs font-medium text-amber-800 dark:text-amber-300"
                                   >
                                     #{tags[0]}
-                                  </span>
+                                  </Tooltip>
                                   {tags.length > 1 && (
                                     <span className="ml-1 shrink-0 text-3xs text-muted-foreground">
                                       +{tags.length - 1}

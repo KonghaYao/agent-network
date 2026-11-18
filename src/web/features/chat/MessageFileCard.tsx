@@ -1,3 +1,4 @@
+import { Tooltip } from '../../app/lenso-tooltip';
 import { Button, Surface } from '../../app/lenso-controls';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -208,7 +209,7 @@ export const MessageFileCard = memo(function MessageFileCard({
       ref={cardRef}
     >
       {showThumb ? (
-        <Button
+        <Tooltip as={Button}
           type="button"
           variant="borderless"
           size="sm"
@@ -222,7 +223,7 @@ export const MessageFileCard = memo(function MessageFileCard({
             overflow: 'hidden',
             background: 'var(--wx-search)',
           }}
-          title={name}
+          hint={name}
           aria-label={`预览图片 ${name}`}
           onClick={() => {
             void openPreview();
@@ -236,15 +237,15 @@ export const MessageFileCard = memo(function MessageFileCard({
             referrerPolicy="no-referrer"
             onError={retryImage}
           />
-        </Button>
+        </Tooltip>
       ) : null}
       <span className="msg-file-kind" aria-hidden="true">
         {item ? fileIconLabel(kind) : 'FILE'}
       </span>
       <span className="msg-file-main">
-        <span className="msg-file-name" title={name}>
+        <Tooltip as="span" className="msg-file-name" hint={name}>
           {name}
-        </span>
+        </Tooltip>
         <span className="msg-file-size">{sizeText}</span>
         {state.status === 'error' ? (
           <span className="msg-file-note">文件信息读取失败</span>

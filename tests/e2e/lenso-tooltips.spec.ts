@@ -1,0 +1,198 @@
+import { expect, test, type Page } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+
+async function tool<T>(name: string, args: Record<string, unknown>, token: string): Promise<T> {
+  const response = await fetch(`${base}/mcp`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream',
+      'mcp-protocol-version': '2026-07-28', 'mcp-method': 'tools/call', 'mcp-name': name, authorization: `Bearer ${token}` },
+    body: JSON.stringify({ jsonrpc: '2.0', id: crypto.randomUUID(), method: 'tools/call', params: {
+      name, arguments: { request_id: crypto.randomUUID(), ...args },
+      _meta: { 'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+        'io.modelcontextprotocol/clientInfo': { name: 's08', version: '1' }, 'io.modelcontextprotocol/clientCapabilities': {} },
+    } }),
+  });
+  const payload = await response.json() as { result: { isError?: boolean; structuredContent?: T; content?: { text: string }[] } };
+  expect(payload.result.isError).not.toBe(true);
+  return payload.result.structuredContent ?? JSON.parse(payload.result.content?.[0]?.text ?? 'null');
+}
+
+let base: string;
+test.beforeAll(() => { base = process.env.E2E_BASE_URL ?? JSON.parse(readFileSync('.e2e/server.json', 'utf8')).base; });
+
+async function home(page: Page, ready = true) {
+  const token = crypto.randomUUID();
+  const response = await fetch(`${base}/mcp`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream',
+      'mcp-protocol-version': '2026-07-28', 'mcp-method': 'tools/call', 'mcp-name': 'network_register', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {
+      name: 'network_register', arguments: { request_id: crypto.randomUUID(), kind: 'human', name: 'Tooltip owner' },
+      _meta: { 'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+        'io.modelcontextprotocol/clientInfo': { name: 's08', version: '1' }, 'io.modelcontextprotocol/clientCapabilities': {} },
+    } }),
+  });
+  expect(response.ok).toBe(true);
+  await page.addInitScript((auth) => localStorage.setItem('agent-network-token', auth), token);
+  await page.goto(base);
+  const trigger = page.locator('#new-group');
+  await expect(page.locator('#account-name')).toHaveText('Tooltip owner');
+  if (ready) await expect(trigger).toHaveAttribute('data-tooltip-backend', 'lenso');
+  return trigger;
+}
+
+test('hover 延迟、portal、本地层级、Esc 与原生 title 互斥', async ({ page }) => {
+  const trigger = await home(page);
+  await trigger.hover();
+  await page.waitForTimeout(250);
+  await expect(page.locator('[data-app-tooltip]')).toHaveCount(0);
+  await expect(page.getByRole('tooltip')).toHaveText('新建群聊');
+  await expect(trigger).not.toHaveAttribute('title');
+  await expect(trigger).toHaveAccessibleName('新建群聊');
+  const popup = page.getByRole('tooltip');
+  expect(await popup.evaluate((node) => node.parentElement === document.body)).toBe(true);
+  expect(await popup.evaluate((node) => Number(getComputedStyle(node).zIndex))).toBeLessThan(100000);
+  expect(await popup.evaluate((node) => node.matches(':popover-open'))).toBe(false);
+  await page.keyboard.press('Escape');
+  await expect(popup).toHaveCount(0);
+  await page.waitForTimeout(600);
+  await expect(popup).toHaveCount(0);
+});
+
+test('focus 打开，blur 关闭且不抢焦点', async ({ page }) => {
+  const trigger = await home(page);
+  await trigger.focus();
+  await expect(page.getByRole('tooltip')).toBeVisible();
+  await expect(trigger).toBeFocused();
+  await page.locator('#room-search').focus();
+  await expect(page.getByRole('tooltip')).toHaveCount(0);
+});
+
+test('真实 index chunk 阻断仍保留原生提示与交互', async ({ page }) => {
+  let blocked = 0;
+  await page.route('**/assets/index-*.js', async (route) => { blocked++; await route.abort(); });
+  const trigger = await home(page, false);
+  await expect(trigger).toHaveAttribute('title', '新建群聊');
+  await trigger.hover();
+  await page.waitForTimeout(650);
+  await expect(page.getByRole('tooltip')).toHaveCount(0);
+  expect(blocked).toBeGreaterThan(0);
+  await trigger.click();
+  await expect(page.locator('#group-modal')).toBeVisible();
+});
+
+test('真实 index chunk 慢加载不切换当前 fallback 周期，下一次交互升级', async ({ page }) => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let intercepted = 0;
+  await page.route('**/assets/index-*.js', async (route) => { intercepted++; await gate; await route.continue(); });
+  const trigger = await home(page, false);
+  await trigger.hover();
+  await page.waitForTimeout(550);
+  await expect(trigger).toHaveAttribute('title', '新建群聊');
+  release();
+  await expect(page.locator('#new-agent')).toHaveAttribute('data-lenso-slot', 'button');
+  expect(intercepted).toBeGreaterThan(0);
+  await expect(trigger).toHaveAttribute('data-tooltip-backend', 'fallback');
+  await expect(trigger).toHaveAttribute('title', '新建群聊');
+  await expect(page.getByRole('tooltip')).toHaveCount(0);
+  await page.mouse.move(600, 400);
+  await trigger.hover();
+  await expect(page.getByRole('tooltip')).toBeVisible();
+  await expect(trigger).not.toHaveAttribute('title');
+});
+
+test('390px 暗色、可访问名与原命中区不变', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ colorScheme: 'dark' });
+  const trigger = await home(page);
+  await trigger.focus();
+  const popup = page.getByRole('tooltip');
+  await expect(popup).toBeVisible();
+  const box = await popup.boundingBox();
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+  await expect(trigger).toHaveAccessibleName('新建群聊');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await page.keyboard.press('Escape');
+  await trigger.click();
+  await expect(page.locator('#group-modal')).toBeVisible();
+});
+
+test('会话行与监控五个提示保留语义、安全说明及确认框还焦', async ({ page }) => {
+  const token = crypto.randomUUID();
+  const peerToken = crypto.randomUUID();
+  const owner = await tool<{ actor_id: string }>('network_register', { kind: 'human', name: 'S08 human' }, token);
+  const peer = await tool<{ actor_id: string }>('network_register', { kind: 'human', name: 'S08 agent' }, peerToken);
+  const request = await tool<{ request: { contact_request_id: string } }>('network_contact_request', { actor_id: peer.actor_id }, token);
+  await tool('network_contact_request_respond', { contact_request_id: request.request.contact_request_id, action: 'accept' }, peerToken);
+  const created = await tool<{ room: { room_id: string } }>('network_room_create', { kind: 'direct', members: [peer.actor_id] }, token);
+  await page.addInitScript((auth) => localStorage.setItem('agent-network-token', auth), token);
+  await page.goto(`${base}/c/${created.room.room_id}`);
+  const row = page.locator(`[data-room-id="${created.room.room_id}"]`);
+  await expect(row).toHaveAttribute('data-tooltip-backend', 'lenso');
+  await row.hover();
+  await expect(page.getByRole('tooltip')).toContainText('右键或长按');
+  await expect(row).toHaveAccessibleName(/S08 agent/);
+  await page.keyboard.press('Escape');
+  await page.locator('#monitor-toggle').click();
+  for (const [id, text] of [
+    ['monitor-save', '保存网页地址（Enter）'], ['monitor-clear', '清除网页地址'],
+    ['monitor-external', 'iframe 未加 sandbox'], ['monitor-refresh', '刷新网页（重新读取地址）'],
+    ['monitor-close', '关闭网页监控'],
+  ]) {
+    const trigger = page.locator(`#${id}`);
+    await trigger.focus();
+    await expect(page.getByRole('tooltip')).toContainText(text!);
+    await expect(trigger).not.toHaveAttribute('title');
+    await expect(trigger).toHaveAccessibleName(/.+/);
+    await page.keyboard.press('Escape');
+  }
+  await expect(page.locator('#monitor-frame')).toHaveAttribute('title', /网页内容/);
+  await page.locator('#monitor-clear').click();
+  await expect(page.locator('#confirm-dialog')).toBeVisible();
+  await page.locator('#confirm-dialog-cancel').click();
+  await expect(page.locator('#monitor-clear')).toBeFocused();
+  expect(owner.actor_id).not.toBe(peer.actor_id);
+});
+
+test('离开取消延迟，已打开提示在 hover 离开后卸载', async ({ page }) => {
+  const trigger = await home(page);
+  await trigger.hover();
+  await page.waitForTimeout(150);
+  await page.mouse.move(600, 400);
+  await page.waitForTimeout(550);
+  await expect(page.getByRole('tooltip')).toHaveCount(0);
+  await trigger.hover();
+  await expect(page.getByRole('tooltip')).toBeVisible();
+  await page.mouse.move(600, 400);
+  await expect(page.getByRole('tooltip')).toHaveCount(0);
+});
+
+test('本地提示不进入 top layer 或遮盖 Lenso Modal', async ({ page }) => {
+  const trigger = await home(page);
+  await trigger.hover();
+  const popup = page.getByRole('tooltip');
+  await expect(popup).toBeVisible();
+  await page.locator('#new-agent').evaluate((node: HTMLButtonElement) => node.click());
+  const modal = page.locator('#new-agent-modal');
+  await expect(modal).toHaveAttribute('data-lenso-slot', 'modal-popup');
+  // Modal 打开会使原触发器失焦；提示可卸载，也可留在本地层，但不能进入 top layer。
+  expect(await page.locator('[data-app-tooltip]').evaluateAll((nodes) => nodes.every((node) => !node.matches(':popover-open')))).toBe(true);
+  expect(await modal.evaluate((node) => node.matches(':popover-open'))).toBe(true);
+  await page.locator('#new-agent-name').fill('提示不能阻挡输入');
+  await expect(page.locator('#new-agent-name')).toBeFocused();
+});
+
+test('无 hover 触屏点击不留下 tooltip', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const page = await context.newPage();
+  try {
+    const trigger = await home(page);
+    await trigger.tap();
+    await page.waitForTimeout(650);
+    await expect(page.getByRole('tooltip')).toHaveCount(0);
+    await expect(page.locator('#group-modal')).toBeVisible();
+    await expect(trigger).toHaveAccessibleName('新建群聊');
+  } finally { await context.close(); }
+});

@@ -1,3 +1,4 @@
+import { Tooltip } from '../../app/lenso-tooltip';
 import {
   Button,
   EmptyState,
@@ -279,7 +280,7 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, files }: Fil
             >
               上传
             </Button>
-            <Button
+            <Tooltip as={Button}
               className="files-close"
               id="files-close"
               type="button"
@@ -287,11 +288,11 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, files }: Fil
               size="sm"
               style={{ color: 'var(--wx-text)', backgroundColor: 'transparent' }}
               aria-label="关闭文件栏"
-              title="关闭文件栏"
+              hint="关闭文件栏"
               onClick={onClose}
             >
               关闭
-            </Button>
+            </Tooltip>
           </div>
         </Toolbar>
         </header>
@@ -404,9 +405,9 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, files }: Fil
                         )}
                       </span>
                       <div className="file-main">
-                        <span className="file-name" title={item.name || '未命名文件'}>
+                        <Tooltip as="span" className="file-name" hint={item.name || '未命名文件'}>
                           {item.name || '未命名文件'}
-                        </span>
+                        </Tooltip>
                         <span className="file-meta">{fileMetaText(item)}</span>
                       </div>
                     </div>

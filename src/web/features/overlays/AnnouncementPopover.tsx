@@ -1,3 +1,4 @@
+import { Tooltip } from '../../app/lenso-tooltip';
 import { Button } from '../../app/lenso-controls';
 import * as PopoverPrimitive from '@radix-ui/react-popover';
 
@@ -19,15 +20,15 @@ export function AnnouncementPopover({
   return (
     <PopoverPrimitive.Root>
       <PopoverPrimitive.Trigger asChild>
-        <Button
+        <Tooltip as={Button}
           id="room-announcement-info"
           className="icon-btn announcement-dot"
           type="button"
           aria-label="查看群公告"
-          title="查看群公告"
+          hint="查看群公告"
         >
           !
-        </Button>
+        </Tooltip>
       </PopoverPrimitive.Trigger>
       <PopoverPrimitive.Portal>
         <PopoverPrimitive.Content

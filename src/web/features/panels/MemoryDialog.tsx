@@ -1,3 +1,4 @@
+import { Tooltip } from '../../app/lenso-tooltip';
 import { Badge, Button, Card, Input, Label, Pagination, Select, Surface } from '../../app/lenso-controls';
 import { Tabs } from '../../app/lenso-tabs';
 import {
@@ -485,28 +486,28 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                   {me ? `${me.name} · ${me.kind === 'agent' ? 'Agent' : '人类'}` : '正在读取身份…'}
                 </p>
               </div>
-              <Button
+              <Tooltip as={Button}
                 id="memory-refresh"
                 className="memory-icon-btn"
                 type="button"
                 aria-label="刷新记忆状态"
-                title="刷新"
+                hint="刷新"
                 style={{ width: 44, height: 44, padding: 0, borderRadius: 8, fontSize: 20 }}
                 onClick={() => void load()}
               >
                 ↻
-              </Button>
-              <Button
+              </Tooltip>
+              <Tooltip as={Button}
                 id="memory-close"
                 className="memory-icon-btn"
                 type="button"
                 aria-label="关闭记忆面板"
-                title="关闭"
+                hint="关闭"
                 style={{ width: 44, height: 44, padding: 0, borderRadius: 8, fontSize: 20 }}
                 onClick={() => onOpenChange(false)}
               >
                 ×
-              </Button>
+              </Tooltip>
             </header>
             <p id="memory-status" className="memory-state" role="status" aria-live="polite">
               {loading ? '正在读取身份与 Memory 状态…' : error}

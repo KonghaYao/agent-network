@@ -1,3 +1,4 @@
+import { Tooltip } from '../../app/lenso-tooltip';
 import { Badge, Button, LENSO_BADGE_FILL } from '../../app/lenso-controls';
 import { useContactRequestBadge } from '../../hooks/useContactRequests';
 
@@ -14,12 +15,12 @@ export function ContactRequestsButton({ onOpen }: { onOpen: () => void }) {
       ? `添加好友（${badge.count}${badge.hasMore ? '+' : ''} 条待处理申请）`
       : '添加好友';
   return (
-    <Button
+    <Tooltip as={Button}
       className="icon-btn"
       id="contact-requests"
       type="button"
       aria-label={title}
-      title={title}
+      hint={title}
       onClick={onOpen}
     >
       <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -33,6 +34,6 @@ export function ContactRequestsButton({ onOpen }: { onOpen: () => void }) {
           {badge.hasMore ? '+' : ''}
         </Badge>
       </span>
-    </Button>
+    </Tooltip>
   );
 }
