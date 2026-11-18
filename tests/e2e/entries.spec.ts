@@ -1050,6 +1050,61 @@ test.describe('SPA 剩余入口', () => {
     expect(dissolved.room.status).toBe('dissolved');
   });
 
+  test('侧栏状态的长 token 保留 list-hint 换行，不撑破侧栏', async ({ page }) => {
+    const base = await baseUrl();
+    const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+    const owner = await registerHuman(base, `Wrap Owner ${suffix}`);
+    const longToken = 'A'.repeat(200);
+
+    // 真实错误态：只让会话列表失败，会话/身份请求照常通过。
+    await page.route('**/mcp', async (route) => {
+      if (route.request().headers()['mcp-name'] === 'network_rooms_list') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 'long-token-error',
+            error: { message: longToken },
+          }),
+        });
+        return;
+      }
+      await route.continue();
+    });
+
+    await login(page, base, owner.token);
+    const status = page.locator('#room-list-status');
+    await expect(status).toBeVisible();
+    await expect(status).toHaveText(longToken);
+    // Lenso 接管 EmptyState 后根节点不再保留传入 className，换行只能靠原生外壳。
+    // 修复前 EmptyState 就是 #room-list-status 本身，修复后它是外壳的子节点。
+    const lensoRoot = page.locator('[data-lenso-slot="empty-state"]');
+    await expect(lensoRoot).toHaveCount(1);
+
+    const layout = await status.evaluate((element) => {
+      const wrapper = getComputedStyle(element);
+      const inner = element.firstElementChild as HTMLElement | null;
+      const sidebar = element.closest('.sidebar') as HTMLElement | null;
+      return {
+        overflowWrap: wrapper.overflowWrap,
+        lineHeight: Number.parseFloat(wrapper.lineHeight),
+        scrollWidth: element.scrollWidth,
+        clientWidth: element.clientWidth,
+        innerScrollWidth: inner?.scrollWidth ?? 0,
+        innerClientWidth: inner?.clientWidth ?? 0,
+        sidebarScrollWidth: sidebar?.scrollWidth ?? 0,
+        sidebarClientWidth: sidebar?.clientWidth ?? 0,
+      };
+    });
+
+    expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth);
+    expect(layout.innerScrollWidth).toBeLessThanOrEqual(layout.innerClientWidth);
+    expect(layout.sidebarScrollWidth).toBeLessThanOrEqual(layout.sidebarClientWidth);
+    expect(layout.overflowWrap).toBe('anywhere');
+    expect(layout.lineHeight).toBeGreaterThanOrEqual(22);
+  });
+
   test.describe('mobile', () => {
     test.use({ viewport: { width: 390, height: 844 } });
 

@@ -1,4 +1,4 @@
-import { Button } from '../../app/lenso-controls';
+import { Badge, Button, LENSO_BADGE_FILL } from '../../app/lenso-controls';
 import { useContactRequestBadge } from '../../hooks/useContactRequests';
 
 /**
@@ -28,8 +28,10 @@ export function ContactRequestsButton({ onOpen }: { onOpen: () => void }) {
         <path d="M19 8v6M22 11h-6" />
       </svg>
       <span id="contact-requests-badge" className="request-badge" hidden={badge.count === 0}>
-        {badge.count}
-        {badge.hasMore ? '+' : ''}
+        <Badge placement="" style={LENSO_BADGE_FILL}>
+          {badge.count}
+          {badge.hasMore ? '+' : ''}
+        </Badge>
       </span>
     </Button>
   );

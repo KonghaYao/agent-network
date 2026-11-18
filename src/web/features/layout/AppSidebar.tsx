@@ -9,9 +9,8 @@ import { useWebSession } from '../../hooks/useWebSession';
 import { filterRooms, hasUnreadAttention, matchesFilter, type RoomFilter } from '../../lib/rooms';
 import { queryKeys } from '../../lib/query-keys';
 import { useRoomFilterStore } from '../../stores/ui';
-import { ContactRequestsDialog } from '../overlays/ContactRequestsDialog';
-import { GroupCreateDialog } from '../overlays/GroupCreateDialog';
 import { Sidebar, type SidebarStatus } from '../sidebar/Sidebar';
+import { AppSidebarDialogsMount } from './AppSidebarDialogsMount';
 
 export interface SidebarNotice {
   message: string;
@@ -169,8 +168,13 @@ export function AppSidebar({ notice = null, live = true, streamError = null }: A
         }}
         onActionStatus={showActionStatus}
       />
-      <GroupCreateDialog open={groupOpen} onOpenChange={setGroupOpen} />
-      <ContactRequestsDialog open={contactsOpen} onOpenChange={changeContacts} />
+      <AppSidebarDialogsMount
+        groupOpen={groupOpen}
+        contactsOpen={contactsOpen}
+        onGroupOpenChange={setGroupOpen}
+        onContactsOpenChange={changeContacts}
+        onError={() => showActionStatus('弹窗加载失败，请刷新页面后重试')}
+      />
     </>
   );
 }

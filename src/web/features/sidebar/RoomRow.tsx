@@ -1,3 +1,4 @@
+import { Avatar, LENSO_AVATAR_FILL } from '../../app/lenso-controls';
 import { useRef } from 'react';
 
 import { Link } from '../../app/router';
@@ -92,7 +93,7 @@ export function RoomRow({
             {room.kind === 'group' ? (
               <GroupAvatar name={room.name} roomId={room.room_id} />
             ) : (
-              <Avatar name={room.name} />
+              <RoomAvatar name={room.name} />
             )}
             {offline ? (
               <span
@@ -137,14 +138,14 @@ export function RoomRow({
   );
 }
 
-function Avatar({ name }: { name: string }) {
+function RoomAvatar({ name }: { name: string }) {
   return (
     <span
       className="avatar"
       aria-hidden="true"
       style={{ background: avatarColor(name) }}
     >
-      {firstChar(name)}
+      <Avatar style={LENSO_AVATAR_FILL}>{firstChar(name)}</Avatar>
     </span>
   );
 }
@@ -159,9 +160,9 @@ function GroupAvatar({ name, roomId }: { name: string; roomId: string }) {
       data-group-color={color.index}
       data-label-length={label.length}
       data-script={label.script}
-      style={groupColorStyle(color)}
+      style={{ ...groupColorStyle(color), backgroundColor: color.hex }}
     >
-      {label.text}
+      <Avatar style={LENSO_AVATAR_FILL}>{label.text}</Avatar>
     </span>
   );
 }

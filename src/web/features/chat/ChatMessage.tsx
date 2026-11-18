@@ -1,4 +1,4 @@
-import { Button } from '../../app/lenso-controls';
+import { Avatar, Button, LENSO_AVATAR_FILL } from '../../app/lenso-controls';
 import * as ContextMenuPrimitive from '@radix-ui/react-context-menu';
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu';
 import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -521,7 +521,7 @@ export const ChatMessage = memo(function ChatMessage({
             aria-hidden="true"
             style={{ background: avatarColor(mine ? identityName : name) }}
           >
-            {firstChar(mine ? identityName : name)}
+            <Avatar style={LENSO_AVATAR_FILL}>{firstChar(mine ? identityName : name)}</Avatar>
           </span>
           <div className="msg-content">
             {!mine && room.kind === 'group' ? <div className="msg-sender">{name}</div> : null}

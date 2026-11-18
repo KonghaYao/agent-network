@@ -1,6 +1,6 @@
 import { lazy, Suspense, useState } from 'react';
 
-import { Button } from '../../app/lenso-controls';
+import { Avatar, Button, LENSO_AVATAR_FILL } from '../../app/lenso-controls';
 import { useWebSession } from '../../hooks/useWebSession';
 import { accountAvatarFor } from '../../lib/agent-avatar';
 import type { WebIdentity } from '../../lib/identity';
@@ -98,7 +98,9 @@ function AccountAvatar({ me }: { me: WebIdentity | null }) {
       data-brand={showImage ? spec.brand : undefined}
       style={me && !showImage ? { background: avatarColor(me.name) } : undefined}
     >
-      {me ? firstChar(me.name) : '?'}
+      <Avatar style={LENSO_AVATAR_FILL}>
+        {me ? firstChar(me.name) : '?'}
+      </Avatar>
       {showImage ? (
         <img
           className="avatar-img"
