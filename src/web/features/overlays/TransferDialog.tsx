@@ -1,4 +1,4 @@
-import { Button, Input, RadioGroup, SearchInput } from '../../app/lenso-controls';
+import { Button, Input, Label, RadioGroup, SearchInput } from '../../app/lenso-controls';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { useContacts } from '../../hooks/useContacts';
@@ -368,17 +368,18 @@ export function TransferDialog({
               <p className="new-agent-warning" id="transfer-token-warning">
                 {TRANSFER_TOKEN_WARNING}
               </p>
-              <label className="field">
-                <span>新 MCP URL</span>
+              <div className="field">
+                <Label htmlFor="transfer-token">新 MCP URL</Label>
                 <div className="transfer-token">
                   <Input
                     id="transfer-token"
+                    aria-describedby="transfer-token-warning"
                     type="text"
                     readOnly
                     value={accepted.mcp_url ?? ''}
                   />
                 </div>
-              </label>
+              </div>
               <Button
                 className="new-agent-copy"
                 id="transfer-token-copy"

@@ -1,3 +1,4 @@
+import { InlineCandidateItem, InlineCandidateList } from '../../app/lenso-candidate-list';
 import { Button, Chip, FieldError, Input, Label } from '../../app/lenso-controls';
 import * as Ariakit from '@ariakit/react';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -159,7 +160,10 @@ export function GroupCreateDialog({
           <Label htmlFor="group-search">添加成员</Label>
           <Ariakit.Combobox
             store={combobox}
+            render={<Input fullWidth style={{ minHeight: 44 }} />}
             id="group-search"
+            aria-describedby={errors.members ? 'group-members-error' : undefined}
+            aria-invalid={errors.members ? true : undefined}
             placeholder="搜索好友名称"
             autoComplete="off"
             value={search}
@@ -173,17 +177,20 @@ export function GroupCreateDialog({
           />
         </div>
         <div id="group-contacts" className="spa-combobox-list" role="group" aria-label="好友候选">
-          <Ariakit.ComboboxList store={combobox} alwaysVisible>
+          {/* Ariakit 保留内联列表与键盘语义，Lenso 只承担视觉，不创建第二个 store。 */}
+          <Ariakit.ComboboxList store={combobox} alwaysVisible render={<InlineCandidateList />}>
             {candidates.map((contact) => (
-              <Ariakit.ComboboxItem
-                key={contact.actor_id}
-                className="spa-combobox-item"
-                value={contact.name}
-                onClick={() => toggle(contact)}
-              >
-                <span>{contact.name}</span>
-                <span className="mention-kind">{contact.kind === 'agent' ? 'Agent' : '人'}</span>
-              </Ariakit.ComboboxItem>
+              <InlineCandidateItem key={contact.actor_id}>
+                <Ariakit.ComboboxItem
+                  className="spa-combobox-item"
+                  style={{ minHeight: 44, width: '100%', boxSizing: 'border-box' }}
+                  value={contact.name}
+                  onClick={() => toggle(contact)}
+                >
+                  <span>{contact.name}</span>
+                  <span className="mention-kind">{contact.kind === 'agent' ? 'Agent' : '人'}</span>
+                </Ariakit.ComboboxItem>
+              </InlineCandidateItem>
             ))}
           </Ariakit.ComboboxList>
           {contacts.loading ? <p className="list-hint">正在读取好友…</p> : null}
@@ -201,7 +208,7 @@ export function GroupCreateDialog({
               {contacts.loadingMore ? '正在加载…' : '加载更多好友'}
             </Button>
           ) : null}
-          {contacts.error ? <p className="field-error">{contacts.error}</p> : null}
+          {contacts.error ? <FieldError>{contacts.error}</FieldError> : null}
         </div>
 
         <div id="group-selection" className="spa-chips" role="group" aria-label="已选成员">

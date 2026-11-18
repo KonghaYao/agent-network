@@ -1,210 +1,10 @@
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test, type Page } from '@playwright/test';
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { expect, test } from '@playwright/test';
+import { baseUrl, callTool, createComponentRoom, dragFile, expectAccountMenuClearOfDialog, login, requestId } from './fixtures/components';
 
 import { semanticColor } from './fixtures/semantic-colors';
 
-/**
- * 4B-4 组件验收：Radix dialog/menu/popover、Ariakit Combobox、dropzone、
- * resizable panels、RHF 表单与 zustand 持久化。
- *
- * 组与好友在 beforeAll 用真实
- * MCP 工具创建，页面断言只走浏览器交互。
- */
-
-async function baseUrl(): Promise<string> {
-  if (process.env.E2E_BASE_URL) return process.env.E2E_BASE_URL;
-  const file = resolve(process.cwd(), '.e2e/server.json');
-  const parsed = JSON.parse(await readFile(file, 'utf8')) as { base?: unknown };
-  if (typeof parsed.base !== 'string') throw new Error('E2E server.json 缺少 base');
-  return parsed.base;
-}
-
-function requestId(prefix: string): string {
-  return `${prefix}_${crypto.randomUUID().replaceAll('-', '')}`;
-}
-
-interface ToolEnvelope {
-  isError?: boolean;
-  content?: { type?: string; text?: string }[];
-  structuredContent?: unknown;
-}
-
-async function callTool<T>(
-  base: string,
-  token: string,
-  name: string,
-  args: Record<string, unknown>,
-): Promise<T> {
-  const response = await fetch(`${base}/mcp`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      accept: 'application/json, text/event-stream',
-      'mcp-protocol-version': '2026-07-28',
-      'mcp-method': 'tools/call',
-      'mcp-name': name,
-      authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: crypto.randomUUID(),
-      method: 'tools/call',
-      params: {
-        name,
-        arguments: args,
-        _meta: {
-          'io.modelcontextprotocol/protocolVersion': '2026-07-28',
-          'io.modelcontextprotocol/clientInfo': {
-            name: 'agent-network-e2e-components',
-            version: '0.1.0',
-          },
-          'io.modelcontextprotocol/clientCapabilities': {},
-        },
-      },
-    }),
-  });
-  const payload = (await response.json()) as {
-    error?: { message?: string };
-    result?: ToolEnvelope;
-  };
-  if (payload.error) throw new Error(payload.error.message ?? 'MCP 调用失败');
-  const result = payload.result;
-  if (!result) throw new Error('MCP 响应缺少 result');
-  if (result.isError === true) {
-    const text = result.content?.find((item) => item.type === 'text')?.text;
-    throw new Error(text ?? '工具调用失败');
-  }
-  if (result.structuredContent !== undefined) return result.structuredContent as T;
-  const text = result.content?.find((item) => item.type === 'text')?.text;
-  if (!text) throw new Error('MCP 响应缺少正文');
-  return JSON.parse(text) as T;
-}
-
-async function login(page: Page, base: string, token: string): Promise<void> {
-  await page.addInitScript(
-    ({ token, base: origin }) => {
-      try {
-        localStorage.setItem('agent-network-token', token);
-        localStorage.removeItem('agent-network-logged-out');
-        localStorage.setItem('agent-network-room-filter', 'group');
-        sessionStorage.setItem('__origin', origin);
-      } catch {
-        // 页面会显示错误态。
-      }
-    },
-    { token, base },
-  );
-}
-
-/** 在页面内真实构造 DataTransfer 并派发拖拽事件；返回默认行为是否被阻止。 */
-async function dragFile(
-  page: Page,
-  selector: string,
-  type: 'dragenter' | 'dragover' | 'drop',
-  name: string,
-): Promise<boolean> {
-  return page.evaluate(
-    ({ selector: targetSelector, type: eventType, name: fileName }) => {
-      const target = document.querySelector(targetSelector);
-      if (!target) throw new Error(`拖拽目标不存在: ${targetSelector}`);
-      const transfer = new DataTransfer();
-      transfer.items.add(new File([`dropzone ${fileName}`], fileName, { type: 'text/plain' }));
-      const event = new DragEvent(eventType, {
-        bubbles: true,
-        cancelable: true,
-        dataTransfer: transfer,
-      });
-      return !target.dispatchEvent(event);
-    },
-    { selector, type, name },
-  );
-}
-
-/**
- * 菜单条目打开 dialog 后，Lenso 仍可能保活退场 popup；这里在 dialog
- * 刚可见以及随后的若干帧里采样，要求菜单不可见、与 dialog 无几何交集，
- * 且 dialog 顶部命中的不是菜单。
- */
-async function expectAccountMenuClearOfDialog(page: Page, dialogId: string): Promise<void> {
-  await expect(page.locator(`#${dialogId}`)).toBeVisible();
-  const samples = await page.evaluate(async (id) => {
-    const read = () => {
-      const menu = document.querySelector('#account-menu');
-      const dialog = document.getElementById(id);
-      const menuStyle = menu ? getComputedStyle(menu) : null;
-      const menuRect = menu?.getBoundingClientRect() ?? null;
-      const dialogRect = dialog?.getBoundingClientRect() ?? null;
-      const menuVisible = Boolean(
-        menu &&
-          menuRect &&
-          menuRect.width > 0 &&
-          menuRect.height > 0 &&
-          menuStyle?.display !== 'none' &&
-          menuStyle?.visibility !== 'hidden' &&
-          Number(menuStyle?.opacity) > 0,
-      );
-      let overlap: { width: number; height: number } | null = null;
-      if (menuRect && dialogRect) {
-        const left = Math.max(menuRect.left, dialogRect.left);
-        const top = Math.max(menuRect.top, dialogRect.top);
-        const right = Math.min(menuRect.right, dialogRect.right);
-        const bottom = Math.min(menuRect.bottom, dialogRect.bottom);
-        if (right > left && bottom > top) {
-          overlap = { width: right - left, height: bottom - top };
-        }
-      }
-      const hit = dialogRect
-        ? document.elementFromPoint(
-            dialogRect.left + dialogRect.width / 2,
-            dialogRect.top + Math.min(12, dialogRect.height / 2),
-          )
-        : null;
-      return {
-        connected: Boolean(menu),
-        display: menuStyle?.display ?? null,
-        visibility: menuStyle?.visibility ?? null,
-        opacity: menuStyle?.opacity ?? null,
-        menuVisible,
-        overlap,
-        hitInMenu: Boolean(hit?.closest('#account-menu')),
-      };
-    };
-    const frames: ReturnType<typeof read>[] = [read()];
-    for (let index = 0; index < 6; index += 1) {
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-      frames.push(read());
-    }
-    return frames;
-  }, dialogId);
-
-  for (const sample of samples) {
-    const label = JSON.stringify(sample);
-    expect(sample.menuVisible, label).toBe(false);
-    expect(sample.overlap, label).toBeNull();
-    expect(sample.hitInMenu, label).toBe(false);
-  }
-
-  // 打开动画（spa-pop-in 140ms）期间命中测试可能仍落在 overlay；
-  // 动画结束后 dialog 顶部必须是 dialog 自身。
-  await expect
-    .poll(
-      () =>
-        page.evaluate((id) => {
-          const dialog = document.getElementById(id);
-          if (!dialog) return false;
-          const rect = dialog.getBoundingClientRect();
-          const hit = document.elementFromPoint(
-            rect.left + rect.width / 2,
-            rect.top + Math.min(12, rect.height / 2),
-          );
-          return Boolean(hit?.closest(`#${id}`));
-        }, dialogId),
-      { timeout: 2000 },
-    )
-    .toBe(true);
-}
+// 真实 MCP fixture 与浏览器交互覆盖组件、RHF、持久化及可访问性。
 
 test.describe.serial('SPA 组件库与状态管理', () => {
 
@@ -219,59 +19,7 @@ test.describe.serial('SPA 组件库与状态管理', () => {
 
   test.beforeAll(async () => {
     base = await baseUrl();
-    const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
-    tokenA = crypto.randomUUID();
-    tokenB = crypto.randomUUID();
-    nameB = `组件 B ${suffix}`;
-    roomTitle = `组件群 ${suffix}`;
-
-    const a = await callTool<{ actor_id: string }>(base, tokenA, 'network_register', {
-      request_id: requestId('e2e_reg'),
-      kind: 'human',
-      name: `组件 A ${suffix}`,
-      device_id: `e2e-components-${suffix}-a`,
-    });
-    actorA = a.actor_id;
-    const b = await callTool<{ actor_id: string }>(base, tokenB, 'network_register', {
-      request_id: requestId('e2e_reg'),
-      kind: 'human',
-      name: nameB,
-      device_id: `e2e-components-${suffix}-b`,
-    });
-    actorB = b.actor_id;
-    const request = await callTool<{ request: { contact_request_id: string } | null }>(
-      base,
-      tokenA,
-      'network_contact_request',
-      { request_id: requestId('e2e_contact'), actor_id: actorB },
-    );
-    const contactRequestId = request.request?.contact_request_id;
-    if (!contactRequestId) throw new Error('好友申请未创建');
-    await callTool(base, tokenB, 'network_contact_request_respond', {
-      request_id: requestId('e2e_contact'),
-      contact_request_id: contactRequestId,
-      action: 'accept',
-    });
-
-    const created = await callTool<{ room: { room_id: string; title: string } }>(
-      base,
-      tokenA,
-      'network_room_create',
-      {
-        request_id: requestId('e2e_group'),
-        kind: 'group',
-        title: roomTitle,
-        members: [actorB],
-      },
-    );
-    roomId = created.room.room_id;
-    await callTool(base, tokenB, 'network_message_send', {
-      request_id: requestId('e2e_send'),
-      client_message_id: requestId('e2e_cm'),
-      room_id: roomId,
-      body: '组件验收初始消息',
-      invoke: [],
-    });
+    ({ tokenA, tokenB, actorA, actorB, nameB, roomId, roomTitle } = await createComponentRoom(base));
   });
 
   test.beforeEach(async ({ page }) => {
@@ -870,7 +618,14 @@ test.describe.serial('SPA 组件库与状态管理', () => {
       .locator('#members-contacts .contact-choice')
       .filter({ hasText: nameB });
     await expect(addOption).toBeVisible();
-    await addOption.locator('input[type=checkbox]').check();
+    const checkbox = page.getByRole('checkbox', { name: `${nameB} 人`, exact: true });
+    await addOption.locator('.contact-name').click();
+    await expect(checkbox).toBeChecked();
+    await checkbox.press('Space');
+    await expect(checkbox).not.toBeChecked();
+    await expect(page.locator('#members-selection')).toHaveText('未选择');
+    await checkbox.press('Space');
+    await expect(checkbox).toBeChecked();
     await expect(page.locator('#members-selection')).toHaveText('已选 1 人');
     await page.locator('#members-add').click();
     await expect(page.locator('#members-current')).toContainText(nameB);

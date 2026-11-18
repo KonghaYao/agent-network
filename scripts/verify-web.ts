@@ -5389,16 +5389,17 @@ async function main(): Promise<void> {
       await page.waitForFunction(
         `Array.from(document.querySelectorAll('#members-contacts .contact-choice')).filter(function (node) { return node.textContent.includes('群管理新成员'); }).length === 2`,
       );
-      await page
-        .locator('#members-contacts .contact-choice')
-        .filter({ hasText: '群管理新成员A' })
-        .locator('input[type=checkbox]')
-        .check();
-      await page
-        .locator('#members-contacts .contact-choice')
-        .filter({ hasText: '群管理新成员B' })
-        .locator('input[type=checkbox]')
-        .check();
+      const candidateA = page.locator('#members-contacts .contact-choice').filter({ hasText: '群管理新成员A' });
+      const checkboxA = page.getByRole('checkbox', { name: /群管理新成员A/ });
+      await candidateA.locator('.contact-name').click();
+      check('整行点击选中成员 A', await checkboxA.isChecked());
+      await checkboxA.focus();
+      await checkboxA.press('Space');
+      check('Space 取消成员 A', !(await checkboxA.isChecked()));
+      await checkboxA.press('Space');
+      check('Space 重新选中成员 A', await checkboxA.isChecked());
+      await page.locator('#members-contacts .contact-choice').filter({ hasText: '群管理新成员B' }).locator('.contact-name').click();
+      check('整行点击选中成员 B', await page.getByRole('checkbox', { name: /群管理新成员B/ }).isChecked());
       checkEqual(
         '勾选两人后显示已选人数',
         (await page.locator('#members-selection').textContent())?.trim(),

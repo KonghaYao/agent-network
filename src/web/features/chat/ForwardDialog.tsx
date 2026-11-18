@@ -1,4 +1,4 @@
-import { Button, SearchInput } from '../../app/lenso-controls';
+import { Button, Label, SearchInput } from '../../app/lenso-controls';
 import { useEffect, useMemo, useState } from 'react';
 
 import { useRooms } from '../../hooks/useRooms';
@@ -149,8 +149,8 @@ export function ForwardDialog({
       <p id="forward-preview" className="forward-preview">
         {text ?? '正在读取消息…'}
       </p>
-      <label className="field">
-        <span>选择转发会话</span>
+      <div className="field">
+        <Label htmlFor="forward-search">选择转发会话</Label>
         <SearchInput
           id="forward-search"
           placeholder="搜索会话"
@@ -158,7 +158,7 @@ export function ForwardDialog({
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
-      </label>
+      </div>
       <div id="forward-rooms" className="forward-rooms" role="group" aria-label="转发目标">
         {targets.map((room) => (
           <Button

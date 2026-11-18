@@ -1,4 +1,4 @@
-import { Button, Checkbox, SearchInput } from '../../app/lenso-controls';
+import { Button, Checkbox, Label, SearchInput } from '../../app/lenso-controls';
 import { useEffect, useState, type CSSProperties, type FormEvent } from 'react';
 
 import { LIMITS } from '../../../contracts/limits';
@@ -237,8 +237,8 @@ export function MessageSearchDialog({
         }
       >
         <form id="message-search-form" className="message-search-form" onSubmit={submit}>
-          <label className="field">
-            <span>搜索消息内容</span>
+          <div className="field">
+            <Label htmlFor="message-search-input">搜索消息内容</Label>
             <SearchInput
               id="message-search-input"
               name="query"
@@ -253,7 +253,7 @@ export function MessageSearchDialog({
                 setHasMore(false);
               }}
             />
-          </label>
+          </div>
           <Checkbox
             className="message-search-filter"
             data-task-only
