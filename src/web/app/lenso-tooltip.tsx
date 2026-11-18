@@ -1,7 +1,7 @@
 import {
-  createElement, isValidElement, useCallback, useEffect, useId, useRef, useState,
+  createElement, useCallback, useEffect, useId, useRef, useState,
   type ComponentPropsWithRef, type ElementType, type FocusEvent,
-  type HTMLAttributes, type PointerEvent, type ReactNode,
+  type HTMLAttributes, type PointerEvent,
 } from 'react';
 import {
   LensoBackendProvider, useBackendLease, useLenso, useLensoBackendScope,
@@ -28,28 +28,13 @@ function releaseTooltip(owner: object) {
 }
 
 /**
- * 只判断宿主自身有没有内容型可访问名。组件元素只能看到传入的 children；
- * 图标组件没有文本子节点，按无文本处理，仍可用 hint 补 aria-label。
- */
-function hasContentName(children: ReactNode): boolean {
-  if (typeof children === 'string') return children.trim().length > 0;
-  if (typeof children === 'number') return true;
-  if (Array.isArray(children)) return children.some(hasContentName);
-  if (!isValidElement(children)) return false;
-  const child = children.props as {
-    children?: ReactNode;
-    'aria-hidden'?: boolean | 'true' | 'false';
-    'aria-label'?: string;
-  };
-  if (child['aria-hidden'] === true || child['aria-hidden'] === 'true') return false;
-  if (typeof child['aria-label'] === 'string' && child['aria-label'].trim()) return true;
-  return hasContentName(child.children);
-}
-
-/**
  * SDK 的 Trigger 会管理自己的定时与宿主；这里用 Content 的公开 anchor API，
  * 把触发事件留在原节点，避免与 ContextMenu/Popover 的 ref、长按和焦点竞争。
  * Content 内建 portal（没有独立 Tooltip.Portal）；延迟从交互开始锁定 backend。
+ *
+ * 可访问名完全由调用方决定：适配器永不根据 hint/children 补 `aria-label`。
+ * 内容型宿主保留自身由内容派生的名称，打开时把提示写入 `aria-describedby`；
+ * 图标型宿主必须在调用处显式提供 `aria-label`。
  */
 export function Tooltip<T extends ElementType>({
   as, hint, delay = 500, side = 'top', ...props
@@ -68,12 +53,6 @@ export function Tooltip<T extends ElementType>({
   if (!owner.current) owner.current = {};
   const original = props as HTMLAttributes<HTMLElement>;
   const lenso = backend === 'lenso' ? module : null;
-  // 显式标签或内容文本都优先于 hint；只有无名称的图标宿主才用 hint 补 aria-label。
-  const explicitLabel = original['aria-label']?.trim() ? original['aria-label'] : undefined;
-  const contentNamed = hasContentName(original.children);
-  const label = explicitLabel ?? (
-    contentNamed || original['aria-labelledby'] ? undefined : hint ?? undefined
-  );
   const localPortal = useCallback((node: HTMLDivElement | null) => {
     if (!node) return;
     // SDK 默认 showPopover 会越过所有 z-index；仅对本提示退回本地 portal 带。
@@ -120,7 +99,6 @@ export function Tooltip<T extends ElementType>({
     ...props,
     // Lenso 与原生提示互斥；fallback 周期结束后才允许升级。
     title: lenso ? undefined : hint ?? undefined,
-    'aria-label': label,
     'aria-describedby': [original['aria-describedby'], open && lenso ? id : null].filter(Boolean).join(' ') || undefined,
     'data-tooltip-backend': lenso ? 'lenso' : 'fallback',
     onPointerEnter: (event: PointerEvent<HTMLElement>) => {

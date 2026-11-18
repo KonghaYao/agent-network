@@ -143,6 +143,15 @@ test('会话行与监控五个提示保留语义、安全说明及确认框还�
   }, peerToken);
   await page.addInitScript((auth) => localStorage.setItem('agent-network-token', auth), token);
   await page.goto(base);
+  // 图标宿主不使用 hint 回填名称，调用处的显式 aria-label 必须继续生效。
+  for (const [id, label] of [
+    ['account-rename', '编辑姓名'],
+    ['archived-agents', '已归档 Agents'],
+    ['logout', '退出登录'],
+    ['contact-requests', '添加好友'],
+  ] as const) {
+    await expect(page.locator(`#${id}`)).toHaveAccessibleName(label);
+  }
   await page.locator('#room-filter-group').click();
   const row = page.locator(`#room-list [data-room-id="${created.room.room_id}"]`);
   await expect(row).toHaveAttribute('data-tooltip-backend', 'lenso');
@@ -159,6 +168,21 @@ test('会话行与监控五个提示保留语义、安全说明及确认框还�
   expect(describedBy).toContain(tooltipId);
   await page.keyboard.press('Escape');
   await page.goto(`${base}/c/${created.room.room_id}`);
+  // 消息气泡的 hint 只是时间，适配器不得据此合成 aria-label，也不能盖住正文快照。
+  const bubble = page.locator('#messages .msg .bubble', { hasText: 'audit message body' }).first();
+  await expect(bubble).toBeVisible();
+  await expect(bubble).toHaveAttribute('data-tooltip-backend', 'lenso');
+  await expect(bubble).not.toHaveAttribute('aria-label');
+  await expect(bubble).toHaveAccessibleName('');
+  await expect(bubble).toMatchAriaSnapshot('- text: audit message body');
+  await bubble.hover();
+  const timePopup = page.getByRole('tooltip');
+  await expect(timePopup).toHaveText(/^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}$/);
+  const bubbleDescribedBy = (await bubble.getAttribute('aria-describedby'))?.split(/\s+/) ?? [];
+  expect(bubbleDescribedBy).toContain(await timePopup.getAttribute('id'));
+  await expect(bubble).toHaveAccessibleName('');
+  await expect(bubble).toMatchAriaSnapshot('- text: audit message body');
+  await page.keyboard.press('Escape');
   await page.locator('#monitor-toggle').click();
   for (const [id, hint, name] of [
     ['monitor-save', '保存网页地址（Enter）', '保存网页地址'],
