@@ -1,5 +1,6 @@
 import type {
   ButtonRootProps,
+  NumberFieldProps,
   SegmentedControlProps,
 } from '@lenso/ui';
 import {
@@ -20,7 +21,6 @@ import {
   type ReactNode,
 } from 'react';
 import { flushSync } from 'react-dom';
-import { controlIntent, useControlRenderer } from './lenso-control-loader';
 
 import {
   nativePrimitiveProps,
@@ -175,9 +175,10 @@ export function Select({
   'aria-describedby': ariaDescribedBy,
   ref,
 }: SelectAdapterProps) {
-  const { lenso, renderers, intent, lockFallback } = useControlRenderer();
+  const lenso = useLenso();
   const [open, setOpen] = useState(false);
   const hasEmpty = options.some((option) => option.value === '');
+  const lensoValue = value === '' && placeholder && !hasEmpty ? null : value;
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const assignTriggerRef = useCallback(
     (node: HTMLButtonElement | null) => {
@@ -217,7 +218,6 @@ export function Select({
         'aria-invalid': ariaInvalid,
         'aria-describedby': ariaDescribedBy,
         'data-lenso-slot': 'select-fallback',
-        ...controlIntent(intent, lockFallback),
         ref: ref as ComponentPropsWithRef<'select'>['ref'],
         onChange: (event: ChangeEvent<HTMLSelectElement>) => onChange(event.currentTarget.value),
       },
@@ -234,12 +234,60 @@ export function Select({
     );
   }
 
-  return createElement(renderers!.SelectRenderer, {
-    lenso,
-    props: { id, name, required, disabled, value, options, onChange, placeholder, className,
-      'aria-label': ariaLabel, 'aria-invalid': ariaInvalid, 'aria-describedby': ariaDescribedBy },
-    open, setOpen, triggerRef: assignTriggerRef,
-  });
+  const Root = lenso.Select as unknown as ComponentType<Record<string, unknown>>;
+  const Trigger = lenso.Select.Trigger as unknown as ComponentType<Record<string, unknown>>;
+  const Value = lenso.Select.Value as unknown as ComponentType<Record<string, unknown>>;
+  const Indicator = lenso.Select.Indicator as unknown as ComponentType<Record<string, unknown>>;
+  const Content = lenso.Select.Content as unknown as ComponentType<Record<string, unknown>>;
+  const Item = lenso.Select.Item as unknown as ComponentType<Record<string, unknown>>;
+  const ItemText = lenso.Select.ItemText as unknown as ComponentType<Record<string, unknown>>;
+  const ItemIndicator = lenso.Select.ItemIndicator as unknown as ComponentType<
+    Record<string, unknown>
+  >;
+  return createElement(
+    Root,
+    {
+      value: lensoValue,
+      name,
+      required,
+      disabled,
+      placeholder,
+      open,
+      onOpenChange: (next: boolean) => setOpen(next),
+      items: options.map((option) => ({
+        value: option.value,
+        label: option.label,
+        disabled: option.disabled,
+      })),
+      onValueChange: (next: string | null) => onChange(next ?? ''),
+    },
+    createElement(
+      Trigger,
+      {
+        id,
+        ref: assignTriggerRef,
+        className,
+        'aria-label': ariaLabel,
+        'aria-invalid': ariaInvalid,
+        'aria-describedby': ariaDescribedBy,
+        'data-lenso-slot': 'select-trigger',
+      },
+      createElement(Value),
+      createElement(Indicator),
+    ),
+    createElement(
+      Content,
+      null,
+      options.map((option) =>
+        createElement(
+          Item,
+          { key: option.value, value: option.value, disabled: option.disabled },
+          createElement(ItemText, null, option.label),
+          createElement(ItemIndicator),
+        ),
+      ),
+    ),
+  );
 }
 
 type InputAdapterProps = Omit<ComponentPropsWithRef<'input'>, 'className'> & {
@@ -297,7 +345,7 @@ export function SearchInput({ fullWidth = true, onChange, ...props }: SearchInpu
   );
 }
 
-export type NumberInputProps = {
+type NumberInputProps = {
   id?: string;
   value: number;
   min?: number;
@@ -319,10 +367,9 @@ export function NumberInput({
   'aria-label': ariaLabel,
   onValueChange,
 }: NumberInputProps) {
-  const { lenso, renderers, intent, lockFallback } = useControlRenderer();
+  const lenso = useLenso();
   if (!lenso) {
     return createElement('input', {
-      ...controlIntent(intent, lockFallback),
       id,
       type: 'number',
       min,
@@ -335,22 +382,38 @@ export function NumberInput({
         onValueChange(Number(event.currentTarget.value)),
     });
   }
-  return createElement(renderers!.NumberRenderer, {
-    lenso, props: { id, value, min, max, step, disabled, 'aria-label': ariaLabel, onValueChange },
-  });
+  return createElement(
+    lenso.NumberField,
+    {
+      value,
+      min,
+      max,
+      step,
+      disabled,
+      onValueChange: (next: number | null) => onValueChange(next ?? 0),
+    } as NumberFieldProps,
+    createElement(
+      lenso.NumberField.Group,
+      null,
+      createElement(lenso.NumberField.Input, {
+        id,
+        disabled,
+        'aria-label': ariaLabel,
+      } as ComponentProps<typeof lenso.NumberField.Input>),
+      createElement(lenso.NumberField.IncrementButton),
+      createElement(lenso.NumberField.DecrementButton),
+    ),
+  );
 }
 
-export type SegmentedControlAdapterProps = Omit<SegmentedControlProps, 'onValueChange'> & {
+type SegmentedControlAdapterProps = Omit<SegmentedControlProps, 'onValueChange'> & {
   onValueChange?: (value: string | null) => void;
 };
 
 export function SegmentedControl({ items, value, onValueChange, ...props }: SegmentedControlAdapterProps) {
-  const { lenso, renderers, intent, lockFallback } = useControlRenderer();
-  if (lenso) return createElement(renderers!.SegmentedRenderer, {
-    lenso, props: { ...props, items, value, onValueChange },
-  });
-  return createElement('div', { role: 'radiogroup', 'aria-label': props['aria-label'],
-    ...controlIntent(intent, lockFallback) },
+  const lenso = useLenso();
+  if (lenso) return createElement(lenso.SegmentedControl, { ...props, items, value, onValueChange });
+  return createElement('div', { role: 'radiogroup', 'aria-label': props['aria-label'] },
     items.map((item) => createElement('button', {
       key: item.value,
       type: 'button',
@@ -453,7 +516,7 @@ export function Menu({
   align,
   container,
 }: MenuAdapterProps) {
-  const { lenso, renderers, intent } = useControlRenderer(open);
+  const lenso = useLenso();
   const triggerRef = useRef<HTMLElement | null>(null);
   const menuRef = useRef<HTMLElement | null>(null);
   const [instantHidden, setInstantHidden] = useState(false);
@@ -462,8 +525,6 @@ export function Menu({
     'aria-controls': id,
     'aria-expanded': open,
     ref: triggerRef,
-    onPointerEnter: intent,
-    onFocus: intent,
   };
 
   const handleOpenChange = useCallback(
@@ -499,18 +560,64 @@ export function Menu({
   }, [lenso, handleOpenChange, open]);
 
   if (lenso) {
-    return createElement(renderers!.MenuRenderer, {
-      lenso,
-      props: { id, trigger, items, label, className, itemClassName, open,
-        onOpenChange: handleOpenChange, container, sideOffset, align },
-      triggerRef, menuRef, instantHidden, hideBeforeSelect,
-    });
+    const Content = lenso.Menu.Content as unknown as ComponentType<Record<string, unknown>>;
+    const Item = lenso.Menu.Item as unknown as ComponentType<Record<string, unknown>>;
+    const Separator = lenso.Menu.Separator as unknown as ComponentType<Record<string, unknown>>;
+    const Trigger = lenso.Menu.Trigger as unknown as ComponentType<Record<string, unknown>>;
+    return createElement(
+      lenso.Menu as unknown as ComponentType<Record<string, unknown>>,
+      {
+        open,
+        onOpenChange: handleOpenChange,
+        container:
+          container ?? (typeof document === 'undefined' ? undefined : document.body),
+      },
+      createElement(Trigger, {
+        render: cloneElement(trigger as ReactElement<Record<string, unknown>>, triggerProps),
+      }),
+      createElement(
+        Content,
+        {
+          id,
+          className,
+          'aria-label': label,
+          sideOffset,
+          align,
+          ref: menuRef,
+          style: {
+            zIndex: 'var(--app-z-portal-local-menu)',
+            ...(instantHidden ? { display: 'none' } : null),
+          },
+          render: createElement('div', { className }),
+        },
+        items.map((item) =>
+          isSeparator(item)
+            ? createElement(Separator, { key: item.id, id: item.id })
+            : createElement(
+                Item,
+                {
+                  key: item.id,
+                  id: item.id,
+                  variant: item.variant,
+                  disabled: item.disabled,
+                  onSelect: () => {
+                    hideBeforeSelect();
+                    item.onSelect();
+                  },
+                  render: createElement('div', {
+                    className: item.className ?? itemClassName,
+                  }),
+                },
+                item.label,
+              ),
+        ),
+      ),
+    );
   }
 
   const triggerElement = cloneElement(trigger as ReactElement<Record<string, unknown>>, {
     ...triggerProps,
     onClick: (event: { defaultPrevented: boolean }) => {
-      intent();
       const original = (trigger.props as { onClick?: (next: typeof event) => void }).onClick;
       original?.(event);
       if (!event.defaultPrevented) handleOpenChange(!open);
@@ -676,12 +783,11 @@ export function RadioGroup({
   'aria-label': ariaLabel,
   'aria-labelledby': ariaLabelledBy,
 }: RadioGroupAdapterProps) {
-  const { lenso, renderers, intent, lockFallback } = useControlRenderer();
+  const lenso = useLenso();
   if (!lenso) {
     return createElement(
       'div',
       {
-        ...controlIntent(intent, lockFallback),
         id,
         role: 'radiogroup',
         className,
@@ -709,10 +815,44 @@ export function RadioGroup({
     );
   }
 
-  return createElement(renderers!.RadioRenderer, {
-    lenso, props: { id, name, value, options, onChange, disabled, required, className,
-      itemClassName, 'aria-label': ariaLabel, 'aria-labelledby': ariaLabelledBy },
-  });
+  const Group = lenso.RadioGroup as unknown as ComponentType<Record<string, unknown>>;
+  const Radio = lenso.Radio as unknown as ComponentType<Record<string, unknown>>;
+  const Content = lenso.Radio.Content as unknown as ComponentType<Record<string, unknown>>;
+  const Control = lenso.Radio.Control as unknown as ComponentType<Record<string, unknown>>;
+  const Indicator = lenso.Radio.Indicator as unknown as ComponentType<Record<string, unknown>>;
+  return createElement(
+    Group,
+    {
+      id,
+      value: value === '' ? null : value,
+      name,
+      disabled,
+      required,
+      className,
+      'aria-label': ariaLabel,
+      'aria-labelledby': ariaLabelledBy,
+      'data-lenso-slot': 'radio-group',
+      onValueChange: (next: string | null) => onChange(next ?? ''),
+    },
+    options.map((option) =>
+      createElement(
+        Radio,
+        {
+          key: option.value,
+          value: option.value,
+          disabled: option.disabled,
+          className: itemClassName,
+          'data-lenso-slot': 'radio',
+        },
+        createElement(
+          Content,
+          null,
+          createElement(Control, null, createElement(Indicator)),
+          option.label,
+        ),
+      ),
+    ),
+  );
 }
 
 export function ThemeScope({ className, ...props }: ComponentPropsWithRef<'div'>) {
