@@ -39,12 +39,68 @@
   background: transparent;
   box-shadow: none;
 }
-:is(#room-menu, #message-action-menu) .room-menu-item {
+/*
+ * 菜单排版统一到微信规格：右键菜单此前只继承 `.room-menu` 的 9px/10px
+ * 内边距，Lenso MenuItem 则用 StyleX 的 17px 字号与 6px 20px 内边距。
+ * 两套路径共用同一份 13px / 1.4 / 8px 12px 规格，并保留 44px 命中区。
+ * ID 作用域 + !important 只压过 StyleX，不影响其他浮层。
+ */
+:is(
+  #room-menu, #message-action-menu, #account-menu, #attach-menu,
+  #room-row-menu, #message-context-menu, #memory-avatar-menu
+) :is(.room-menu-item, .attach-menu-item) {
+  box-sizing: border-box;
   min-height: 44px !important;
+  padding: 8px 12px !important;
   font-size: 13px !important;
+  line-height: 1.4 !important;
 }
-:is(#room-menu, #message-action-menu) .room-menu-item.danger {
+/* 危险项继续用微信红；disabled 保持既有的弱化颜色与透明度。 */
+:is(
+  #room-menu, #message-action-menu, #account-menu, #attach-menu,
+  #room-row-menu, #message-context-menu, #memory-avatar-menu
+) :is(.room-menu-item, .attach-menu-item).danger {
   color: var(--wx-danger-text) !important;
+}
+:is(
+  #room-menu, #message-action-menu, #account-menu, #attach-menu,
+  #room-row-menu, #message-context-menu, #memory-avatar-menu
+) :is(.room-menu-item, .attach-menu-item).danger:disabled,
+:is(
+  #room-menu, #message-action-menu, #account-menu, #attach-menu,
+  #room-row-menu, #message-context-menu, #memory-avatar-menu
+) :is(.room-menu-item, .attach-menu-item).danger[aria-disabled='true'] {
+  color: var(--wx-muted) !important;
+}
+
+/*
+ * 去掉 popup 的 1px 描边：Lenso 的 0.5px inset edge 与 fallback 的
+ * `border: 1px` 都会在浅色底上呈现为细边框。圆角保留；键盘 focus outline
+ * 在条目的 :focus-visible 上，不受这里影响。
+ */
+:is(
+  #room-menu, #message-action-menu, #account-menu, #attach-menu
+)[data-lenso-slot='menu-popup'],
+:is(
+  #room-menu, #message-action-menu, #account-menu, #attach-menu
+)[data-lenso-slot='menu-fallback'],
+:is(#room-row-menu, #message-context-menu)[data-lenso-slot='context-menu-layout'],
+:is(#room-row-menu, #message-context-menu)[data-lenso-slot='context-menu-fallback'],
+#memory-avatar-menu {
+  border: 0 !important;
+}
+/*
+ * Lenso ContextMenu 的根节点仍是 `.room-menu`，旧壳的 inset 0.5px 阴影
+ * 就是截图里的细边框；fallback/账号/附件菜单同样用这条 Lenso 投影替换。
+ * 只保留 drop shadow，不再叠加 inset 描边。
+ */
+:is(#room-row-menu, #message-context-menu)[data-lenso-slot='context-menu-layout'],
+:is(#room-row-menu, #message-context-menu)[data-lenso-slot='context-menu-fallback'],
+:is(
+  #room-menu, #message-action-menu, #account-menu, #attach-menu
+)[data-lenso-slot='menu-fallback'],
+#memory-avatar-menu {
+  box-shadow: 0 12px 40px var(--lenso-material-control-shadow) !important;
 }
 
 .mention-picker.spa-floating {

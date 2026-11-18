@@ -31,6 +31,53 @@ async function login(page: Page, room = group, ready = true) {
   if (ready) await expect(page.locator('#room-menu-toggle')).toHaveAttribute('data-lenso-slot', 'menu-trigger');
 }
 const trigger = (page: Page) => page.locator(`[data-message-id="${message}"] .message-actions-trigger`);
+interface MenuMetrics {
+  fontSize: string;
+  lineHeight: number;
+  minHeight: number;
+  height: number;
+  borders: string[];
+}
+async function menuMetrics(page: Page, popup: string, item: string): Promise<MenuMetrics> {
+  return page.evaluate(({ popup, item }) => {
+    const popupNode = document.querySelector<HTMLElement>(popup);
+    const itemNode = document.querySelector<HTMLElement>(item);
+    if (!popupNode || !itemNode) throw new Error(`菜单未渲染：${popup} / ${item}`);
+    const itemStyle = getComputedStyle(itemNode);
+    const popupStyle = getComputedStyle(popupNode);
+    return {
+      fontSize: itemStyle.fontSize,
+      lineHeight: parseFloat(itemStyle.lineHeight),
+      minHeight: parseFloat(itemStyle.minHeight),
+      height: itemNode.offsetHeight,
+      borders: [
+        popupStyle.borderTopWidth, popupStyle.borderRightWidth,
+        popupStyle.borderBottomWidth, popupStyle.borderLeftWidth,
+      ],
+    };
+  }, { popup, item });
+}
+function expectMenuMetrics(metrics: MenuMetrics): void {
+  expect(metrics.fontSize).toBe('13px');
+  expect(metrics.lineHeight).toBeCloseTo(13 * 1.4, 1);
+  expect(metrics.minHeight).toBeGreaterThanOrEqual(44);
+  expect(metrics.height).toBeGreaterThanOrEqual(44);
+  expect(metrics.borders).toEqual(['0px', '0px', '0px', '0px']);
+}
+async function expectDangerColor(page: Page, item: string): Promise<void> {
+  const colors = await page.evaluate((item) => {
+    const node = document.querySelector<HTMLElement>(item);
+    if (!node) throw new Error(`危险项未渲染：${item}`);
+    const probe = document.createElement('span');
+    probe.style.color = 'var(--wx-danger-text)';
+    document.body.append(probe);
+    const expected = getComputedStyle(probe).color;
+    probe.remove();
+    return { actual: getComputedStyle(node).color, expected };
+  }, item);
+  expect(colors.actual).toBe(colors.expected);
+}
+
 async function modalContract(page: Page, id: string, menu: string) {
   const dialog = page.locator(`#${id}`);
   await expect(dialog).toBeVisible();
@@ -74,6 +121,8 @@ for (const fallback of [false, true]) {
       await toggle.focus();
       await page.keyboard.press('ArrowDown');
       await expect(menu).toHaveAttribute('data-lenso-slot', fallback ? 'menu-fallback' : 'menu-popup');
+      expectMenuMetrics(await menuMetrics(page, '#room-menu', '#room-menu-pin'));
+      await expectDangerColor(page, '#room-menu-dissolve');
       await expect(page.locator('#room-menu-copy-prompt')).toBeFocused();
       await page.keyboard.press('ArrowDown');
       await expect(page.locator('#room-menu-pin')).toBeFocused();
@@ -113,6 +162,7 @@ for (const fallback of [false, true]) {
       await expect(toggle).toBeFocused();
       await trigger(page).click();
       await expect(page.locator('#message-action-menu')).toHaveAttribute('data-lenso-slot', fallback ? 'menu-fallback' : 'menu-popup');
+      expectMenuMetrics(await menuMetrics(page, '#message-action-menu', '#message-action-task'));
       await expect(page.locator('#message-action-task')).toHaveText('标记为 Task');
       await expect(page.locator('#message-action-recall')).toHaveClass(/danger/);
       await expect(page.locator('#message-action-memory')).toHaveCount(0);

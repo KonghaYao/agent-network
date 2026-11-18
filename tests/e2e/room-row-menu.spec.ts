@@ -173,6 +173,62 @@ function overlaps(a: Box, b: Box): boolean {
   );
 }
 
+interface MenuMetrics {
+  fontSize: string;
+  lineHeight: number;
+  minHeight: number;
+  height: number;
+  borders: string[];
+}
+
+/** 右键菜单与 popup 的统一排版：13px / 1.4 / 44px / 无边框。 */
+async function menuMetrics(page: Page, popup: string, item: string): Promise<MenuMetrics> {
+  return page.evaluate(
+    ({ popup, item }) => {
+      const popupNode = document.querySelector<HTMLElement>(popup);
+      const itemNode = document.querySelector<HTMLElement>(item);
+      if (!popupNode || !itemNode) throw new Error(`菜单未渲染：${popup} / ${item}`);
+      const itemStyle = getComputedStyle(itemNode);
+      const popupStyle = getComputedStyle(popupNode);
+      return {
+        fontSize: itemStyle.fontSize,
+        lineHeight: Number.parseFloat(itemStyle.lineHeight),
+        minHeight: Number.parseFloat(itemStyle.minHeight),
+        height: itemNode.offsetHeight,
+        borders: [
+          popupStyle.borderTopWidth,
+          popupStyle.borderRightWidth,
+          popupStyle.borderBottomWidth,
+          popupStyle.borderLeftWidth,
+        ],
+      };
+    },
+    { popup, item },
+  );
+}
+
+function expectMenuMetrics(metrics: MenuMetrics): void {
+  expect(metrics.fontSize).toBe('13px');
+  expect(metrics.lineHeight).toBeCloseTo(13 * 1.4, 1);
+  expect(metrics.minHeight).toBeGreaterThanOrEqual(44);
+  expect(metrics.height).toBeGreaterThanOrEqual(44);
+  expect(metrics.borders).toEqual(['0px', '0px', '0px', '0px']);
+}
+
+async function expectDangerColor(page: Page, item: string): Promise<void> {
+  const colors = await page.evaluate((item) => {
+    const node = document.querySelector<HTMLElement>(item);
+    if (!node) throw new Error(`危险项未渲染：${item}`);
+    const probe = document.createElement('span');
+    probe.style.color = 'var(--wx-danger-text)';
+    document.body.append(probe);
+    const expected = getComputedStyle(probe).color;
+    probe.remove();
+    return { actual: getComputedStyle(node).color, expected };
+  }, item);
+  expect(colors.actual).toBe(colors.expected);
+}
+
 test.describe('会话行右键与长按菜单', () => {
   // 复现报告使用 1280×800；移动端 describe 会覆盖该 viewport。
   test.use({ viewport: { width: 1280, height: 800 } });
@@ -643,6 +699,8 @@ test.describe('会话行右键与长按菜单', () => {
           const danger = page.locator('#room-row-menu-delete-friend');
           await expect(danger).toBeVisible();
           await expect(page.locator('#room-row-menu-pin')).toBeFocused();
+          expectMenuMetrics(await menuMetrics(page, '#room-row-menu', '#room-row-menu-pin'));
+          await expectDangerColor(page, '#room-row-menu-delete-friend');
           await page.keyboard.press('ArrowDown');
           await expect(page.locator('#room-row-menu-mute')).toBeFocused();
           await expect.poll(() => menu.evaluate((node) => node.getBoundingClientRect().bottom)).toBeLessThanOrEqual(836);
