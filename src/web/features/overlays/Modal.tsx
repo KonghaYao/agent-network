@@ -1,5 +1,6 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog';
-import { useEffect, useId, useRef, type ReactNode, type RefObject } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, type ReactNode, type RefObject } from 'react';
+import { registerModalShell } from '../../app/modal-shell';
 
 import { LensoBackendProvider, useBackendLease, useLenso } from '../../app/lenso-runtime';
 import './modal.css';
@@ -52,9 +53,13 @@ export function Modal(props: ModalProps) {
   useEffect(trackOpeners, []);
   const backend = useBackendLease(props.open);
   const module = useLenso();
+  const shell = props.shell !== 'radix' && backend === 'lenso' && module ? 'lenso' : 'radix';
+  useLayoutEffect(() => {
+    if (props.open) return registerModalShell(shell);
+  }, [props.open, shell]);
   return (
     <LensoBackendProvider backend={backend}>
-      {props.shell !== 'radix' && backend === 'lenso' && module
+      {shell === 'lenso' && module
         ? <LensoModal {...props} modal={module.Modal} />
         : <RadixModal {...props} />}
     </LensoBackendProvider>

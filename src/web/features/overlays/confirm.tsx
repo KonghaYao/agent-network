@@ -1,10 +1,12 @@
 import { Button } from '../../app/lenso-controls';
-import * as AlertDialogPrimitive from '@radix-ui/react-alert-dialog';
+import * as AlertDialogPrimitive from './AlertDialog';
+import { getLensoStatus } from '../../app/lenso-runtime';
+import { getTopModalShell, type ModalShell } from '../../app/modal-shell';
 import { useEffect, useSyncExternalStore } from 'react';
 
 /**
  * 命令式确认框：语义与 `window.confirm` 一致——确认返回 true，取消、
- * Esc、背板点击返回 false；关闭后 Radix 把焦点还给触发元素。
+ * Esc、背板点击返回 false；关闭后把焦点还给触发元素。
  *
  * 这是唯一的 `<alertdialog>` 出口，禁止在 React 页面里再直接调用
  * `window.confirm`，以便统一 a11y 与移动端样式。
@@ -19,10 +21,13 @@ export interface ConfirmOptions {
 }
 
 interface PendingConfirm {
+  id: number;
   options: ConfirmOptions;
   resolve: (value: boolean) => void;
+  shell: ModalShell;
 }
 
+let nextId = 0;
 let pending: PendingConfirm | null = null;
 let returnFocus: HTMLElement | null = null;
 const listeners = new Set<() => void>();
@@ -49,7 +54,9 @@ function settle(value: boolean): void {
   current?.resolve(value);
   // Radix 只会在存在 Trigger 时自动还焦；命令式确认框自己记录触发元素。
   requestAnimationFrame(() => {
-    if (target && target.isConnected) target.focus();
+    // fallback lease 释放后，触发控件可能刚升级为 Lenso；按稳定 id 找回同一入口。
+    const connected = target?.isConnected ? target : target?.id ? document.getElementById(target.id) : null;
+    connected?.focus();
   });
 }
 
@@ -58,7 +65,8 @@ export function confirmDialog(options: ConfirmOptions): Promise<boolean> {
   returnFocus =
     document.activeElement instanceof HTMLElement ? document.activeElement : null;
   return new Promise<boolean>((resolve) => {
-    pending = { options, resolve };
+    const shell = getTopModalShell() === 'radix' || getLensoStatus() !== 'ready' ? 'radix' : 'lenso';
+    pending = { id: ++nextId, options, resolve, shell };
     emit();
   });
 }
@@ -75,10 +83,13 @@ export function ConfirmHost() {
     [],
   );
 
-  const options = current?.options;
+  if (!current) return null;
+  const options = current.options;
   return (
     <AlertDialogPrimitive.Root
+      key={current.id}
       open={current !== null}
+      shell={current?.shell}
       onOpenChange={(open) => {
         if (!open) settle(false);
       }}
@@ -89,6 +100,7 @@ export function ConfirmHost() {
           id="confirm-dialog"
           className="modal-card spa-dialog-content confirm-card"
           aria-describedby="confirm-dialog-message"
+          aria-labelledby="confirm-dialog-title"
         >
           <AlertDialogPrimitive.Title asChild>
             <h2 id="confirm-dialog-title">{options?.title ?? '确认操作'}</h2>

@@ -1,7 +1,8 @@
 import { Button } from '../../app/lenso-controls';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useState } from 'react';
+import { registerModalShell } from '../../app/modal-shell';
 
 import { useArchivedAgents } from '../../hooks/useArchivedAgents';
 import { useWebSession } from '../../hooks/useWebSession';
@@ -23,6 +24,10 @@ export function ArchiveAgentsDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  useLayoutEffect(() => {
+    if (open) return registerModalShell('radix');
+  }, [open]);
+
   const session = useWebSession();
   const token = session.session?.token ?? null;
   const actorId = session.session?.identity.actor_id ?? null;

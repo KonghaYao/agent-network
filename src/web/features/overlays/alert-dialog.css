@@ -1,0 +1,30 @@
+/* render 槽去掉 StyleX 几何，保留应用确认卡片与原有移动端居中布局。 */
+.spa-dialog-content[data-lenso-slot='alert-dialog-popup'],
+.spa-dialog-overlay[data-lenso-slot='alert-dialog-backdrop'] {
+  transition: none;
+  animation: none;
+}
+
+.spa-dialog-content[data-lenso-slot='alert-dialog-popup'] {
+  position: fixed;
+  inset: auto;
+  top: 50%;
+  left: 50%;
+  margin: 0;
+  transform: translate(-50%, -50%);
+  width: min(440px, calc(100vw - 32px));
+  max-height: min(82dvh, 680px);
+  overflow-y: auto;
+  z-index: var(--app-z-dialog);
+  background: var(--wx-panel);
+  color: var(--wx-text);
+}
+
+.spa-dialog-content [data-lenso-slot='alert-dialog-scroller'] {
+  display: contents;
+}
+
+.spa-dialog-content[data-alert-shell] .spa-dialog-button {
+  min-height: 44px;
+  min-width: 44px;
+}

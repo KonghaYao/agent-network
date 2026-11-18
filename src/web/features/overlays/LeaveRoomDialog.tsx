@@ -1,5 +1,5 @@
 import { Button } from '../../app/lenso-controls';
-import * as AlertDialogPrimitive from '@radix-ui/react-alert-dialog';
+import * as AlertDialogPrimitive from './AlertDialog';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 

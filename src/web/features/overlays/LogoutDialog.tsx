@@ -1,5 +1,5 @@
 import { Button } from '../../app/lenso-controls';
-import * as AlertDialogPrimitive from '@radix-ui/react-alert-dialog';
+import * as AlertDialogPrimitive from './AlertDialog';
 
 import { clearQueryCache } from '../../app/query';
 import { resetWebSession } from '../../lib/identity';

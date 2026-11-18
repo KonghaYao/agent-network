@@ -1,5 +1,5 @@
 import { Button } from '../../app/lenso-controls';
-import * as AlertDialogPrimitive from '@radix-ui/react-alert-dialog';
+import * as AlertDialogPrimitive from '../overlays/AlertDialog';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 
 import type { McpError } from '../../lib/mcp-client';
@@ -13,7 +13,7 @@ function failureMessage(error: unknown): string {
 /**
  * Task 完成确认。
  *
- * 与现有命令式确认框同源使用 Radix AlertDialog；这里保留受控内容，以便
+ * 与命令式确认框共用按父层门控的 AlertDialog；这里保留受控内容，以便
  * 提交中显示“完成中”、失败后原位展示错误并重试。重试沿用同一 request_id，
  * 只有取消后重新打开才生成新 ID。成功前不删除列表项。
  */
@@ -89,6 +89,7 @@ export function TaskCompleteDialog({
           id="task-complete-dialog"
           className="modal-card spa-dialog-content task-complete-dialog"
           aria-describedby="task-complete-message"
+          aria-labelledby="task-complete-title"
           onCloseAutoFocus={(event) => {
             event.preventDefault();
             const previous = returnFocusRef.current;
