@@ -1,6 +1,5 @@
-import { Button } from '../../app/lenso-controls';
-import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu';
-import type { ElementType, Ref } from 'react';
+import { Button, Menu, type MenuEntry } from '../../app/lenso-controls';
+import { useState, type ElementType, type Ref } from 'react';
 
 import type { RoomView } from '../../lib/chat';
 import type { RoomPreference } from '../../lib/room-preferences';
@@ -37,46 +36,16 @@ export interface RoomMenuItemsProps {
   onToggleAgentDisabled: () => void;
   onReissueToken: () => void;
   onDissolve: () => void;
-  /**
-   * 聊天头部把群成员入口提到搜索右侧时常驻展示，菜单里不再重复；
-   * 会话行右键菜单没有头部，仍保留这一项。
-   */
+  /** 头部已有常驻群成员按钮；会话行仍在菜单里展示。 */
   membersInMenu?: boolean;
 }
 
-/**
- * 会话菜单项：头部 DropdownMenu 与会话行 ContextMenu 共用同一份动作。
- *
- * `Item` / `Separator` 由调用方传入对应的 Radix 原语；`idPrefix` 让两个
- * 菜单入口使用不同的 DOM id，避免同时挂载时出现重复 id。菜单语义、危险项
- * 分组与文案完全一致。
- */
-export function RoomMenuItems({
-  Item,
-  Separator,
-  idPrefix = 'room-menu',
-  room,
-  peerName,
-  peerKind,
-  preference,
-  blocked,
-  agent,
-  onOpen,
-  onViewMemory,
-  onTogglePreference,
-  onArchive,
-  onCopyPrompt,
-  onToggleBlock,
-  onDeleteFriend,
-  onToggleAgentDisabled,
-  onReissueToken,
-  onDissolve,
-  membersInMenu = true,
-}: RoomMenuItemsProps & {
-  Item: ElementType;
-  Separator: ElementType;
-  idPrefix?: string;
-}) {
+/** 头部 Menu 与会话行 ContextMenu 的唯一动作、条件、文案和 ID 映射。 */
+export function buildRoomMenuEntries({
+  room, peerName, peerKind, preference, blocked, agent, onOpen, onViewMemory,
+  onTogglePreference, onArchive, onCopyPrompt, onToggleBlock, onDeleteFriend,
+  onToggleAgentDisabled, onReissueToken, onDissolve, membersInMenu = true,
+}: RoomMenuItemsProps, idPrefix = 'room-menu'): MenuEntry[] {
   const group = room.kind === 'group';
   const direct = room.kind === 'direct';
   const canEdit = group && !room.read_only && room.capabilities?.edit_profile === true;
@@ -89,211 +58,65 @@ export function RoomMenuItems({
   const canManageAgent = direct && peerKind === 'agent' && agent?.canManage === true;
   const canTransfer = direct && peerKind === 'agent' && agent?.canTransfer === true;
   const canArchive = canManageAgent && agent?.canArchive === true;
+  const entries: MenuEntry[] = [];
+  const action = (id: string, label: string, onSelect: () => void, danger = false) => {
+    entries.push({ id: `${idPrefix}-${id}`, label, onSelect,
+      className: `room-menu-item${danger ? ' danger' : ''}`,
+      variant: danger ? 'danger' : 'default' });
+  };
+  const separator = (id: string) => entries.push({ id: `${idPrefix}-${id}`, separator: true });
 
-  return (
-    <>
-      {canCopy ? (
-        <Item
-          id={`${idPrefix}-copy-prompt`}
-          className="room-menu-item"
-          onSelect={onCopyPrompt}
-        >
-          {group ? '复制群信息' : '复制 Agent 连接提示词'}
-        </Item>
-      ) : null}
-      <Item
-        id={`${idPrefix}-pin`}
-        className="room-menu-item"
-        onSelect={() => onTogglePreference('pinned')}
-      >
-        {preference.pinned ? '取消置顶' : '置顶聊天'}
-      </Item>
-      <Item
-        id={`${idPrefix}-mute`}
-        className="room-menu-item"
-        onSelect={() => onTogglePreference('muted')}
-      >
-        {preference.muted ? '恢复消息提醒' : '消息免打扰'}
-      </Item>
-      {direct && peerKind === 'agent' && onViewMemory ? (
-        <Item
-          id={`${idPrefix}-memory`}
-          className="room-menu-item"
-          onSelect={onViewMemory}
-        >
-          查看 Agent 记忆
-        </Item>
-      ) : null}
-      {group ? (
-        <>
-          <Separator className="room-menu-sep" />
-          {membersInMenu ? (
-            <Item
-              id={`${idPrefix}-members`}
-              className="room-menu-item"
-              onSelect={() => onOpen('members')}
-            >
-              群成员
-            </Item>
-          ) : null}
-          <Item
-            id={`${idPrefix}-announcement`}
-            className="room-menu-item"
-            onSelect={() => onOpen('announcement')}
-          >
-            {canAnnounce ? '群公告' : '查看群公告'}
-          </Item>
-          {canEdit ? (
-            <Item
-              id={`${idPrefix}-rename`}
-              className="room-menu-item"
-              onSelect={() => onOpen('rename')}
-            >
-              修改群名
-            </Item>
-          ) : null}
-        </>
-      ) : null}
-      {canTransfer ? (
-        <Item
-          id={`${idPrefix}-transfer`}
-          className="room-menu-item"
-          onSelect={() => onOpen('transfer')}
-        >
-          交接管理权
-        </Item>
-      ) : null}
-      {canManageAgent ? (
-        <>
-          <Item
-            id={`${idPrefix}-toggle-disabled`}
-            className="room-menu-item"
-            onSelect={onToggleAgentDisabled}
-          >
-            {agent?.disabled ? '启用 Agent' : '停用 Agent'}
-          </Item>
-          <Item
-            id={`${idPrefix}-reissue-token`}
-            className="room-menu-item"
-            onSelect={onReissueToken}
-          >
-            重置链接
-          </Item>
-        </>
-      ) : null}
-      {canArchive ? (
-        <Item
-          id={`${idPrefix}-archive`}
-          className="room-menu-item"
-          onSelect={onArchive}
-        >
-          归档
-        </Item>
-      ) : null}
-      {canReport || direct ? (
-        <>
-          <Separator className="room-menu-sep" />
-          {canReport ? (
-            <Item
-              id={`${idPrefix}-report`}
-              className="room-menu-item"
-              onSelect={() => onOpen('report')}
-            >
-              举报 {peerName}
-            </Item>
-          ) : null}
-          {direct && peerName ? (
-            <>
-              <Item
-                id={`${idPrefix}-block`}
-                className="room-menu-item"
-                onSelect={onToggleBlock}
-              >
-                {blocked ? '解除拉黑' : '拉黑'}
-              </Item>
-              <Item
-                id={`${idPrefix}-delete-friend`}
-                className="room-menu-item danger"
-                onSelect={onDeleteFriend}
-              >
-                删除好友
-              </Item>
-            </>
-          ) : null}
-        </>
-      ) : null}
-      {canLeave || canDissolve ? (
-        <>
-          <Separator className="room-menu-sep" />
-          {canDissolve ? (
-            <Item
-              id={`${idPrefix}-dissolve`}
-              className="room-menu-item danger"
-              onSelect={onDissolve}
-            >
-              解散群聊
-            </Item>
-          ) : null}
-          {canLeave ? (
-            <Item
-              id={`${idPrefix}-leave-group`}
-              className="room-menu-item danger"
-              onSelect={() => onOpen('leave')}
-            >
-              退出群聊
-            </Item>
-          ) : null}
-        </>
-      ) : null}
-    </>
-  );
+  if (canCopy) action('copy-prompt', group ? '复制群信息' : '复制 Agent 连接提示词', onCopyPrompt);
+  action('pin', preference.pinned ? '取消置顶' : '置顶聊天', () => onTogglePreference('pinned'));
+  action('mute', preference.muted ? '恢复消息提醒' : '消息免打扰', () => onTogglePreference('muted'));
+  if (direct && peerKind === 'agent' && onViewMemory) action('memory', '查看 Agent 记忆', onViewMemory);
+  if (group) {
+    separator('group-sep');
+    if (membersInMenu) action('members', '群成员', () => onOpen('members'));
+    action('announcement', canAnnounce ? '群公告' : '查看群公告', () => onOpen('announcement'));
+    if (canEdit) action('rename', '修改群名', () => onOpen('rename'));
+  }
+  if (canTransfer) action('transfer', '交接管理权', () => onOpen('transfer'));
+  if (canManageAgent) {
+    action('toggle-disabled', agent?.disabled ? '启用 Agent' : '停用 Agent', onToggleAgentDisabled);
+    action('reissue-token', '重置链接', onReissueToken);
+  }
+  if (canArchive) action('archive', '归档', onArchive);
+  if (canReport || direct) {
+    separator('contact-sep');
+    if (canReport) action('report', `举报 ${peerName}`, () => onOpen('report'));
+    if (direct && peerName) {
+      action('block', blocked ? '解除拉黑' : '拉黑', onToggleBlock);
+      action('delete-friend', '删除好友', onDeleteFriend, true);
+    }
+  }
+  if (canLeave || canDissolve) {
+    separator('leave-sep');
+    if (canDissolve) action('dissolve', '解散群聊', onDissolve, true);
+    if (canLeave) action('leave-group', '退出群聊', () => onOpen('leave'), true);
+  }
+  return entries;
 }
 
-/**
- * 聊天头部菜单：会话偏好、群管理、联系人安全与 Agent 管理。
- *
- * Radix 负责键盘、焦点返回与 portal 定位；入口按钮保留
- * `#room-menu-toggle`，菜单容器保留 `#room-menu`，危险操作沿用 legacy
- * 的 `room-menu-*` id，方便灰度和 E2E 对照。
- */
+/** 会话行继续消费相同映射，不复制头部的业务判断。 */
+export function RoomMenuItems({
+  Item, Separator, idPrefix = 'room-menu', ...props
+}: RoomMenuItemsProps & { Item: ElementType; Separator: ElementType; idPrefix?: string }) {
+  return <>{buildRoomMenuEntries(props, idPrefix).map((entry) => 'separator' in entry
+    ? <Separator key={entry.id} id={entry.id} className="room-menu-sep" />
+    : <Item key={entry.id} id={entry.id} className={entry.className}
+        disabled={entry.disabled} onSelect={entry.onSelect}>{entry.label}</Item>)}</>;
+}
+
+/** 聊天头部菜单：选中先隐藏浮层，再执行动作或打开对话框。 */
 export function RoomMenu({
-  toggleRef,
-  ...items
-}: RoomMenuItemsProps & {
-  /** 弹窗关闭后需要把焦点还给菜单入口时传入。 */
-  toggleRef?: Ref<HTMLButtonElement>;
-}) {
-  return (
-    <DropdownMenuPrimitive.Root>
-      <DropdownMenuPrimitive.Trigger asChild>
-        <Button
-          ref={toggleRef}
-          id="room-menu-toggle"
-          className="icon-btn"
-          type="button"
-          aria-label="会话操作"
-          title="会话操作"
-        >
-          ···
-        </Button>
-      </DropdownMenuPrimitive.Trigger>
-      <DropdownMenuPrimitive.Portal>
-        <DropdownMenuPrimitive.Content
-          id="room-menu"
-          className="room-menu spa-menu"
-          aria-label="会话操作"
-          sideOffset={6}
-          align="end"
-        >
-          <RoomMenuItems
-            Item={DropdownMenuPrimitive.Item}
-            Separator={DropdownMenuPrimitive.Separator}
-            {...items}
-            // 头部已有常驻「群成员」入口，菜单不重复。
-            membersInMenu={false}
-          />
-        </DropdownMenuPrimitive.Content>
-      </DropdownMenuPrimitive.Portal>
-    </DropdownMenuPrimitive.Root>
-  );
+  toggleRef, ...items
+}: RoomMenuItemsProps & { toggleRef?: Ref<HTMLButtonElement> }) {
+  const [open, setOpen] = useState(false);
+  return <Menu id="room-menu" label="会话操作" className="room-menu spa-menu"
+    open={open} onOpenChange={setOpen} align="end" sideOffset={6}
+    fallbackAnchor instantCloseOnSelect
+    items={buildRoomMenuEntries({ ...items, membersInMenu: false })}
+    trigger={<Button ref={toggleRef} id="room-menu-toggle" className="icon-btn" type="button"
+      aria-label="会话操作" title="会话操作">···</Button>} />;
 }

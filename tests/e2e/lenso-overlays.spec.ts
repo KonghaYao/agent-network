@@ -41,8 +41,8 @@ async function login(page: Page, room = group, ready = true) {
   await page.goto(`${base}/c/${room}`);
   await expect(page.locator('#title')).toBeVisible();
   if (ready) {
-    // 标记来自实际 Lenso Button，确保打开时模块已就绪。
-    await expect(page.locator('#room-menu-toggle')).toHaveAttribute('data-lenso-slot', 'button');
+    // 使用不参与菜单 lease 的常驻控件确认模块已就绪。
+    await expect(page.locator('#message-search-button')).toHaveAttribute('data-lenso-slot', 'button');
   }
 }
 
@@ -312,7 +312,7 @@ for (const item of consumers) {
         win.__n2aFocus = document.activeElement;
       });
       release();
-      await expect(page.locator('#room-menu-toggle')).toHaveAttribute('data-lenso-slot', 'button');
+      await expect(page.locator('#message-search-button')).toHaveAttribute('data-lenso-slot', 'button');
       await expect(dialog).toHaveAttribute('data-modal-shell', 'fallback');
       expect(await page.evaluate(() => {
         const win = window as unknown as { __n2aNodes: Element[]; __n2aFocus: Element | null };

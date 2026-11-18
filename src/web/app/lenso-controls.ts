@@ -21,6 +21,7 @@ import {
   type ReactNode,
 } from 'react';
 import { flushSync } from 'react-dom';
+import { restoreMenuFocus, useFallbackMenuKeyboard } from './lenso-menu-focus';
 
 import {
   LensoBackendProvider,
@@ -540,7 +541,12 @@ export function Menu({
     'aria-haspopup': 'menu' as const,
     'aria-controls': id,
     'aria-expanded': open,
-    ref: triggerRef,
+    ref: (node: HTMLElement | null) => {
+      triggerRef.current = node;
+      const ref = (trigger.props as { ref?: import('react').Ref<HTMLElement> }).ref;
+      if (typeof ref === 'function') ref(node);
+      else if (ref) ref.current = node;
+    },
   };
 
   const handleOpenChange = useCallback(
@@ -548,9 +554,11 @@ export function Menu({
       // 重新打开时恢复可见；选中关闭导致的隐藏不能泄漏到下一次打开。
       if (next) setInstantHidden(false);
       onOpenChange(next, details);
+      if (!next) restoreMenuFocus(triggerRef);
     },
     [onOpenChange],
   );
+  useFallbackMenuKeyboard(!lenso, open, triggerRef, menuRef, handleOpenChange);
 
   /**
    * Lenso 关闭菜单会保活 popup 播放退场动画；条目要打开 dialog 时必须
@@ -611,7 +619,8 @@ export function Menu({
           },
           items.map((item) =>
             isSeparator(item)
-              ? createElement(Separator, { key: item.id, id: item.id })
+              ? createElement(Separator, { key: item.id, id: item.id,
+                  render: createElement('div', { className: 'room-menu-sep' }) })
               : createElement(
                   Item,
                   {
@@ -699,9 +708,10 @@ export function Menu({
                       autoFocus: index === 0,
                       onClick: () => {
                         hideBeforeSelect();
-                        item.onSelect();
                         handleOpenChange(false, { reason: 'item-press' });
-                        triggerRef.current?.focus();
+                        // Radix fallback Modal 在打开帧记录焦点，不能留下即将卸载的条目。
+                        triggerRef.current?.focus({ preventScroll: true });
+                        item.onSelect();
                       },
                     },
                     item.label,

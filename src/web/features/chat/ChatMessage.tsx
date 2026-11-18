@@ -1,6 +1,5 @@
-import { Avatar, Button, LENSO_AVATAR_FILL } from '../../app/lenso-controls';
+import { Avatar, Button, Menu, LENSO_AVATAR_FILL } from '../../app/lenso-controls';
 import { ContextMenu, ContextMenuItem } from '../../app/lenso-context-menu';
-import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu';
 import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { LIMITS } from '../../../contracts/limits';
@@ -294,25 +293,21 @@ function MessageActions({
     onForward,
     memoryTarget,
   );
+  const [open, setOpen] = useState(false);
   return (
-    <DropdownMenuPrimitive.Root>
-      <DropdownMenuPrimitive.Trigger asChild>
-        <Button type="button" className="message-actions-trigger" aria-label="消息操作">
-          ···
-        </Button>
-      </DropdownMenuPrimitive.Trigger>
-      <DropdownMenuPrimitive.Portal>
-        <DropdownMenuPrimitive.Content
-          id="message-action-menu"
-          className="room-menu spa-menu message-action-menu"
-          aria-label="消息操作"
-          sideOffset={4}
-          align="start"
-        >
-          <MessageMenuItems actions={actions} Item={DropdownMenuPrimitive.Item} />
-        </DropdownMenuPrimitive.Content>
-      </DropdownMenuPrimitive.Portal>
-    </DropdownMenuPrimitive.Root>
+    <Menu id="message-action-menu" label="消息操作"
+      className="room-menu spa-menu message-action-menu"
+      open={open} onOpenChange={setOpen} sideOffset={4} align="start"
+      fallbackAnchor instantCloseOnSelect
+      items={actions.map((action) => ({
+        id: action.id, label: action.label,
+        className: `room-menu-item${action.id === 'message-action-recall' ? ' danger' : ''}`,
+        variant: action.id === 'message-action-recall' ? 'danger' : 'default',
+        onSelect: () => { void action.run(); },
+      }))}
+      trigger={<Button type="button" className="message-actions-trigger" aria-label="消息操作">
+        ···
+      </Button>} />
   );
 }
 

@@ -19,6 +19,34 @@
   bottom: auto;
 }
 
+/* Menu.Trigger 合并 SDK Button 样式后仍维持原头部尺寸，不能撑高首载头部。 */
+#room-menu-toggle[data-lenso-slot='menu-trigger'] {
+  width: 28px !important;
+  min-width: 28px !important;
+  height: 28px !important;
+  min-height: 28px !important;
+  padding: 0 !important;
+}
+
+/* Lenso 自带 surface；去掉旧壳的二次边框和内边距，保留微信菜单命中区。 */
+:is(#room-menu, #message-action-menu)[data-lenso-slot='menu-popup'] {
+  width: 260px;
+  max-width: calc(100vw - 16px);
+  max-height: none;
+  overflow: visible;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+:is(#room-menu, #message-action-menu) .room-menu-item {
+  min-height: 44px !important;
+  font-size: 13px !important;
+}
+:is(#room-menu, #message-action-menu) .room-menu-item.danger {
+  color: var(--wx-danger-text) !important;
+}
+
 .mention-picker.spa-floating {
   left: auto;
   bottom: auto;
