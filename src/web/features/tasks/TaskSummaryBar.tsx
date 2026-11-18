@@ -1,4 +1,11 @@
-import { Button } from '../../app/lenso-controls';
+import {
+  Avatar,
+  Badge,
+  Button,
+  LENSO_AVATAR_FILL,
+  LENSO_BADGE_FILL,
+  Surface,
+} from '../../app/lenso-controls';
 import { useQuery } from '@tanstack/react-query';
 
 import { useWebSession } from '../../hooks/useWebSession';
@@ -60,6 +67,7 @@ export function TaskSummaryBar({
   const more = Math.max(0, summary.participant_count - participants.length);
   return (
     <div className="msg-task-bar-slot">
+      <Surface style={{ display: 'contents' }}>
       <Button
         type="button"
         className="task-bar"
@@ -78,14 +86,19 @@ export function TaskSummaryBar({
               title={participant.name}
               style={{ background: avatarColor(participant.name) }}
             >
-              {firstChar(participant.name)}
+              <Avatar style={LENSO_AVATAR_FILL}>{firstChar(participant.name)}</Avatar>
             </span>
           ))}
-          {more > 0 ? <span className="task-bar-more">+{more}</span> : null}
+          {more > 0 ? (
+            <span className="task-bar-more">
+              <Badge placement="" style={LENSO_BADGE_FILL}>+{more}</Badge>
+            </span>
+          ) : null}
         </span>
         <span className="task-bar-preview">{summary.preview || item.preview || '（无正文）'}</span>
         <span className="task-bar-count">{summary.message_count} 消息</span>
       </Button>
+      </Surface>
     </div>
   );
 }

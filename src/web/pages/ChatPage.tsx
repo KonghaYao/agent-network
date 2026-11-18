@@ -1,4 +1,4 @@
-import { Button } from '../app/lenso-controls';
+import { Button, LENSO_SKELETON_FILL, Skeleton, Toolbar } from '../app/lenso-controls';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   lazy,
@@ -73,7 +73,9 @@ function FilesPaneFallback() {
       <ul className="files-list" aria-label="文件列表">
         {Array.from({ length: 3 }, (_, index) => (
           <li className="file-skeleton" aria-hidden="true" key={index}>
-            <span className="skeleton-avatar" />
+            <span className="skeleton-avatar">
+              <Skeleton style={LENSO_SKELETON_FILL} />
+            </span>
             <span className="file-skeleton-lines">
               <span />
               <span />
@@ -576,14 +578,15 @@ export function ChatPage({ roomId }: ChatPageProps) {
                 </div>
                 {loadingShell ? (
                   <div className="chat-head-actions chat-head-actions--skeleton" aria-hidden="true">
-                    <span className="head-skeleton head-skeleton--search" />
-                    <span className="head-skeleton head-skeleton--monitor" />
-                    <span className="head-skeleton head-skeleton--files" />
-                    <span className="head-skeleton head-skeleton--account" />
-                    <span className="head-skeleton head-skeleton--menu" />
+                    <Toolbar style={{ display: 'contents' }}>
+                    {['search', 'monitor', 'files', 'account', 'menu'].map((part) => (
+                      <span key={part} className={`head-skeleton head-skeleton--${part}`} />
+                    ))}
+                    </Toolbar>
                   </div>
                 ) : room ? (
                   <div className="chat-head-actions">
+                    <Toolbar aria-label="会话操作" style={{ display: 'contents' }}>
                     {peer?.kind === 'agent' ? (
                       <Button
                         className="link-btn" variant="borderless" size="sm"
@@ -688,6 +691,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                       onReissueToken={() => void roomActions.onReissueToken()}
                       onDissolve={() => void roomActions.onDissolve()}
                     />
+                    </Toolbar>
                   </div>
                 ) : null}
               </header>
@@ -719,18 +723,12 @@ export function ChatPage({ roomId }: ChatPageProps) {
                 </div>
                 {loadingShell ? (
                   <div id="chat-skeleton" className="chat-skeleton" aria-hidden="true">
-                    <div className="skeleton-row">
-                      <span className="skeleton-avatar" />
-                      <span className="skeleton-bubble" />
-                    </div>
-                    <div className="skeleton-row mine">
-                      <span className="skeleton-avatar" />
-                      <span className="skeleton-bubble" />
-                    </div>
-                    <div className="skeleton-row">
-                      <span className="skeleton-avatar" />
-                      <span className="skeleton-bubble" />
-                    </div>
+                    {[0, 1, 2].map((row) => (
+                      <div key={row} className={`skeleton-row${row === 1 ? ' mine' : ''}`}>
+                        <span className="skeleton-avatar" />
+                        <span className="skeleton-bubble" />
+                      </div>
+                    ))}
                   </div>
                 ) : null}
                 <div id="chat-error" className="chat-error" role="alert" hidden={chat.status !== 'error'}>

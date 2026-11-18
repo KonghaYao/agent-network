@@ -1,4 +1,14 @@
-import { Button, SegmentedControl } from '../../app/lenso-controls';
+import {
+  Badge,
+  Button,
+  EmptyState,
+  LENSO_BADGE_FILL,
+  LENSO_SKELETON_FILL,
+  Separator,
+  SegmentedControl,
+  Skeleton,
+  Toolbar,
+} from '../../app/lenso-controls';
 import { useEffect, useRef, useState } from 'react';
 
 import { Link } from '../../app/router';
@@ -113,18 +123,20 @@ export function Sidebar(props: SidebarProps) {
     <aside className="sidebar" aria-label="会话列表">
       <header className="sidebar-head">
         <div className="brand-row">
-          <h1>WeBots</h1>
-          <ContactRequestsButton onOpen={onOpenContacts} />
-          <Button
-            className="icon-btn"
-            id="new-group"
-            type="button"
-            aria-label="新建群聊"
-            title="新建群聊"
-            onClick={onCreateGroup}
-          >
-            +
-          </Button>
+          <Toolbar aria-label="品牌与会话操作" style={{ display: 'contents' }}>
+            <h1>WeBots</h1>
+            <ContactRequestsButton onOpen={onOpenContacts} />
+            <Button
+              className="icon-btn"
+              id="new-group"
+              type="button"
+              aria-label="新建群聊"
+              title="新建群聊"
+              onClick={onCreateGroup}
+            >
+              +
+            </Button>
+          </Toolbar>
         </div>
         <label className="search-box">
           <svg className="search-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -165,7 +177,9 @@ export function Sidebar(props: SidebarProps) {
                         aria-hidden="true"
                         title={`${count} 个会话有未读消息`}
                       >
-                        {count > 99 ? '99+' : count}
+                        <Badge placement="" style={LENSO_BADGE_FILL}>
+                          {count > 99 ? '99+' : count}
+                        </Badge>
                       </span>
                     ) : null}
                   </span>
@@ -197,10 +211,12 @@ export function Sidebar(props: SidebarProps) {
           {skeleton
             ? Array.from({ length: 5 }, (_, index) => (
                 <li key={index} className="room-skeleton" aria-hidden="true">
-                  <span className="skeleton-avatar" />
+                  <span className="skeleton-avatar">
+                    <Skeleton style={LENSO_SKELETON_FILL} />
+                  </span>
                   <span className="skeleton-lines">
-                    <span />
-                    <span />
+                    <Skeleton />
+                    <Skeleton />
                   </span>
                 </li>
               ))
@@ -213,9 +229,20 @@ export function Sidebar(props: SidebarProps) {
                 />
               ))}
         </ol>
-        <p id="room-list-status" className="list-hint" role="status" hidden={!message}>
+        <EmptyState
+          id="room-list-status"
+          className="list-hint"
+          role="status"
+          hidden={!message}
+          style={{
+            display: message ? undefined : 'none',
+            padding: '32px 20px',
+            color: 'var(--wx-muted)',
+            fontSize: 13,
+          }}
+        >
           {message}
-        </p>
+        </EmptyState>
         {status === 'logged-out' ? <LoggedOutStart /> : null}
         {showRetry ? (
           <Button id="room-list-retry" className="list-retry" type="button" onClick={onRetry}>
@@ -244,6 +271,18 @@ export function Sidebar(props: SidebarProps) {
         ) : null}
       </div>
       <footer className="sidebar-foot">
+        <Separator
+          className="sidebar-foot-rule"
+          style={{
+            position: 'absolute',
+            top: -1,
+            left: 0,
+            right: 0,
+            width: 'auto',
+            margin: 0,
+            background: 'var(--wx-line)',
+          }}
+        />
         {streamError ? (
           <span
             id="stream-dot"

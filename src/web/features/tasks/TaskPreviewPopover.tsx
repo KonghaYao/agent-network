@@ -1,4 +1,11 @@
-import { Button } from '../../app/lenso-controls';
+import {
+  Avatar,
+  Badge,
+  Button,
+  LENSO_AVATAR_FILL,
+  LENSO_BADGE_FILL,
+  Surface,
+} from '../../app/lenso-controls';
 import * as PopoverPrimitive from '@radix-ui/react-popover';
 import {
   useCallback,
@@ -176,10 +183,14 @@ export function TaskPreviewPopover({
                   title={participant.name}
                   style={{ background: avatarColor(participant.name) }}
                 >
-                  {firstChar(participant.name)}
+                  <Avatar style={LENSO_AVATAR_FILL}>{firstChar(participant.name)}</Avatar>
                 </span>
               ))}
-              {more > 0 ? <span className="task-bar-more">+{more}</span> : null}
+              {more > 0 ? (
+                <span className="task-bar-more">
+                  <Badge placement="" style={LENSO_BADGE_FILL}>+{more}</Badge>
+                </span>
+              ) : null}
             </span>
             <span>{item.participant_count} Agent</span>
             <span>{item.message_count} 消息</span>
@@ -210,6 +221,7 @@ export function TaskPreviewPopover({
           onPointerEnter={clearCloseTimer}
           onPointerLeave={scheduleClose}
         >
+          <Surface style={{ display: 'contents' }}>
           <div className="task-preview-head">
             <span className="task-preview-sender">
               {item.root_sender_name || (item.root_sender_kind === 'agent' ? 'Agent' : '成员')}
@@ -290,6 +302,7 @@ export function TaskPreviewPopover({
               查看全部 {item.message_count} 条消息
             </Button>
           </div>
+          </Surface>
         </PopoverPrimitive.Content>
       </PopoverPrimitive.Portal>
     </PopoverPrimitive.Root>

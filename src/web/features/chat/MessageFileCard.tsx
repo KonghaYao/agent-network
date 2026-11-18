@@ -1,4 +1,4 @@
-import { Button } from '../../app/lenso-controls';
+import { Button, Surface } from '../../app/lenso-controls';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { LIMITS } from '../../../contracts/limits';
@@ -200,6 +200,7 @@ export const MessageFileCard = memo(function MessageFileCard({
   };
 
   return (
+    <Surface style={{ display: 'contents' }}>
     <div
       className={`msg-file${showThumb ? ' has-image' : ''}${state.status === 'error' ? ' unavailable' : ''}`}
       data-file-id={fileId}
@@ -314,6 +315,7 @@ export const MessageFileCard = memo(function MessageFileCard({
         ) : null}
       </span>
     </div>
+    </Surface>
   );
 });
 

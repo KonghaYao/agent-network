@@ -1,4 +1,4 @@
-import { Button } from '../../app/lenso-controls';
+import { Button, EmptyState, Surface } from '../../app/lenso-controls';
 import {
   useEffect,
   useRef,
@@ -262,6 +262,7 @@ export function RoomTaskDock({
         onKeyDown={onSectionKeyDown}
       >
         <div className="task-dock-head">
+          <Surface style={{ display: 'contents' }}>
           <Button
             ref={toggleRef}
             id="task-dock-toggle"
@@ -292,6 +293,7 @@ export function RoomTaskDock({
               ▾
             </span>
           </Button>
+          </Surface>
         </div>
         <div
           id="task-dock-panel"
@@ -299,6 +301,7 @@ export function RoomTaskDock({
           hidden={!expanded}
           aria-busy={tasks.loading || tasks.loadingMore ? 'true' : undefined}
         >
+          <Surface style={{ display: 'contents' }}>
           {tasks.error ? (
             <div id="task-dock-error" className="task-dock-error" role="alert">
               <span>Task 加载失败：{tasks.error}</span>
@@ -313,7 +316,11 @@ export function RoomTaskDock({
             </p>
           ) : null}
           {!tasks.error && !tasks.loading && tasks.items.length === 0 ? (
-            <div id="task-dock-empty" className="task-dock-empty">
+            <EmptyState
+              id="task-dock-empty"
+              className="task-dock-empty"
+              style={{ padding: 12, gap: 4, color: 'var(--wx-muted)', fontSize: 12 }}
+            >
               <span>暂无未完成 Task</span>
               <Button
                 id="task-dock-empty-close"
@@ -325,7 +332,7 @@ export function RoomTaskDock({
               >
                 收起
               </Button>
-            </div>
+            </EmptyState>
           ) : null}
           {tasks.items.length > 0 ? (
             <ul className="task-dock-list" aria-label="未完成 Task 列表">
@@ -396,6 +403,7 @@ export function RoomTaskDock({
               {tasks.notice}
             </p>
           ) : null}
+          </Surface>
         </div>
       </section>
       <TaskCompleteDialog

@@ -232,10 +232,10 @@ export const APP_STYLE = `
   .skeleton-avatar { flex: 0 0 auto; width: 44px; height: 44px; border-radius: 50%;
     background: var(--wx-line); animation: skeleton-pulse 1.3s ease-in-out infinite; }
   .skeleton-lines { flex: 1 1 auto; display: flex; flex-direction: column; gap: 7px; }
-  .skeleton-lines span { display: block; height: 10px; border-radius: 4px;
+  .skeleton-lines > * { display: block; height: 10px; border-radius: 4px;
     background: var(--wx-line); animation: skeleton-pulse 1.3s ease-in-out infinite; }
-  .skeleton-lines span:first-child { width: 46%; }
-  .skeleton-lines span:last-child { width: 78%; }
+  .skeleton-lines > *:first-child { width: 46%; }
+  .skeleton-lines > *:last-child { width: 78%; }
   @keyframes skeleton-pulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
 
   .avatar { flex: 0 0 auto; width: 40px; height: 40px; border-radius: 50%;
@@ -273,8 +273,9 @@ export const APP_STYLE = `
     width: 100%; height: 100%; padding: 14%; border-radius: inherit;
     background: var(--wx-avatar-icon-bg); object-fit: contain; display: block; }
 
-  .sidebar-foot { flex: 0 0 auto; padding: 8px 12px calc(10px + env(safe-area-inset-bottom));
-    border-top: 1px solid var(--wx-line); background: var(--wx-sidebar); }
+  .sidebar-foot { position: relative; flex: 0 0 auto; padding: 8px 12px calc(10px + env(safe-area-inset-bottom));
+    border-top: 1px solid transparent; background: var(--wx-sidebar); }
+  .sidebar-foot-rule { border: 0; }
 
   .chat-pane { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex;
     flex-direction: column; background: var(--wx-bg); }

@@ -930,6 +930,43 @@ export const ScrollEdge = /* @__PURE__ */ displayPrimitive('ScrollEdge', 'div', 
   'aria-hidden': 'true',
 });
 
+/**
+ * Lenso 展示组件会用 StyleX 原子类覆盖传入的 `className`；需要保留现有
+ * class/DOM 契约时，把 class 留在原生外壳上，让 Lenso 组件铺满外壳。
+ * 这些 reset 只负责尺寸与背景透明，颜色/边框由外壳决定。
+ */
+export const LENSO_AVATAR_FILL = {
+  width: '100%',
+  height: '100%',
+  borderRadius: 'inherit',
+  background: 'transparent',
+  color: 'inherit',
+  fontSize: 'inherit',
+} as const;
+
+export const LENSO_BADGE_FILL = {
+  display: 'inline-flex',
+  width: '100%',
+  height: '100%',
+  minWidth: 0,
+  minHeight: 0,
+  padding: 0,
+  border: 0,
+  borderRadius: 'inherit',
+  background: 'transparent',
+  color: 'inherit',
+  fontSize: 'inherit',
+  fontWeight: 'inherit',
+  lineHeight: 'inherit',
+  gap: 0,
+} as const;
+
+export const LENSO_SKELETON_FILL = {
+  width: '100%',
+  height: '100%',
+  borderRadius: 'inherit',
+} as const;
+
 export function ThemeScope({ className, ...props }: ComponentPropsWithRef<'div'>) {
   const theme = useColorScheme();
   useEffect(() => {
