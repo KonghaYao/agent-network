@@ -78,6 +78,58 @@ async function expectDangerColor(page: Page, item: string): Promise<void> {
   expect(colors.actual).toBe(colors.expected);
 }
 
+interface RimState {
+  lens: boolean;
+  lensDisplay: string;
+  lensWidth: number;
+  lensHeight: number;
+  canvasDisplays: string[];
+  shadow: string;
+}
+
+/** 读取菜单内 Lenso glass 图层与 live-rim canvas 的实际状态。 */
+async function rimState(page: Page, popup: string): Promise<RimState> {
+  return page.evaluate((selector) => {
+    const root = document.querySelector<HTMLElement>(selector);
+    if (!root) throw new Error(`菜单未渲染：${selector}`);
+    const lens = root.querySelector<HTMLElement>('[data-material-lens]');
+    const lensStyle = lens ? getComputedStyle(lens) : null;
+    const rect = lens?.getBoundingClientRect();
+    const canvases = [...root.querySelectorAll<HTMLCanvasElement>('canvas[data-lenso-live-rim]')];
+    return {
+      lens: Boolean(lens),
+      lensDisplay: lensStyle?.display ?? '',
+      lensWidth: rect?.width ?? 0,
+      lensHeight: rect?.height ?? 0,
+      canvasDisplays: canvases.map((canvas) => getComputedStyle(canvas).display),
+      shadow:
+        lensStyle && lensStyle.boxShadow !== 'none'
+          ? lensStyle.boxShadow
+          : getComputedStyle(root).boxShadow,
+    };
+  }, popup);
+}
+
+/** canvas 只能被隐藏，不能连带隐藏玻璃层；fallback 不应出现 rim canvas。 */
+async function expectLiveRimHidden(page: Page, popup: string, lenso: boolean): Promise<void> {
+  if (lenso) {
+    await expect
+      .poll(async () => (await rimState(page, popup)).canvasDisplays.length)
+      .toBeGreaterThan(0);
+  }
+  const state = await rimState(page, popup);
+  expect(state.canvasDisplays.every((display) => display === 'none')).toBe(true);
+  expect(state.shadow).not.toBe('none');
+  if (lenso) {
+    expect(state.lens).toBe(true);
+    expect(state.lensDisplay).not.toBe('none');
+    expect(state.lensWidth).toBeGreaterThan(0);
+    expect(state.lensHeight).toBeGreaterThan(0);
+  } else {
+    expect(state.lens).toBe(false);
+  }
+}
+
 async function modalContract(page: Page, id: string, menu: string) {
   const dialog = page.locator(`#${id}`);
   await expect(dialog).toBeVisible();
@@ -122,6 +174,7 @@ for (const fallback of [false, true]) {
       await page.keyboard.press('ArrowDown');
       await expect(menu).toHaveAttribute('data-lenso-slot', fallback ? 'menu-fallback' : 'menu-popup');
       expectMenuMetrics(await menuMetrics(page, '#room-menu', '#room-menu-pin'));
+      await expectLiveRimHidden(page, '#room-menu', !fallback);
       await expectDangerColor(page, '#room-menu-dissolve');
       await expect(page.locator('#room-menu-copy-prompt')).toBeFocused();
       await page.keyboard.press('ArrowDown');
@@ -163,6 +216,7 @@ for (const fallback of [false, true]) {
       await trigger(page).click();
       await expect(page.locator('#message-action-menu')).toHaveAttribute('data-lenso-slot', fallback ? 'menu-fallback' : 'menu-popup');
       expectMenuMetrics(await menuMetrics(page, '#message-action-menu', '#message-action-task'));
+      await expectLiveRimHidden(page, '#message-action-menu', !fallback);
       await expect(page.locator('#message-action-task')).toHaveText('标记为 Task');
       await expect(page.locator('#message-action-recall')).toHaveClass(/danger/);
       await expect(page.locator('#message-action-memory')).toHaveCount(0);
@@ -203,6 +257,7 @@ for (const kind of ['room', 'message'] as const) {
       await page.keyboard.press('Escape');
       await toggle.click();
       await expect(menu).toHaveAttribute('data-lenso-slot', 'menu-popup');
+      await expectLiveRimHidden(page, kind === 'room' ? '#room-menu' : '#message-action-menu', true);
     } finally { release(); }
   });
 }

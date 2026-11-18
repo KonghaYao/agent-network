@@ -229,6 +229,58 @@ async function expectDangerColor(page: Page, item: string): Promise<void> {
   expect(colors.actual).toBe(colors.expected);
 }
 
+interface RimState {
+  lens: boolean;
+  lensDisplay: string;
+  lensWidth: number;
+  lensHeight: number;
+  canvasDisplays: string[];
+  shadow: string;
+}
+
+/** 读取菜单内 Lenso glass 图层与 live-rim canvas 的实际状态。 */
+async function rimState(page: Page, popup: string): Promise<RimState> {
+  return page.evaluate((selector) => {
+    const root = document.querySelector<HTMLElement>(selector);
+    if (!root) throw new Error(`菜单未渲染：${selector}`);
+    const lens = root.querySelector<HTMLElement>('[data-material-lens]');
+    const lensStyle = lens ? getComputedStyle(lens) : null;
+    const rect = lens?.getBoundingClientRect();
+    const canvases = [...root.querySelectorAll<HTMLCanvasElement>('canvas[data-lenso-live-rim]')];
+    return {
+      lens: Boolean(lens),
+      lensDisplay: lensStyle?.display ?? '',
+      lensWidth: rect?.width ?? 0,
+      lensHeight: rect?.height ?? 0,
+      canvasDisplays: canvases.map((canvas) => getComputedStyle(canvas).display),
+      shadow:
+        lensStyle && lensStyle.boxShadow !== 'none'
+          ? lensStyle.boxShadow
+          : getComputedStyle(root).boxShadow,
+    };
+  }, popup);
+}
+
+/** canvas 只能被隐藏，不能连带隐藏玻璃层；fallback 不应出现 rim canvas。 */
+async function expectLiveRimHidden(page: Page, popup: string, lenso: boolean): Promise<void> {
+  if (lenso) {
+    await expect
+      .poll(async () => (await rimState(page, popup)).canvasDisplays.length)
+      .toBeGreaterThan(0);
+  }
+  const state = await rimState(page, popup);
+  expect(state.canvasDisplays.every((display) => display === 'none')).toBe(true);
+  expect(state.shadow).not.toBe('none');
+  if (lenso) {
+    expect(state.lens).toBe(true);
+    expect(state.lensDisplay).not.toBe('none');
+    expect(state.lensWidth).toBeGreaterThan(0);
+    expect(state.lensHeight).toBeGreaterThan(0);
+  } else {
+    expect(state.lens).toBe(false);
+  }
+}
+
 test.describe('会话行右键与长按菜单', () => {
   // 复现报告使用 1280×800；移动端 describe 会覆盖该 viewport。
   test.use({ viewport: { width: 1280, height: 800 } });
@@ -380,6 +432,7 @@ test.describe('会话行右键与长按菜单', () => {
     await expect(menu).toBeVisible();
     await expect(page.locator('#room-row-menu-pin')).toBeVisible();
     await expect(page.locator('#room-row-menu-mute')).toBeVisible();
+    await expectLiveRimHidden(page, '#room-row-menu', true);
     expect(page.url()).toBe(`${base}/`);
     // 不依赖 body 锁实现：打开后键盘可以进入可操作条目。
     await page.keyboard.press('ArrowDown');
@@ -577,6 +630,7 @@ test.describe('会话行右键与长按菜单', () => {
       await page.waitForTimeout(650);
       await expect(page.locator('#room-row-menu')).toBeVisible();
       await expect(page.locator('#room-row-menu-pin')).toBeVisible();
+      await expectLiveRimHidden(page, '#room-row-menu', true);
       await ab.dispatchEvent('pointerup', {
         pointerType: 'touch',
         clientX: longPoint.x,
@@ -618,6 +672,7 @@ test.describe('会话行右键与长按菜单', () => {
         await ab.click({ button: 'right' });
         const menu = page.locator('#room-row-menu');
         await expect(menu).toHaveAttribute('data-lenso-slot', 'context-menu-fallback');
+        await expectLiveRimHidden(page, '#room-row-menu', false);
         await expect(page.locator('#room-row-menu-report')).toBeVisible();
         await page.keyboard.press('ArrowDown');
         const identity = await menu.evaluateHandle((node) => ({ node, focus: document.activeElement }));
@@ -654,6 +709,7 @@ test.describe('会话行右键与长按菜单', () => {
     await ab.press('ContextMenu');
     const menu = page.locator('#room-row-menu');
     await expect(menu).toBeVisible();
+    await expectLiveRimHidden(page, '#room-row-menu', true);
     const box = await menu.boundingBox();
     expect(box!.x).toBeGreaterThanOrEqual(0);
     expect(box!.x + box!.width).toBeLessThanOrEqual(390);
@@ -693,6 +749,7 @@ test.describe('会话行右键与长按菜单', () => {
             expect(aborted).toBeGreaterThan(0);
             await expect(menu).toHaveAttribute('data-lenso-slot', 'context-menu-fallback');
           } else expect(await menu.evaluate((node) => node.matches(':popover-open'))).toBe(true);
+          await expectLiveRimHidden(page, '#room-row-menu', !fallback);
           await page.keyboard.press('ArrowDown');
           await expect(page.locator('#room-row-menu-pin')).toBeFocused();
           release();

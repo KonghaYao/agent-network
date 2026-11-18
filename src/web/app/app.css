@@ -102,6 +102,17 @@
 #memory-avatar-menu {
   box-shadow: 0 12px 40px var(--lenso-material-control-shadow) !important;
 }
+/*
+ * Lenso glass 在 `[data-material-lens]` 内追加 `canvas[data-lenso-live-rim]`，
+ * 定位到菜单盒外侧 1px（宽高 +2px），CSS border 与 box-shadow 都覆盖不到，
+ * 会在浅色/深色下留下单像素暗槽。只隐藏 rim canvas；玻璃层、圆角与投影保留。
+ */
+:is(
+  #room-menu, #message-action-menu, #account-menu, #attach-menu,
+  #room-row-menu, #message-context-menu, #memory-avatar-menu
+) [data-material-lens] canvas[data-lenso-live-rim] {
+  display: none !important;
+}
 
 .mention-picker.spa-floating {
   left: auto;
