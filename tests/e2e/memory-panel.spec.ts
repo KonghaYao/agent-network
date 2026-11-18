@@ -277,6 +277,123 @@ test.describe('Agent 记忆弹窗', () => {
     });
   });
 
+  test('Memory 右侧 Drawer：Lenso 路径保留壳契约、几何、焦点、滚动锁与 axe', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 844 });
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await enableAgentMemory(page);
+    await login(page, base, agentToken);
+    await page.locator('#memory-open').focus();
+    await page.locator('#memory-open').click();
+    const drawer = page.locator('#memory-drawer');
+    await expect(drawer).toBeVisible({ timeout: 15_000 });
+    await expect(drawer).toHaveAttribute('data-memory-shell', 'lenso');
+    await expect(drawer).toHaveAttribute('role', 'dialog');
+    await expect(drawer).toHaveAttribute('aria-labelledby', 'memory-title');
+    await expect(page.locator('#memory-title')).toHaveText('记忆');
+    await expect(page.locator('.spa-drawer-overlay')).toBeVisible();
+
+    const geometry = await drawer.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const card = element.querySelector<HTMLElement>('.memory-card')?.getBoundingClientRect();
+      return {
+        x: rect.x,
+        right: rect.right,
+        width: rect.width,
+        cardWidth: card?.width ?? 0,
+        overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        bodyOverflow: getComputedStyle(document.body).overflow,
+      };
+    });
+    expect(geometry.right).toBeGreaterThanOrEqual(1279);
+    expect(geometry.width).toBeGreaterThanOrEqual(470);
+    expect(geometry.cardWidth).toBeGreaterThanOrEqual(470);
+    expect(geometry.overflow).toBeLessThanOrEqual(1);
+    expect(geometry.bodyOverflow).toBe('hidden');
+    await expect(page.locator('[data-memory-tab="context"]')).toBeVisible();
+    await page.locator('[data-memory-tab="context"]').click();
+    await expect(page.locator('#memory-panel-context')).toBeVisible();
+    await page.locator('#memory-recall-query').focus();
+    await page.keyboard.press('Escape');
+    await expect(drawer).toBeHidden();
+    await expect(page.locator('#memory-open')).toBeFocused();
+
+    await page.locator('#memory-open').click();
+    await expect(drawer).toBeVisible({ timeout: 15_000 });
+    const violations = await new AxeBuilder({ page })
+      .include('#memory-drawer')
+      .analyze();
+    expect(violations.violations.filter((item) => item.impact === 'critical' || item.impact === 'serious')).toEqual([]);
+
+    await page.keyboard.press('Escape');
+    await expect(drawer).toBeHidden();
+    await expect(page.locator('#memory-open')).toBeFocused();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.locator('#memory-open').click();
+    await expect(drawer).toBeVisible({ timeout: 15_000 });
+    const mobileGeometry = await drawer.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const card = element.querySelector<HTMLElement>('.memory-card')?.getBoundingClientRect();
+      return {
+        width: rect.width,
+        right: rect.right,
+        cardWidth: card?.width ?? 0,
+        background: getComputedStyle(element.querySelector<HTMLElement>('.memory-card')!).backgroundColor,
+      };
+    });
+    expect(mobileGeometry.width).toBeGreaterThanOrEqual(389);
+    expect(mobileGeometry.right).toBeLessThanOrEqual(391);
+    expect(mobileGeometry.cardWidth).toBeGreaterThanOrEqual(389);
+    expect(mobileGeometry.background).not.toBe('rgba(0, 0, 0, 0)');
+    await page.keyboard.press('Escape');
+    await expect(drawer).toBeHidden();
+    await expect(page.locator('#memory-open')).toBeFocused();
+  });
+
+  for (const mode of ['blocked', 'delayed'] as const) {
+    test(`Memory Drawer ${mode}：本次打开锁定 Radix，关闭重开升级`, async ({ page }) => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      let intercepted = 0;
+      await page.route('**/assets/index-*.js', async (route) => {
+        intercepted += 1;
+        if (mode === 'blocked') return route.abort('failed');
+        await gate;
+        await route.continue();
+      });
+      try {
+        await login(page, base, agentToken);
+        await page.locator('#memory-open').focus();
+        await page.locator('#memory-open').click();
+        const drawer = page.locator('#memory-drawer');
+        await expect(drawer).toBeVisible({ timeout: 15_000 });
+        await expect(drawer).toHaveAttribute('data-memory-shell', 'radix');
+        await drawer.evaluate((node) => {
+          const probe = window as unknown as { __memoryDrawerNode?: Element; __memoryDrawerFocus?: Element | null };
+          probe.__memoryDrawerNode = node;
+          probe.__memoryDrawerFocus = document.activeElement;
+        });
+        if (mode === 'delayed') {
+          release();
+          await expect.poll(() => page.locator('[data-lenso-slot="button"]').count()).toBeGreaterThan(0);
+          expect(await page.evaluate(() => {
+            const probe = window as unknown as { __memoryDrawerNode?: Element; __memoryDrawerFocus?: Element | null };
+            return Boolean(probe.__memoryDrawerNode?.isConnected) && probe.__memoryDrawerFocus === document.activeElement;
+          })).toBe(true);
+          await expect(drawer).toHaveAttribute('data-memory-shell', 'radix');
+        }
+        expect(intercepted).toBeGreaterThan(0);
+        await page.keyboard.press('Escape');
+        await expect(drawer).toBeHidden();
+        await expect(page.locator('#memory-open')).toBeFocused();
+        await page.locator('#memory-open').click();
+        await expect(drawer).toBeVisible({ timeout: 15_000 });
+        if (mode === 'delayed') await expect(drawer).toHaveAttribute('data-memory-shell', 'lenso');
+      } finally {
+        release?.();
+      }
+    });
+  }
+
   test('Memory 三个下拉使用 Lenso Select，保留空值 option 与提交值', async ({ page }) => {
     const calls: { name: string; args: Record<string, unknown> }[] = [];
     await page.route('**/mcp', async (route) => {
