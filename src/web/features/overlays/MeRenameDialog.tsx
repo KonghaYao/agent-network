@@ -1,7 +1,7 @@
 import { Button, FieldError, Input, Label } from '../../app/lenso-controls';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type RefObject } from 'react';
 import { useForm } from 'react-hook-form';
 
 import { LIMITS } from '../../../contracts/limits';
@@ -17,11 +17,14 @@ export function MeRenameDialog({
   onOpenChange,
   currentName,
   token,
+  returnFocusRef,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   currentName: string;
   token: string;
+  /** 从菜单打开时，菜单项会随退场动画卸载；关闭后回到稳定的触发按钮。 */
+  returnFocusRef?: RefObject<HTMLElement | null>;
 }) {
   const queryClient = useQueryClient();
   const [submitError, setSubmitError] = useState('');
@@ -64,6 +67,7 @@ export function MeRenameDialog({
       title="修改我的名称"
       titleId="me-rename-title"
       contentId="me-rename-dialog"
+      returnFocusRef={returnFocusRef}
       footer={
         <div className="row modal-actions">
           <Button id="me-rename-cancel" type="button" onClick={() => onOpenChange(false)}>

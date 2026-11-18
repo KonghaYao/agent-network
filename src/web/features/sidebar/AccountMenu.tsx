@@ -1,5 +1,5 @@
 import { Button, Menu, type MenuEntry } from '../../app/lenso-controls';
-import { lazy, Suspense, useState } from 'react';
+import { lazy, Suspense, useRef, useState } from 'react';
 
 import type { WebIdentity } from '../../lib/identity';
 import { useWebSession } from '../../hooks/useWebSession';
@@ -30,6 +30,8 @@ export function AccountMenu({ me }: { me: WebIdentity | null }) {
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [handoffOpen, setHandoffOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
+  // 菜单项会随关闭动画卸载；打开时记下当时的稳定入口，供 dialog 归还焦点。
+  const toggleFocusRef = useRef<HTMLElement | null>(null);
 
   const closeAndReturnFocus = (
     setter: (open: boolean) => void,
@@ -38,14 +40,19 @@ export function AccountMenu({ me }: { me: WebIdentity | null }) {
       setter(open);
       if (open) return;
       // 入口在菜单中，菜单关闭后会卸载；把焦点还给稳定的触发按钮。
-      requestAnimationFrame(() => {
+      // 先抢在 Radix 的延时还焦点之前恢复，再补一帧兜底。
+      const focusToggle = () => {
         document.getElementById('account-menu-toggle')?.focus();
-      });
+      };
+      queueMicrotask(focusToggle);
+      requestAnimationFrame(focusToggle);
     };
   };
 
   const handleMenuOpenChange = (open: boolean, details?: { reason?: string }) => {
     setMenuOpen(open);
+    // Lenso 就绪前后触发按钮可能被替换，打开时重新解析当前 DOM 节点。
+    if (open) toggleFocusRef.current = document.getElementById('account-menu-toggle');
     if (open || details?.reason === 'item-press') return;
     // 外部点击/关闭按钮不保证由 SDK 还焦点；选中条目交给随后打开的对话框。
     requestAnimationFrame(() => {
@@ -118,6 +125,7 @@ export function AccountMenu({ me }: { me: WebIdentity | null }) {
         open={menuOpen}
         onOpenChange={handleMenuOpenChange}
         fallbackAnchor
+        instantCloseOnSelect
         sideOffset={6}
         align="start"
         trigger={
@@ -137,14 +145,15 @@ export function AccountMenu({ me }: { me: WebIdentity | null }) {
       {token && me ? (
         <MeRenameDialog
           open={renameOpen}
-          onOpenChange={setRenameOpen}
+          onOpenChange={closeAndReturnFocus(setRenameOpen)}
           currentName={me.name}
           token={token}
+          returnFocusRef={toggleFocusRef}
         />
       ) : null}
       <NewAgentDialog
         open={newAgentOpen}
-        onOpenChange={setNewAgentOpen}
+        onOpenChange={closeAndReturnFocus(setNewAgentOpen)}
         identity={me}
         token={token}
       />
@@ -159,10 +168,13 @@ export function AccountMenu({ me }: { me: WebIdentity | null }) {
       />
       {memoryOpen ? (
         <Suspense fallback={null}>
-          <MemoryDialog open={memoryOpen} onOpenChange={setMemoryOpen} />
+          <MemoryDialog
+            open={memoryOpen}
+            onOpenChange={closeAndReturnFocus(setMemoryOpen)}
+          />
         </Suspense>
       ) : null}
-      <LogoutDialog open={logoutOpen} onOpenChange={setLogoutOpen} />
+      <LogoutDialog open={logoutOpen} onOpenChange={closeAndReturnFocus(setLogoutOpen)} />
     </>
   );
 }

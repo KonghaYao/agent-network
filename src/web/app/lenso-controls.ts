@@ -20,6 +20,7 @@ import {
   type ReactElement,
   type ReactNode,
 } from 'react';
+import { flushSync } from 'react-dom';
 
 import {
   nativePrimitiveProps,
@@ -456,6 +457,11 @@ export interface MenuAdapterProps {
   onOpenChange: (open: boolean, details?: MenuOpenChangeDetails) => void;
   /** fallback 需要按触发按钮定位并进入本地 Portal 带时启用。 */
   fallbackAnchor?: boolean;
+  /**
+   * 条目会打开全局对话框时启用：选中瞬间先隐藏 popup，再执行动作。
+   * Lenso 的退场动画会保活 popup 约半秒，不能让它盖住同帧打开的 dialog。
+   */
+  instantCloseOnSelect?: boolean;
   sideOffset?: number;
   align?: 'start' | 'center' | 'end';
   container?: Element | DocumentFragment | null;
@@ -505,6 +511,7 @@ export function Menu({
   open,
   onOpenChange,
   fallbackAnchor,
+  instantCloseOnSelect,
   sideOffset,
   align,
   container,
@@ -512,12 +519,31 @@ export function Menu({
   const lenso = useLenso();
   const triggerRef = useRef<HTMLElement | null>(null);
   const menuRef = useRef<HTMLElement | null>(null);
+  const [instantHidden, setInstantHidden] = useState(false);
   const triggerProps = {
     'aria-haspopup': 'menu' as const,
     'aria-controls': id,
     'aria-expanded': open,
     ref: triggerRef,
   };
+
+  const handleOpenChange = useCallback(
+    (next: boolean, details?: MenuOpenChangeDetails) => {
+      // 重新打开时恢复可见；选中关闭导致的隐藏不能泄漏到下一次打开。
+      if (next) setInstantHidden(false);
+      onOpenChange(next, details);
+    },
+    [onOpenChange],
+  );
+
+  /**
+   * Lenso 关闭菜单会保活 popup 播放退场动画；条目要打开 dialog 时必须
+   * 先同步隐藏，避免 dialog 第一帧被旧菜单覆盖。fallback 同样先隐藏再动作。
+   */
+  const hideBeforeSelect = useCallback(() => {
+    if (!instantCloseOnSelect) return;
+    flushSync(() => setInstantHidden(true));
+  }, [instantCloseOnSelect]);
 
   // fallback 没有 SDK 的外部点击管理；Lenso 就绪后交给原生控制器。
   useEffect(() => {
@@ -526,12 +552,12 @@ export function Menu({
       const target = event.target as Node | null;
       if (!target) return;
       if (menuRef.current?.contains(target) || triggerRef.current?.contains(target)) return;
-      onOpenChange(false, { reason: 'outside-press' });
+      handleOpenChange(false, { reason: 'outside-press' });
       triggerRef.current?.focus();
     };
     document.addEventListener('pointerdown', onPointerDown);
     return () => document.removeEventListener('pointerdown', onPointerDown);
-  }, [lenso, onOpenChange, open]);
+  }, [lenso, handleOpenChange, open]);
 
   if (lenso) {
     const Content = lenso.Menu.Content as unknown as ComponentType<Record<string, unknown>>;
@@ -542,7 +568,7 @@ export function Menu({
       lenso.Menu as unknown as ComponentType<Record<string, unknown>>,
       {
         open,
-        onOpenChange,
+        onOpenChange: handleOpenChange,
         container:
           container ?? (typeof document === 'undefined' ? undefined : document.body),
       },
@@ -557,7 +583,11 @@ export function Menu({
           'aria-label': label,
           sideOffset,
           align,
-          style: { zIndex: 'var(--app-z-portal-local-menu)' },
+          ref: menuRef,
+          style: {
+            zIndex: 'var(--app-z-portal-local-menu)',
+            ...(instantHidden ? { display: 'none' } : null),
+          },
           render: createElement('div', { className }),
         },
         items.map((item) =>
@@ -570,7 +600,10 @@ export function Menu({
                   id: item.id,
                   variant: item.variant,
                   disabled: item.disabled,
-                  onSelect: () => item.onSelect(),
+                  onSelect: () => {
+                    hideBeforeSelect();
+                    item.onSelect();
+                  },
                   render: createElement('div', {
                     className: item.className ?? itemClassName,
                   }),
@@ -587,7 +620,7 @@ export function Menu({
     onClick: (event: { defaultPrevented: boolean }) => {
       const original = (trigger.props as { onClick?: (next: typeof event) => void }).onClick;
       original?.(event);
-      if (!event.defaultPrevented) onOpenChange(!open);
+      if (!event.defaultPrevented) handleOpenChange(!open);
     },
   });
 
@@ -605,15 +638,20 @@ export function Menu({
             'aria-label': label,
             'data-lenso-slot': 'menu-fallback',
             className: [className, 'attach-menu-native'].filter(Boolean).join(' '),
-            style: fallbackAnchor
+            style: fallbackAnchor || instantHidden
               ? {
-                  ...fallbackMenuStyle(triggerRef.current, align, sideOffset),
-                  zIndex: 'var(--app-z-portal-local-menu)',
+                  ...(fallbackAnchor
+                    ? {
+                        ...fallbackMenuStyle(triggerRef.current, align, sideOffset),
+                        zIndex: 'var(--app-z-portal-local-menu)',
+                      }
+                    : null),
+                  ...(instantHidden ? { display: 'none' } : null),
                 }
               : undefined,
             onKeyDown: (event: { key: string }) => {
               if (event.key !== 'Escape') return;
-              onOpenChange(false, { reason: 'escape-key' });
+              handleOpenChange(false, { reason: 'escape-key' });
               triggerRef.current?.focus();
             },
           },
@@ -637,8 +675,9 @@ export function Menu({
                     'data-variant': item.variant,
                     autoFocus: index === 0,
                     onClick: () => {
+                      hideBeforeSelect();
                       item.onSelect();
-                      onOpenChange(false, { reason: 'item-press' });
+                      handleOpenChange(false, { reason: 'item-press' });
                       triggerRef.current?.focus();
                     },
                   },

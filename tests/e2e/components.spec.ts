@@ -122,6 +122,90 @@ async function dragFile(
   );
 }
 
+/**
+ * 菜单条目打开 dialog 后，Lenso 仍可能保活退场 popup；这里在 dialog
+ * 刚可见以及随后的若干帧里采样，要求菜单不可见、与 dialog 无几何交集，
+ * 且 dialog 顶部命中的不是菜单。
+ */
+async function expectAccountMenuClearOfDialog(page: Page, dialogId: string): Promise<void> {
+  await expect(page.locator(`#${dialogId}`)).toBeVisible();
+  const samples = await page.evaluate(async (id) => {
+    const read = () => {
+      const menu = document.querySelector('#account-menu');
+      const dialog = document.getElementById(id);
+      const menuStyle = menu ? getComputedStyle(menu) : null;
+      const menuRect = menu?.getBoundingClientRect() ?? null;
+      const dialogRect = dialog?.getBoundingClientRect() ?? null;
+      const menuVisible = Boolean(
+        menu &&
+          menuRect &&
+          menuRect.width > 0 &&
+          menuRect.height > 0 &&
+          menuStyle?.display !== 'none' &&
+          menuStyle?.visibility !== 'hidden' &&
+          Number(menuStyle?.opacity) > 0,
+      );
+      let overlap: { width: number; height: number } | null = null;
+      if (menuRect && dialogRect) {
+        const left = Math.max(menuRect.left, dialogRect.left);
+        const top = Math.max(menuRect.top, dialogRect.top);
+        const right = Math.min(menuRect.right, dialogRect.right);
+        const bottom = Math.min(menuRect.bottom, dialogRect.bottom);
+        if (right > left && bottom > top) {
+          overlap = { width: right - left, height: bottom - top };
+        }
+      }
+      const hit = dialogRect
+        ? document.elementFromPoint(
+            dialogRect.left + dialogRect.width / 2,
+            dialogRect.top + Math.min(12, dialogRect.height / 2),
+          )
+        : null;
+      return {
+        connected: Boolean(menu),
+        display: menuStyle?.display ?? null,
+        visibility: menuStyle?.visibility ?? null,
+        opacity: menuStyle?.opacity ?? null,
+        menuVisible,
+        overlap,
+        hitInMenu: Boolean(hit?.closest('#account-menu')),
+      };
+    };
+    const frames: ReturnType<typeof read>[] = [read()];
+    for (let index = 0; index < 6; index += 1) {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      frames.push(read());
+    }
+    return frames;
+  }, dialogId);
+
+  for (const sample of samples) {
+    const label = JSON.stringify(sample);
+    expect(sample.menuVisible, label).toBe(false);
+    expect(sample.overlap, label).toBeNull();
+    expect(sample.hitInMenu, label).toBe(false);
+  }
+
+  // 打开动画（spa-pop-in 140ms）期间命中测试可能仍落在 overlay；
+  // 动画结束后 dialog 顶部必须是 dialog 自身。
+  await expect
+    .poll(
+      () =>
+        page.evaluate((id) => {
+          const dialog = document.getElementById(id);
+          if (!dialog) return false;
+          const rect = dialog.getBoundingClientRect();
+          const hit = document.elementFromPoint(
+            rect.left + rect.width / 2,
+            rect.top + Math.min(12, rect.height / 2),
+          );
+          return Boolean(hit?.closest(`#${id}`));
+        }, dialogId),
+      { timeout: 2000 },
+    )
+    .toBe(true);
+}
+
 test.describe.serial('SPA 组件库与状态管理', () => {
 
   let base = '';
@@ -460,12 +544,14 @@ test.describe.serial('SPA 组件库与状态管理', () => {
       expect(box.y + box.height).toBeLessThanOrEqual(844);
     }
 
-    // 菜单动作仍打开原对话框，关闭后菜单保持收起。
+    // 菜单动作仍打开原对话框；dialog 首帧起菜单就必须不可见且无重叠。
     await page.locator('#account-rename').click();
-    await expect(page.locator('#me-rename-dialog')).toBeVisible();
+    await expectAccountMenuClearOfDialog(page, 'me-rename-dialog');
+    await expect(page.locator('#me-rename-input')).toBeFocused();
     await page.locator('#me-rename-cancel').click();
     await expect(page.locator('#me-rename-dialog')).toBeHidden();
     await expect(menu).toBeHidden();
+    await expect(toggle).toBeFocused();
 
     await toggle.click();
     await expect(menu).toBeVisible();
@@ -512,7 +598,8 @@ test.describe.serial('SPA 组件库与状态管理', () => {
     }
 
     await page.locator('#account-rename').click();
-    await expect(page.locator('#me-rename-dialog')).toBeVisible();
+    await expectAccountMenuClearOfDialog(page, 'me-rename-dialog');
+    await expect(page.locator('#me-rename-input')).toBeFocused();
     await page.locator('#me-rename-cancel').click();
     await expect(page.locator('#me-rename-dialog')).toBeHidden();
     await expect(menu).toBeHidden();
