@@ -64,6 +64,22 @@ const FILTERS: { value: RoomFilter; label: string }[] = [
 
 const EMPTY_UNREAD_COUNTS: Record<RoomFilter, number> = { friend: 0, agent: 0, group: 0 };
 
+/**
+ * 44px 命中区只负责把焦点交给真实输入框。
+ * pointer/mouse 的默认焦点迁移会把 activeElement 打回 body，必须一并阻止。
+ */
+function focusSearchHit(event: {
+  button: number;
+  target: EventTarget | null;
+  preventDefault: () => void;
+}) {
+  if (event.button !== 0) return;
+  if (!(event.target instanceof Element)) return;
+  if (event.target.closest('input, button, a[href], [tabindex]')) return;
+  event.preventDefault();
+  document.getElementById('room-search')?.focus();
+}
+
 function statusMessage(props: SidebarProps): string {
   const { status, rooms, query, filter, error } = props;
   if (status === 'logged-out') return roomFilterEmptyMessage(filter, true);
@@ -121,20 +137,32 @@ export function Sidebar(props: SidebarProps) {
     return () => window.clearTimeout(timer);
   }, [unreadCounts]);
 
-  // 组合输入期间吞掉 keydown，避免 Lenso SearchField 的内置 Escape 清空
-  // 正在编辑的候选词；组合结束后 Escape 仍由 SearchField/调用方清空。
+  // 组合输入期间吞掉 keydown，避免 Lenso SearchField 的 Escape 清空候选词。
+  // type=search 的 Chromium 原生 Escape 清空发生在默认动作阶段，必须同时
+  // preventDefault；组合结束后普通 Escape 仍由 SearchField/调用方清空。
   const detachSearchKeys = useRef<(() => void) | null>(null);
+  const searchComposing = useRef(false);
   const searchRef = useCallback((node: HTMLInputElement | null) => {
     detachSearchKeys.current?.();
     detachSearchKeys.current = null;
     if (!node) return;
     const onKeyDownCapture = (event: KeyboardEvent) => {
-      if (event.isComposing || event.keyCode === 229) event.stopPropagation();
+      if (!event.isComposing && event.keyCode !== 229 && !searchComposing.current) return;
+      event.stopPropagation();
+      if (event.key === 'Escape') event.preventDefault();
     };
     node.addEventListener('keydown', onKeyDownCapture, true);
-    detachSearchKeys.current = () => node.removeEventListener('keydown', onKeyDownCapture, true);
+    detachSearchKeys.current = () => {
+      node.removeEventListener('keydown', onKeyDownCapture, true);
+    };
   }, []);
-  useEffect(() => () => detachSearchKeys.current?.(), []);
+  useEffect(
+    () => () => {
+      detachSearchKeys.current?.();
+      searchComposing.current = false;
+    },
+    [],
+  );
 
   return (
     <aside className="sidebar" aria-label="会话列表">
@@ -158,10 +186,8 @@ export function Sidebar(props: SidebarProps) {
         {/* 视觉 32px、命中区 44px：外层补足上下可点击高度。 */}
         <div
           className="search-box"
-          onPointerDown={(event) => {
-            if (event.target instanceof Element && event.target.closest('input, button, a[href], [tabindex]')) return;
-            document.getElementById('room-search')?.focus();
-          }}
+          onPointerDown={focusSearchHit}
+          onMouseDown={focusSearchHit}
         >
           <SearchInput
             ref={searchRef}
@@ -171,6 +197,12 @@ export function Sidebar(props: SidebarProps) {
             aria-label="搜索会话"
             value={query}
             onChange={(event) => onQueryChange(event.target.value)}
+            onCompositionStart={() => {
+              searchComposing.current = true;
+            }}
+            onCompositionEnd={() => {
+              searchComposing.current = false;
+            }}
             onKeyDown={(event) => {
               if (event.key !== 'Escape' || !query) return;
               if (event.nativeEvent.isComposing || event.keyCode === 229) return;

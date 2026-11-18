@@ -10,11 +10,12 @@ import {
 import { useLenso } from './lenso-controls';
 
 /**
- * Memory 抽屉专用的 Lenso Tabs 懒加载适配。
+ * Lenso Tabs 适配器：供 MemoryDialog 懒加载 chunk 使用的受控 Tabs。
  *
- * 与 `lenso-controls.ts` 共用同一个 `import('@lenso/ui')`；这个文件只被
- * MemoryDialog 懒加载 chunk 引用，不进入主入口预算。未就绪时渲染
- * `role=tablist/tab/tabpanel` 的原生节点，并保持受控值与面板挂载。
+ * 与 `lenso-controls.ts` 共用同一个 `import('@lenso/ui')`；本文件只随
+ * MemoryDialog 动态加载，不进入主入口预算。Lenso 未就绪时渲染
+ * `role=tablist/tab/tabpanel` 的原生节点并保持受控值；根节点显式撑满宽度，
+ * 避免 Lenso 默认的 `align-items: flex-start` 让 tabs 与 panels 收缩。
  */
 interface TabsState {
   value: string;

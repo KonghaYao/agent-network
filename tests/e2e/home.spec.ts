@@ -229,6 +229,93 @@ test.describe('SPA Home', () => {
     expect(errors).toEqual([]);
   });
 
+  test('keeps the 44px search hit area focusable', async ({ page }) => {
+    await page.goto(`${base}/`);
+    await expect(page.locator('#room-search')).toBeVisible();
+
+    const activeId = () => page.evaluate(() => document.activeElement?.id ?? '');
+    const blur = () =>
+      page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+
+    const box = await page.locator('.search-box').boundingBox();
+    if (!box) throw new Error('搜索命中区不可见');
+    // 外层 44px 命中区的 padding（32px 控件之外）。
+    await page.mouse.click(box.x + 4, box.y + 3);
+    expect(await activeId()).toBe('room-search');
+    await blur();
+
+    // 搜索图标仍应把焦点交给输入框。
+    await page.locator('.search-box [data-lenso-slot="search-field-search-icon"]').click();
+    expect(await activeId()).toBe('room-search');
+    await blur();
+
+    // Group 自身空白（不在 input/button 上）也要聚焦。
+    const blank = await page.evaluate(() => {
+      const group = document.querySelector('.search-box [data-lenso-slot="search-field-group"]');
+      if (!(group instanceof HTMLElement)) return null;
+      const rect = group.getBoundingClientRect();
+      for (let x = rect.left + 1; x < rect.right - 1; x += 1) {
+        for (let y = rect.top + 1; y < rect.bottom - 1; y += 1) {
+          if (document.elementFromPoint(x, y) === group) return { x, y };
+        }
+      }
+      return null;
+    });
+    if (!blank) throw new Error('未找到 SearchField.Group 的空白命中区');
+    await page.mouse.click(blank.x, blank.y);
+    expect(await activeId()).toBe('room-search');
+    await blur();
+
+    await page.locator('#room-search').click();
+    expect(await activeId()).toBe('room-search');
+  });
+
+  test('keeps IME composition text when Escape cancels search', async ({ page, context }) => {
+    await page.goto(`${base}/`);
+    await expect(page.locator('#room-search')).toBeVisible();
+    // 等 Lenso 完成动态替换后再进入组合输入，避免节点换新丢掉候选。
+    await expect(
+      page.locator('.search-box [data-lenso-slot="search-field"]'),
+    ).toHaveCount(1);
+    await page.fill('#room-search', '保留');
+    await page.locator('#room-search').focus();
+
+    const cdp = await context.newCDPSession(page);
+    await cdp.send('Input.imeSetComposition', {
+      text: '周末',
+      selectionStart: 2,
+      selectionEnd: 2,
+    });
+    await expect(page.locator('#room-search')).toHaveValue('保留周末');
+
+    // 真实 CDP 组合输入中的 Escape 必须阻止 type=search 的原生清空。
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#room-search')).toHaveValue('保留周末');
+
+    // 结束组合后，普通 Escape 仍应清空。
+    await cdp.send('Input.insertText', { text: '周末' });
+    await expect(page.locator('#room-search')).toHaveValue('保留周末');
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#room-search')).toHaveValue('');
+  });
+
+  test('renders contact link failure as danger alert text', async ({ page }) => {
+    await page.goto(`${base}/#friend=invalid-link-token`);
+    const banner = page.locator('#contact-link-banner');
+    await expect(banner).toBeVisible();
+    await expect(banner).toHaveAttribute('role', 'status');
+    await expect(banner).toHaveAttribute('aria-live', 'polite');
+    await expect(banner).toHaveAttribute('data-error', '1');
+    await expect(banner).toHaveAttribute('data-lenso-slot', 'alert-root');
+    await expect(banner).toContainText('好友链接');
+
+    const description = banner.locator('[data-lenso-slot="alert-description"]');
+    expect(await description.evaluate((node) => getComputedStyle(node).fontSize)).toBe('13px');
+    expect(await description.evaluate((node) => getComputedStyle(node).color)).toBe(
+      await semanticColor(page, '--wx-unread', 'color'),
+    );
+  });
+
   test('shows category unread badges and preference labels', async ({ page }) => {
     await callTool(base, tokenB, 'network_message_send', {
       request_id: requestId('e2e_send'),

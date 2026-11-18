@@ -3,6 +3,8 @@ import { expect, test, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
+import { semanticColor } from './fixtures/semantic-colors';
+
 /**
  * 4B-4 组件验收：Radix dialog/menu/popover、Ariakit Combobox、dropzone、
  * resizable panels、RHF 表单与 zustand 持久化。
@@ -581,6 +583,15 @@ test.describe.serial('SPA 组件库与状态管理', () => {
       'data-lenso-slot',
       'alert-root',
     );
+    const archiveDescription = page.locator(
+      '#room-archive-banner [data-lenso-slot="alert-description"]',
+    );
+    expect(
+      await archiveDescription.evaluate((node) => getComputedStyle(node).fontSize),
+    ).toBe('12px');
+    expect(await archiveDescription.evaluate((node) => getComputedStyle(node).color)).toBe(
+      await semanticColor(page, '--lenso-status-warning-text', 'color'),
+    );
     await expect(page.locator('#composer')).toHaveCount(0);
     await expect(page.locator('#composer-drop')).toHaveCount(0);
     const before = page.url();
@@ -672,6 +683,15 @@ test.describe.serial('SPA 组件库与状态管理', () => {
     await expect(page.locator('#room-announcement')).toHaveAttribute(
       'data-lenso-slot',
       'alert-root',
+    );
+    const announcementDescription = page.locator(
+      '#room-announcement [data-lenso-slot="alert-description"]',
+    );
+    expect(
+      await announcementDescription.evaluate((node) => getComputedStyle(node).fontSize),
+    ).toBe('12px');
+    expect(await announcementDescription.evaluate((node) => getComputedStyle(node).color)).toBe(
+      await semanticColor(page, '--wx-text', 'color'),
     );
     await page.locator('#room-announcement-info').click();
     await expect(page.locator('#room-announcement-popover')).toContainText('组件验收公告');

@@ -587,16 +587,16 @@ ${GROUP_STYLE}
     overflow-wrap: anywhere; }
   .room-announcement[hidden], #room-announcement[hidden] { display: none; }
   #room-announcement [data-lenso-slot="alert-content"] { width: 100%; }
-  #room-announcement [data-lenso-slot="alert-description"] { font-size: 12px; line-height: 1.6;
-    color: var(--wx-text); white-space: pre-wrap; overflow-wrap: anywhere; }
+  #room-announcement [data-lenso-slot="alert-description"] { font-size: 12px !important; line-height: 1.6 !important;
+    color: var(--wx-text) !important; white-space: pre-wrap; overflow-wrap: anywhere; }
   .room-archive-banner, #room-archive-banner { margin: 8px 16px 0; padding: 8px 12px;
     border-radius: 6px;
-    border: 1px solid var(--lenso-status-warning-border); background: var(--lenso-control-status-warning-soft-fill); color: var(--lenso-status-warning-text);
+    border: 1px solid var(--lenso-status-warning-border); background: var(--lenso-control-status-warning-soft-fill); color: var(--lenso-status-warning-text) !important;
     font-size: 12px; line-height: 1.6; }
   .room-archive-banner[hidden], #room-archive-banner[hidden] { display: none; }
   #room-archive-banner [data-lenso-slot="alert-content"] { width: 100%; }
-  #room-archive-banner [data-lenso-slot="alert-description"] { font-size: 12px; line-height: 1.6;
-    color: var(--lenso-status-warning-text); }
+  #room-archive-banner [data-lenso-slot="alert-description"] { font-size: 12px !important; line-height: 1.6 !important;
+    color: var(--lenso-status-warning-text) !important; }
   .composer[hidden] { display: none; }
   .announcement-card { width: min(520px, 100%); box-sizing: border-box; }
   .announcement-input { display: block; box-sizing: border-box; width: 100%;
@@ -808,12 +808,12 @@ ${GROUP_STYLE}
   /* 好友邀请链接：明文只在内存中，列表只展示状态；失败状态用错误色。 */
   .contact-link-banner, #contact-link-banner { margin: 0 0 8px; padding: 8px 10px;
     border: 1px solid var(--wx-line); border-radius: 8px; background: var(--wx-sidebar);
-    color: var(--wx-text); font-size: 13px; word-break: break-word; }
+    color: var(--wx-text) !important; font-size: 13px; word-break: break-word; }
   .contact-link-banner[data-error="1"], #contact-link-banner[data-error="1"] {
-    border-color: var(--wx-unread); color: var(--wx-unread); }
+    border-color: var(--wx-unread); color: var(--wx-unread) !important; }
   #contact-link-banner [data-lenso-slot="alert-content"] { min-width: 0; }
-  #contact-link-banner [data-lenso-slot="alert-description"] { font-size: 13px;
-    line-height: 1.5; color: inherit; overflow-wrap: anywhere; }
+  #contact-link-banner [data-lenso-slot="alert-description"] { font-size: 13px !important;
+    line-height: 1.5 !important; color: inherit !important; overflow-wrap: anywhere; }
   .contact-link-hint { margin: 0 0 10px; color: var(--wx-muted); font-size: 12px;
     line-height: 1.5; }
   .contact-link-actions { display: flex; gap: 8px; margin: 0 0 8px; }
