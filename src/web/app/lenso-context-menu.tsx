@@ -12,6 +12,11 @@ const MenuScope = createContext<{
   select: (action?: () => void) => void;
 } | null>(null);
 
+/** 菜单与触发行、视口边缘保持的最小间隙。 */
+const GAP = 8;
+/** 侧向空间不足一行菜单时改为视口内定位，避免生成不可见的窄条。 */
+const MIN_SIDE_ROOM = 48;
+
 export interface ContextMenuProps {
   id: string;
   label: string;
@@ -41,6 +46,19 @@ export function ContextMenu({
   const origin = useRef<HTMLElement | null>(null);
   const menu = useRef<HTMLDivElement | null>(null);
   const point = useRef({ x: 0, y: 0 });
+  // 指针只决定横向位置；纵向用触发行的完整矩形，SDK 才能在翻转时把整个
+  // 行让出来，而不是贴着点击点把上半行盖住。
+  const anchor = useRef({
+    getBoundingClientRect: () => {
+      const rect = origin.current?.getBoundingClientRect();
+      return {
+        x: point.current.x,
+        y: rect?.top ?? point.current.y,
+        width: 0,
+        height: rect?.height ?? 0,
+      };
+    },
+  }).current;
   const suppressClick = useRef(false);
   const change = (next: boolean) => {
     setLocalOpen(next);
@@ -91,14 +109,23 @@ export function ContextMenu({
     };
     const position = () => {
       if (lenso) return;
-      const y = Math.max(8, Math.min(point.current.y, innerHeight - 8));
-      const above = y - 8, below = innerHeight - y - 8;
+      const rect = origin.current?.getBoundingClientRect();
+      const triggerTop = rect?.top ?? point.current.y;
+      const triggerBottom = rect?.bottom ?? point.current.y;
+      const above = triggerTop - GAP - GAP;
+      const below = innerHeight - GAP - (triggerBottom + GAP);
       const height = element.scrollHeight + element.offsetHeight - element.clientHeight;
       const up = height > below && above > below;
-      element.style.maxHeight = `${Math.max(0, up ? above : below)}px`;
+      // 触发元素高于视口（长消息）时两侧可能都没有空间：退到视口内定位，
+      // 否则 maxHeight 为 0 会得到不可见菜单。正常翻转仍优先保留间隙。
+      const room = up ? above : below;
+      const viewportRoom = innerHeight - GAP * 2;
+      const maxHeight = room >= MIN_SIDE_ROOM ? Math.min(room, viewportRoom) : viewportRoom;
+      element.style.maxHeight = `${Math.max(0, maxHeight)}px`;
       const bounds = element.getBoundingClientRect();
-      element.style.left = `${Math.max(8, Math.min(point.current.x, innerWidth - bounds.width - 8))}px`;
-      element.style.top = `${up ? y - bounds.height : y}px`;
+      element.style.left = `${Math.max(GAP, Math.min(point.current.x, innerWidth - bounds.width - GAP))}px`;
+      const top = up ? triggerTop - GAP - bounds.height : triggerBottom + GAP;
+      element.style.top = `${Math.max(GAP, Math.min(top, innerHeight - GAP - bounds.height))}px`;
     };
     const update = () => {
       position();
@@ -179,8 +206,8 @@ export function ContextMenu({
   } }}>
     {lenso ? <lenso.ContextMenu open modal="pointer" container={portalContainer?.() ?? document.body}
       onOpenChange={close}>
-      <lenso.ContextMenu.Content {...contentProps} anchor={point.current} dim={false}
-        finalFocus="none" render={<div className={className} />}>
+      <lenso.ContextMenu.Content {...contentProps} anchor={anchor} sideOffset={GAP}
+        collisionPadding={GAP} dim={false} finalFocus="none" render={<div className={className} />}>
         {children}
       </lenso.ContextMenu.Content>
     </lenso.ContextMenu> : createPortal(<>

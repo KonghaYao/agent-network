@@ -156,6 +156,23 @@ function expectScrollNear(actual: number, expected: number): void {
   expect(Math.abs(actual - expected)).toBeLessThanOrEqual(1);
 }
 
+interface Box {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** 两个矩形是否有面积重叠；贴边不算。 */
+function overlaps(a: Box, b: Box): boolean {
+  return (
+    a.x < b.x + b.width &&
+    b.x < a.x + a.width &&
+    a.y < b.y + b.height &&
+    b.y < a.y + a.height
+  );
+}
+
 test.describe('会话行右键与长按菜单', () => {
   // 复现报告使用 1280×800；移动端 describe 会覆盖该 viewport。
   test.use({ viewport: { width: 1280, height: 800 } });
@@ -630,6 +647,17 @@ test.describe('会话行右键与长按菜单', () => {
           await expect(page.locator('#room-row-menu-mute')).toBeFocused();
           await expect.poll(() => menu.evaluate((node) => node.getBoundingClientRect().bottom)).toBeLessThanOrEqual(836);
           expect((await menu.boundingBox())!.y).toBeGreaterThanOrEqual(8);
+          // 翻转/定位都必须让出整个触发行：公告中的底部行覆盖回归由这里兜底。
+          await expect.poll(async () => {
+            const rowBox = await target.boundingBox();
+            const menuBox = await menu.boundingBox();
+            return Boolean(rowBox && menuBox && !overlaps(rowBox, menuBox));
+          }).toBe(true);
+          const rowBox = await target.boundingBox();
+          const menuBox = await menu.boundingBox();
+          expect(rowBox).not.toBeNull();
+          expect(menuBox).not.toBeNull();
+          expect(overlaps(rowBox as Box, menuBox as Box)).toBe(false);
           await page.keyboard.press('Escape');
           await expect(menu).toBeHidden();
           await expect(target).toBeFocused();
