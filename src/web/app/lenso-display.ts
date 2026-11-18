@@ -1,6 +1,6 @@
 import {
   createElement,
-  useSyncExternalStore,
+  useRef,
   type ComponentPropsWithRef,
   type ComponentType,
   type CSSProperties,
@@ -8,24 +8,10 @@ import {
   type ReactNode,
 } from 'react';
 
-export type LensoModule = typeof import('@lenso/ui');
-let loadedLenso: LensoModule | null = null;
-let loadingLenso: Promise<LensoModule> | null = null;
-const listeners = new Set<() => void>();
+import { useFallbackLeaseLock, useLenso, type LensoModule } from './lenso-runtime';
 
-function subscribe(listener: () => void) {
-  listeners.add(listener);
-  loadingLenso ??= import('@lenso/ui').then((module) => {
-    loadedLenso = module;
-    for (const notify of listeners) notify();
-    return module;
-  });
-  return () => { listeners.delete(listener); };
-}
-
-export function useLenso() {
-  return useSyncExternalStore(subscribe, () => loadedLenso, () => null);
-}
+export { useLenso };
+export type { LensoModule };
 
 /**
  * 展示/布局原语（P0）：只提供懒加载适配，不替换现有 UI。
@@ -174,16 +160,32 @@ export function nativePrimitiveProps(
   return native;
 }
 
-/** 通用懒加载原语：Lenso 未就绪时渲染同语义原生节点，就绪后换成对应组件。 */
-export function LazyPrimitive({
-  name,
-  fallbackTag,
-  slot = primitiveSlot(name),
-  fallbackDefaults,
-  defaultChildren,
-  ...props
-}: LazyPrimitiveProps): ReactElement {
+/**
+ * 承载交互内容的布局外壳。一旦在 fallback 浮层打开期间保持原生，本页
+ * 后续不再升级，避免模块到达或关闭后的延迟重挂把正在交互的子树和
+ * 焦点整体换掉。
+ */
+const STRUCTURAL_PRIMITIVES = new Set<DisplayPrimitiveName>(['Toolbar']);
+
+function useStructuralLenso(): LensoModule | null {
   const lenso = useLenso();
+  const locked = useFallbackLeaseLock();
+  const pinned = useRef(false);
+  if (!lenso && locked) pinned.current = true;
+  return pinned.current ? null : lenso;
+}
+
+function primitiveElement(
+  lenso: LensoModule | null,
+  {
+    name,
+    fallbackTag,
+    slot = primitiveSlot(name),
+    fallbackDefaults,
+    defaultChildren,
+    ...props
+  }: LazyPrimitiveProps,
+): ReactElement {
   if (!lenso) {
     return createElement(
       fallbackTag as 'div',
@@ -197,6 +199,22 @@ export function LazyPrimitive({
       children: props.children ?? defaultChildren?.(lenso),
       'data-lenso-slot': props['data-lenso-slot'] ?? slot,
     },
+  );
+}
+
+function PlainPrimitive(props: LazyPrimitiveProps): ReactElement {
+  return primitiveElement(useLenso(), props);
+}
+
+function StructuralPrimitive(props: LazyPrimitiveProps): ReactElement {
+  return primitiveElement(useStructuralLenso(), props);
+}
+
+/** 通用懒加载原语：Lenso 未就绪时渲染同语义原生节点，就绪后换成对应组件。 */
+export function LazyPrimitive(props: LazyPrimitiveProps): ReactElement {
+  return createElement(
+    STRUCTURAL_PRIMITIVES.has(props.name) ? StructuralPrimitive : PlainPrimitive,
+    props,
   );
 }
 

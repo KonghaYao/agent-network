@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 
-import { useLenso } from './lenso-controls';
+import { useLenso } from './lenso-runtime';
 
 /**
  * Memory 抽屉与添加好友弹窗共用的 Lenso Tabs 懒加载适配。

@@ -23,6 +23,11 @@ import {
 import { flushSync } from 'react-dom';
 
 import {
+  LensoBackendProvider,
+  useBackendLease,
+  useLensoBackendScope,
+} from './lenso-runtime';
+import {
   nativePrimitiveProps,
   primitiveSlot,
   useLenso,
@@ -123,7 +128,12 @@ function buttonVariant(className: string | undefined, variant: ButtonRootProps['
 
 export function Button({ className, variant, ...props }: LegacyButtonProps) {
   const lenso = useLenso();
-  if (!lenso) return createElement('button', { ...props, className });
+  const scope = useLensoBackendScope();
+  // 浮层打开期间锁定 fallback 时，触发器也必须保持原生节点，
+  // 否则模块到达会替换焦点所在的按钮并打断当前交互。
+  if (!lenso || scope === 'fallback') {
+    return createElement('button', { ...props, className });
+  }
   const tokens = new Set(className?.split(/\s+/u));
   return createElement(lenso.Button, {
     ...props,
@@ -516,7 +526,10 @@ export function Menu({
   align,
   container,
 }: MenuAdapterProps) {
-  const lenso = useLenso();
+  const backend = useBackendLease(open);
+  const module = useLenso();
+  // 打开时选定的 backend 在整个 open 期间不变；模块晚到只影响下一次打开。
+  const lenso = backend === 'lenso' ? module : null;
   const triggerRef = useRef<HTMLElement | null>(null);
   const menuRef = useRef<HTMLElement | null>(null);
   const [instantHidden, setInstantHidden] = useState(false);
@@ -565,51 +578,55 @@ export function Menu({
     const Separator = lenso.Menu.Separator as unknown as ComponentType<Record<string, unknown>>;
     const Trigger = lenso.Menu.Trigger as unknown as ComponentType<Record<string, unknown>>;
     return createElement(
-      lenso.Menu as unknown as ComponentType<Record<string, unknown>>,
-      {
-        open,
-        onOpenChange: handleOpenChange,
-        container:
-          container ?? (typeof document === 'undefined' ? undefined : document.body),
-      },
-      createElement(Trigger, {
-        render: cloneElement(trigger as ReactElement<Record<string, unknown>>, triggerProps),
-      }),
+      LensoBackendProvider,
+      { backend },
       createElement(
-        Content,
+        lenso.Menu as unknown as ComponentType<Record<string, unknown>>,
         {
-          id,
-          className,
-          'aria-label': label,
-          sideOffset,
-          align,
-          ref: menuRef,
-          style: {
-            zIndex: 'var(--app-z-portal-local-menu)',
-            ...(instantHidden ? { display: 'none' } : null),
-          },
-          render: createElement('div', { className }),
+          open,
+          onOpenChange: handleOpenChange,
+          container:
+            container ?? (typeof document === 'undefined' ? undefined : document.body),
         },
-        items.map((item) =>
-          isSeparator(item)
-            ? createElement(Separator, { key: item.id, id: item.id })
-            : createElement(
-                Item,
-                {
-                  key: item.id,
-                  id: item.id,
-                  variant: item.variant,
-                  disabled: item.disabled,
-                  onSelect: () => {
-                    hideBeforeSelect();
-                    item.onSelect();
+        createElement(Trigger, {
+          render: cloneElement(trigger as ReactElement<Record<string, unknown>>, triggerProps),
+        }),
+        createElement(
+          Content,
+          {
+            id,
+            className,
+            'aria-label': label,
+            sideOffset,
+            align,
+            ref: menuRef,
+            style: {
+              zIndex: 'var(--app-z-portal-local-menu)',
+              ...(instantHidden ? { display: 'none' } : null),
+            },
+            render: createElement('div', { className }),
+          },
+          items.map((item) =>
+            isSeparator(item)
+              ? createElement(Separator, { key: item.id, id: item.id })
+              : createElement(
+                  Item,
+                  {
+                    key: item.id,
+                    id: item.id,
+                    variant: item.variant,
+                    disabled: item.disabled,
+                    onSelect: () => {
+                      hideBeforeSelect();
+                      item.onSelect();
+                    },
+                    render: createElement('div', {
+                      className: item.className ?? itemClassName,
+                    }),
                   },
-                  render: createElement('div', {
-                    className: item.className ?? itemClassName,
-                  }),
-                },
-                item.label,
-              ),
+                  item.label,
+                ),
+          ),
         ),
       ),
     );
@@ -625,67 +642,71 @@ export function Menu({
   });
 
   return createElement(
-    Fragment,
-    null,
-    triggerElement,
-    open
-      ? createElement(
-          'div',
-          {
-            id,
-            ref: menuRef,
-            role: 'menu',
-            'aria-label': label,
-            'data-lenso-slot': 'menu-fallback',
-            className: [className, 'attach-menu-native'].filter(Boolean).join(' '),
-            style: fallbackAnchor || instantHidden
-              ? {
-                  ...(fallbackAnchor
-                    ? {
-                        ...fallbackMenuStyle(triggerRef.current, align, sideOffset),
-                        zIndex: 'var(--app-z-portal-local-menu)',
-                      }
-                    : null),
-                  ...(instantHidden ? { display: 'none' } : null),
-                }
-              : undefined,
-            onKeyDown: (event: { key: string }) => {
-              if (event.key !== 'Escape') return;
-              handleOpenChange(false, { reason: 'escape-key' });
-              triggerRef.current?.focus();
+    LensoBackendProvider,
+    { backend },
+    createElement(
+      Fragment,
+      null,
+      triggerElement,
+      open
+        ? createElement(
+            'div',
+            {
+              id,
+              ref: menuRef,
+              role: 'menu',
+              'aria-label': label,
+              'data-lenso-slot': 'menu-fallback',
+              className: [className, 'attach-menu-native'].filter(Boolean).join(' '),
+              style: fallbackAnchor || instantHidden
+                ? {
+                    ...(fallbackAnchor
+                      ? {
+                          ...fallbackMenuStyle(triggerRef.current, align, sideOffset),
+                          zIndex: 'var(--app-z-portal-local-menu)',
+                        }
+                      : null),
+                    ...(instantHidden ? { display: 'none' } : null),
+                  }
+                : undefined,
+              onKeyDown: (event: { key: string }) => {
+                if (event.key !== 'Escape') return;
+                handleOpenChange(false, { reason: 'escape-key' });
+                triggerRef.current?.focus();
+              },
             },
-          },
-          items.map((item, index) =>
-            isSeparator(item)
-              ? createElement('div', {
-                  key: item.id,
-                  id: item.id,
-                  role: 'separator',
-                  className: 'room-menu-sep',
-                })
-              : createElement(
-                  'button',
-                  {
+            items.map((item, index) =>
+              isSeparator(item)
+                ? createElement('div', {
                     key: item.id,
                     id: item.id,
-                    type: 'button',
-                    role: 'menuitem',
-                    className: item.className ?? itemClassName,
-                    disabled: item.disabled,
-                    'data-variant': item.variant,
-                    autoFocus: index === 0,
-                    onClick: () => {
-                      hideBeforeSelect();
-                      item.onSelect();
-                      handleOpenChange(false, { reason: 'item-press' });
-                      triggerRef.current?.focus();
+                    role: 'separator',
+                    className: 'room-menu-sep',
+                  })
+                : createElement(
+                    'button',
+                    {
+                      key: item.id,
+                      id: item.id,
+                      type: 'button',
+                      role: 'menuitem',
+                      className: item.className ?? itemClassName,
+                      disabled: item.disabled,
+                      'data-variant': item.variant,
+                      autoFocus: index === 0,
+                      onClick: () => {
+                        hideBeforeSelect();
+                        item.onSelect();
+                        handleOpenChange(false, { reason: 'item-press' });
+                        triggerRef.current?.focus();
+                      },
                     },
-                  },
-                  item.label,
-                ),
-          ),
-        )
-      : null,
+                    item.label,
+                  ),
+            ),
+          )
+        : null,
+    ),
   );
 }
 
