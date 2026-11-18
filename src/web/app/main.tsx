@@ -1,4 +1,11 @@
-import { StrictMode, useEffect } from 'react';
+import {
+  Component,
+  lazy,
+  StrictMode,
+  Suspense,
+  useEffect,
+  type ReactNode,
+} from 'react';
 import { createRoot, hydrateRoot } from 'react-dom/client';
 
 import '@lenso/tokens/styles.css';
@@ -14,8 +21,51 @@ import { AgentMemoryDialogHost } from '../features/memory/AgentMemoryDialogHost'
 import { ChatPage } from '../pages/ChatPage';
 import { HomePage } from '../pages/HomePage';
 import { JoinPage } from '../pages/JoinPage';
-import { PairPage } from '../pages/PairPage';
 import { SharePage } from '../pages/SharePage';
+
+/**
+ * `/pair` 只在直接访问或从首页跳转时使用；拆出入口 chunk 后，普通会话
+ * 启动不再下载配对页。PairPage 是纯 CSR 路由，不参与 SSR hydrate。
+ */
+const PairPage = lazy(() =>
+  import('../pages/PairPage').then((module) => ({ default: module.PairPage })),
+);
+
+function RouteFallback() {
+  return (
+    <main aria-busy="true">
+      <p className="muted" role="status">
+        正在加载页面…
+      </p>
+    </main>
+  );
+}
+
+/** 懒加载路由 chunk 失败时保留可操作页面，不让异常冒泡成空白应用。 */
+class RouteBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return (
+      <main>
+        <div className="share-head">
+          <h1>页面加载失败</h1>
+          <p className="muted">网络或静态资源暂不可用，请刷新后重试。</p>
+        </div>
+        <div className="row share-actions">
+          <button className="primary" type="button" onClick={() => window.location.reload()}>
+            刷新页面
+          </button>
+        </div>
+      </main>
+    );
+  }
+}
 
 /**
  * 应用入口。
@@ -63,7 +113,9 @@ function App({ bootstrap }: { bootstrap: SpaBootstrap | null }) {
   else page = <HomePage />;
   return (
     <>
-      {page}
+      <RouteBoundary>
+        <Suspense fallback={<RouteFallback />}>{page}</Suspense>
+      </RouteBoundary>
       {appRoute ? <TabUnreadBadge baseTitle={baseTitle} /> : null}
       <ConfirmHost />
       <AgentMemoryDialogHost />
