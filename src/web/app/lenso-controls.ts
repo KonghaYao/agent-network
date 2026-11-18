@@ -744,7 +744,18 @@ export type DisplayPrimitiveName =
   | 'ScrollShadow'
   | 'ScrollEdge';
 
-export type PrimitiveFallbackTag = 'div' | 'span' | 'hr' | 'nav' | 'progress' | 'kbd' | 'a';
+export type PrimitiveFallbackTag =
+  | 'div'
+  | 'span'
+  | 'hr'
+  | 'nav'
+  | 'progress'
+  | 'kbd'
+  | 'a'
+  | 'label'
+  | 'p'
+  | 'fieldset'
+  | 'legend';
 
 export type LazyPrimitiveProps = {
   name: DisplayPrimitiveName;
@@ -807,9 +818,11 @@ const LENSO_ONLY_PROPS = new Set([
   'min',
   'orientation',
   'xstyle',
+  'required',
+  'match',
 ]);
 
-function primitiveSlot(name: DisplayPrimitiveName) {
+function primitiveSlot(name: string) {
   return name.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase();
 }
 
@@ -974,3 +987,14 @@ export function ThemeScope({ className, ...props }: ComponentPropsWithRef<'div'>
   }, [theme]);
   return createElement('div', { ...props, className, 'data-theme': theme });
 }
+
+type FieldPartName = 'Label' | 'Description' | 'FieldError' | 'Fieldset' | 'FieldsetLegend';
+function fieldPrimitive(name: FieldPartName, tag: PrimitiveFallbackTag, fallbackDefaults?: Record<string, unknown>, lensoDefaults?: Record<string, unknown>) {
+  const slot = primitiveSlot(name); return (props: PrimitiveProps): ReactElement => {
+    const lenso = useLenso(); if (!lenso) return createElement(tag as 'p', nativePrimitiveProps(tag, slot, fallbackDefaults, props) as ComponentPropsWithRef<'p'>);
+    return createElement(lenso[name] as unknown as ComponentType<Record<string, unknown>>, { ...lensoDefaults, ...props, 'data-lenso-slot': props['data-lenso-slot'] ?? slot });
+  };
+}
+export const Label = fieldPrimitive('Label', 'label'), Description = fieldPrimitive('Description', 'p');
+export const FieldError = fieldPrimitive('FieldError', 'p', { role: 'alert' }, { match: true, role: 'alert' });
+export const Fieldset = fieldPrimitive('Fieldset', 'fieldset'), FieldsetLegend = fieldPrimitive('FieldsetLegend', 'legend');

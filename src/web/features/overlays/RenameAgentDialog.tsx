@@ -1,4 +1,4 @@
-import { Button, Input } from '../../app/lenso-controls';
+import { Button, Input, Label } from '../../app/lenso-controls';
 import { useEffect, useState, type FormEvent } from 'react';
 
 import { LIMITS } from '../../../contracts/limits';
@@ -82,8 +82,8 @@ export function RenameAgentDialog({
       }
     >
       <form id="rename-form" onSubmit={(event) => void submit(event)}>
-        <label className="field">
-          <span>Agent 新名称</span>
+        <div className="field">
+          <Label htmlFor="rename-input">Agent 新名称</Label>
           <Input
             id="rename-input"
             maxLength={LIMITS.actorNameMax}
@@ -91,7 +91,7 @@ export function RenameAgentDialog({
             value={name}
             onChange={(event) => setName(event.target.value)}
           />
-        </label>
+        </div>
         <p id="rename-status" className="form-error" role="status">
           {status}
         </p>

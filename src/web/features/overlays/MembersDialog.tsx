@@ -1,4 +1,4 @@
-import { Button, SearchInput, Select } from '../../app/lenso-controls';
+import { Button, FieldError, SearchInput, Select } from '../../app/lenso-controls';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 
@@ -348,9 +348,7 @@ export function MembersDialog({
             </p>
           ) : null}
           {error ? (
-            <p id="members-error" className="field-error" role="alert">
-              {error}
-            </p>
+            <FieldError id="members-error">{error}</FieldError>
           ) : null}
           <div className="row modal-actions members-actions">
             <span

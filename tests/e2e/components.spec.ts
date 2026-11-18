@@ -246,6 +246,8 @@ test.describe.serial('SPA 组件库与状态管理', () => {
     await expect(dialog).toBeVisible();
     await expect(dialog).toHaveAttribute('role', 'dialog');
     await expect(page.locator('#group-name-input')).toHaveAttribute('data-lenso-slot', 'input');
+    await expect(page.locator('label[for="group-name-input"]')).toBeVisible();
+    await expect(page.locator('label[for="group-search"]')).toBeVisible();
 
     await page.fill('#group-name-input', `弹窗群 ${Date.now()}`);
     await page.locator('#group-search').fill(nameB.slice(0, 4));
@@ -253,6 +255,9 @@ test.describe.serial('SPA 组件库与状态管理', () => {
     await expect(option).toBeVisible();
     await option.click();
     await expect(page.locator('#group-selection .spa-chip')).toHaveCount(1);
+    await expect(
+      page.locator('#group-selection').getByRole('button', { name: `移除 ${nameB}` }),
+    ).toBeVisible();
     await expect(page.locator('#group-contacts-count')).toContainText('已选 1 人');
 
     await page.locator('#group-create').click();

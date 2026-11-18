@@ -1,4 +1,4 @@
-import { Button, Input, Separator, Surface, Toolbar } from '../../app/lenso-controls';
+import { Button, EmptyState, FieldError, Input, Separator, Surface, Toolbar } from '../../app/lenso-controls';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useEffect, useMemo } from 'react';
 import { useForm } from 'react-hook-form';
@@ -176,9 +176,9 @@ export function MonitorPane({ open, onClose, monitor }: MonitorPaneProps) {
         </Toolbar>
       </form>
       {formState.errors.url ? (
-        <p id="monitor-url-error" className="field-error" role="alert">
+        <FieldError id="monitor-url-error">
           {formState.errors.url.message}
-        </p>
+        </FieldError>
       ) : null}
       <p id="monitor-status" className="monitor-status" role="status" aria-live="polite">
         {monitor.loading ? '正在读取…' : monitor.status}
@@ -209,7 +209,13 @@ export function MonitorPane({ open, onClose, monitor }: MonitorPaneProps) {
           background: '#fff',
         }}
       >
-        {!monitor.url ? <p id="monitor-empty" className="monitor-empty">暂无网页</p> : null}
+        {!monitor.url ? (
+          <div id="monitor-empty" className="monitor-empty">
+            <EmptyState style={{ padding: 0, color: 'inherit', fontSize: 'inherit' }}>
+              暂无网页
+            </EmptyState>
+          </div>
+        ) : null}
         <iframe
           id="monitor-frame"
           className="monitor-frame"

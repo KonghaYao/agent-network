@@ -127,11 +127,7 @@ export function ContactRequestsPanel({
 
   return (
     <section
-      id="contact-panel-requests"
       className="contact-panel contact-requests-panel"
-      role="tabpanel"
-      aria-labelledby="contact-tab-requests"
-      tabIndex={0}
       hidden={!active}
     >
       <p className="contact-request-summary">

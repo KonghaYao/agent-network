@@ -1,4 +1,5 @@
-import { Button } from '../../app/lenso-controls';
+import { Button, useLenso } from '../../app/lenso-controls';
+import { Tabs } from '../../app/lenso-tabs';
 import { useEffect, useState, type KeyboardEvent } from 'react';
 
 import { useContactRequestBadge } from '../../hooks/useContactRequests';
@@ -34,6 +35,7 @@ export function ContactRequestsDialog({
   const token = session.session?.token ?? null;
   const identityId = session.session?.identity.actor_id ?? null;
   const badge = useContactRequestBadge();
+  const lenso = useLenso();
   const [tab, setTab] = useState<ContactTab>('search');
 
   useEffect(() => {
@@ -49,7 +51,7 @@ export function ContactRequestsDialog({
   };
 
   const onTabKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    if (lenso || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
     event.preventDefault();
     const index = TABS.findIndex((entry) => entry.value === tab);
     let next = index;
@@ -77,56 +79,71 @@ export function ContactRequestsDialog({
         </div>
       }
     >
-      <div
-        className="contact-segments"
-        id="contact-segments"
-        role="tablist"
-        aria-label="添加好友分类"
-        onKeyDown={onTabKeyDown}
-      >
-        {TABS.map((entry) => {
-          const selected = tab === entry.value;
-          return (
-            <Button
-              key={entry.value}
-              id={entry.id}
-              type="button"
-              role="tab"
-              data-contact-tab={entry.value}
-              aria-selected={selected}
-              aria-controls={entry.panel}
-              tabIndex={selected ? 0 : -1}
-              onClick={() => setTab(entry.value)}
-            >
-              {entry.label}
-              {entry.value === 'requests' && badge.count > 0 ? (
-                <span id="contact-request-count" className="contact-count contact-tab-count">
-                  {badge.count}
-                  {badge.hasMore ? '+' : ''}
-                </span>
-              ) : null}
-            </Button>
-          );
-        })}
-      </div>
-      <div className="contact-panels">
-        {token && identityId ? (
-          <>
-            <ContactSearchPanel
-              token={token}
-              identityId={identityId}
-              active={tab === 'search'}
-              onAccepted={() => undefined}
-            />
-            <ContactRequestsPanel active={tab === 'requests'} onChanged={() => undefined} />
-            <ContactLinksPanel token={token} active={tab === 'more'} />
-          </>
-        ) : (
-          <p className="contact-request-empty" role="status">
-            浏览器身份尚未初始化，请稍后重试。
-          </p>
-        )}
-      </div>
+      <Tabs value={tab} onValueChange={(next) => setTab(next as ContactTab)}>
+        <div
+          className="contact-segments"
+          id="contact-segments"
+          onKeyDown={onTabKeyDown}
+        >
+          <Tabs.List aria-label="添加好友分类" xstyle={{ display: 'flex', width: '100%' }}>
+            {TABS.map((entry) => {
+              return (
+                <Tabs.Tab
+                  key={entry.value}
+                  id={entry.id}
+                  value={entry.value}
+                  data-contact-tab={entry.value}
+                  aria-controls={entry.panel}
+                >
+                  {entry.label}
+                  {entry.value === 'requests' && badge.count > 0 ? (
+                    <span id="contact-request-count" className="contact-count contact-tab-count">
+                      {badge.count}
+                      {badge.hasMore ? '+' : ''}
+                    </span>
+                  ) : null}
+                </Tabs.Tab>
+              );
+            })}
+          </Tabs.List>
+        </div>
+        <div className="contact-panels">
+          {token && identityId ? (
+            <>
+              <Tabs.Panel
+                value="search"
+                id="contact-panel-search"
+                aria-labelledby="contact-tab-search"
+              >
+                <ContactSearchPanel
+                  token={token}
+                  identityId={identityId}
+                  active={tab === 'search'}
+                  onAccepted={() => undefined}
+                />
+              </Tabs.Panel>
+              <Tabs.Panel
+                value="requests"
+                id="contact-panel-requests"
+                aria-labelledby="contact-tab-requests"
+              >
+                <ContactRequestsPanel active={tab === 'requests'} onChanged={() => undefined} />
+              </Tabs.Panel>
+              <Tabs.Panel
+                value="more"
+                id="contact-panel-more"
+                aria-labelledby="contact-tab-more"
+              >
+                <ContactLinksPanel token={token} active={tab === 'more'} />
+              </Tabs.Panel>
+            </>
+          ) : (
+            <p className="contact-request-empty" role="status">
+              浏览器身份尚未初始化，请稍后重试。
+            </p>
+          )}
+        </div>
+      </Tabs>
     </Modal>
   );
 }

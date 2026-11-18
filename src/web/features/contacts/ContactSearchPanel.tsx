@@ -1,4 +1,4 @@
-import { Button, SearchInput, TextArea } from '../../app/lenso-controls';
+import { Button, Description, Label, SearchInput, TextArea } from '../../app/lenso-controls';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 
@@ -157,18 +157,14 @@ export function ContactSearchPanel({
 
   return (
     <section
-      id="contact-panel-search"
       className="contact-panel contact-search-panel"
-      role="tabpanel"
-      aria-labelledby="contact-tab-search"
-      tabIndex={0}
       hidden={!active}
     >
-      <p className="contact-search-hint">
+      <Description id="contact-search-hint" className="contact-search-hint">
         输入完整或部分用户名；可搜索人类，以及已在你群聊、管理列表或好友中的 Agent。遇到同名用户时，请核对完整 ID 后再发送邀请。
-      </p>
+      </Description>
       <form id="contact-search-form" className="contact-search-form" onSubmit={(event) => void search(event)}>
-        <label htmlFor="contact-search-input">用户名</label>
+        <Label htmlFor="contact-search-input">用户名</Label>
         <div className="contact-search-controls">
           <div className="contact-search-field">
             <SearchInput
@@ -176,6 +172,7 @@ export function ContactSearchPanel({
               maxLength={LIMITS.actorNameMax}
               autoComplete="off"
               placeholder="输入用户名"
+              aria-describedby="contact-search-hint"
               value={query}
               onChange={(event) => {
                 setQuery(event.target.value);
@@ -237,7 +234,7 @@ export function ContactSearchPanel({
           <p className="contact-search-confirm-hint">请核对目标 ID，确认无误后发送好友邀请。</p>
           <strong id="contact-search-confirm-name">{selected.actor.name}</strong>
           <code id="contact-search-confirm-id">{selected.actor.actor_id}</code>
-          <label htmlFor="contact-search-message">申请附言（可选）</label>
+          <Label htmlFor="contact-search-message">申请附言（可选）</Label>
           <TextArea
             id="contact-search-message"
             rows={2}

@@ -1,4 +1,4 @@
-import { Button, TextArea } from '../../app/lenso-controls';
+import { Button, FieldError, Label, TextArea } from '../../app/lenso-controls';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
@@ -88,25 +88,25 @@ export function AnnouncementDialog({
       }
     >
       <form id="announcement-form" onSubmit={(event) => void submit(event)}>
-        <label className="field">
-          <span>公告正文</span>
+        <div className="field">
+          <Label htmlFor="announcement-input">公告正文</Label>
           <TextArea
             id="announcement-input"
             rows={6}
             maxLength={LIMITS.roomAnnouncementBytes * 2}
             placeholder="留空表示清除公告"
+            aria-describedby={errors.announcement ? 'announcement-error' : undefined}
+            aria-invalid={errors.announcement ? true : undefined}
             {...register('announcement')}
           />
-        </label>
+        </div>
         {errors.announcement ? (
-          <p id="announcement-error" className="field-error">
+          <FieldError id="announcement-error">
             {errors.announcement.message}
-          </p>
+          </FieldError>
         ) : null}
         {submitError ? (
-          <p id="announcement-error" className="field-error" role="alert">
-            {submitError}
-          </p>
+          <FieldError id="announcement-error">{submitError}</FieldError>
         ) : null}
       </form>
     </Modal>

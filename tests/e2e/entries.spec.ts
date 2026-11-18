@@ -478,7 +478,28 @@ test.describe('SPA 剩余入口', () => {
     await login(page, base, owner.token);
     await page.locator('#contact-requests').click();
     await expect(page.locator('#contact-modal')).toBeVisible();
-    await expect(page.locator('#contact-tab-search')).toHaveAttribute('aria-selected', 'true');
+    const searchTab = page.locator('#contact-tab-search');
+    await expect(searchTab).toHaveAttribute('role', 'tab');
+    await expect(searchTab).toHaveAttribute('aria-controls', 'contact-panel-search');
+    await expect(searchTab).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#contact-panel-search')).toHaveAttribute('role', 'tabpanel');
+    await expect(page.locator('#contact-panel-search')).toHaveAttribute(
+      'aria-labelledby',
+      'contact-tab-search',
+    );
+    await searchTab.focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(page.locator('#contact-tab-requests')).toBeFocused();
+    await expect(page.locator('#contact-tab-requests')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#contact-panel-requests')).toBeVisible();
+    await page.keyboard.press('End');
+    await expect(page.locator('#contact-tab-more')).toBeFocused();
+    await expect(page.locator('#contact-tab-more')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#contact-panel-more')).toBeVisible();
+    await page.keyboard.press('Home');
+    await expect(searchTab).toBeFocused();
+    await expect(searchTab).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#contact-panel-search')).toBeVisible();
     await expect(page.locator('#contact-search-input')).toHaveAttribute(
       'data-lenso-slot',
       'search-field-input',
@@ -660,6 +681,8 @@ test.describe('SPA 剩余入口', () => {
     await expect(page.locator('#report-modal')).toBeVisible();
 
     const category = page.locator('#report-category');
+    await expect(page.locator('label[for="report-category"]')).toBeVisible();
+    await expect(page.locator('label[for="report-note"]')).toBeVisible();
     await expect(category).toHaveAttribute('data-lenso-slot', 'select-trigger');
     await expect(category).toHaveAttribute('role', 'combobox');
     await expect(category).toContainText('其他');
@@ -900,6 +923,9 @@ test.describe('SPA 剩余入口', () => {
     await expect(page.locator('#members-invites-status')).toContainText('已复制邀请链接');
 
     const policyJoin = page.locator('#group-policy-join');
+    await expect(page.locator('#group-policies fieldset')).toHaveCount(1);
+    await expect(page.locator('#group-policies legend')).toHaveText('群策略设置');
+    await expect(page.locator('label[for="group-policy-join"]')).toBeVisible();
     await expect(policyJoin).toHaveAttribute('data-lenso-slot', 'select-trigger');
     await expect(policyJoin).toHaveAttribute('role', 'combobox');
     await expect(policyJoin).toContainText('直接加入');
