@@ -7,9 +7,16 @@
  * hash 或房间标题造成横向溢出。
  */
 export const MEMORY_STYLE = `
-  .memory-drawer { position: fixed; inset: 0; width: 100vw; height: 100dvh;
-    max-width: 100vw; max-height: 100dvh; margin: 0; padding: 0; border: 0;
-    background: transparent; color: var(--wx-text); overflow: hidden; }
+  .memory-drawer { margin: 0; padding: 0; border: 0; color: var(--wx-text); }
+  .memory-drawer[data-memory-shell='radix'] { position: fixed; inset: 0; width: 100vw; height: 100dvh;
+    max-width: 100vw; max-height: 100dvh; background: transparent; overflow: hidden; }
+  /* Lenso Drawer 给 side 内容加 8/12px 边缘 margin 并把高度扣掉两侧 inset；
+     应用抽屉要求贴边满高，因此统一清零 margin 并用 100% 高度填满 viewport。 */
+  .memory-drawer[data-memory-shell='lenso'] { position: relative; inset: 0; width: min(480px, 100vw) !important;
+    height: 100% !important; max-width: 100vw; max-height: 100%; margin: 0 !important;
+    background: transparent; overflow: hidden; border-radius: 0; }
+  .spa-drawer-overlay { position: fixed; inset: 0; z-index: var(--app-z-memory-overlay);
+    background: rgb(0 0 0 / 32%); }
   .memory-drawer::backdrop { background: rgb(0 0 0 / 32%); }
   .memory-card { position: absolute; top: 0; right: 0; display: flex;
     flex-direction: column; width: min(480px, 100vw); height: 100%;
@@ -67,17 +74,21 @@ export const MEMORY_STYLE = `
   /* Lenso Tabs 会覆盖根 className；用稳定的 data-memory-tab 属性承载本地 tab
      视觉。StyleX 用高特异性选择器保护属性，因此与现有 Select 覆盖一致使用
      !important，确保本地尺寸/颜色和选中态不被 Lenso 指示层覆盖。 */
-  #memory-tabs [data-memory-tab] { position: relative; z-index: 4 !important;
+  #memory-drawer #memory-tabs [data-memory-tab] { position: relative; z-index: 4 !important;
     width: auto !important; min-width: 0 !important; height: 36px !important;
     min-height: 36px !important; padding: 5px 10px !important;
     border: 1px solid transparent !important; border-radius: 999px !important;
     background: var(--wx-search) !important; color: var(--wx-text) !important;
     font-size: 12px !important; font-weight: 400 !important; cursor: pointer; }
-  #memory-tabs [data-memory-tab]:hover { background: var(--wx-hover) !important; }
-  #memory-tabs [data-memory-tab][aria-selected="true"] {
+  #memory-drawer #memory-tabs [data-memory-tab]:hover { background: var(--wx-hover) !important; }
+  #memory-drawer #memory-tabs [data-memory-tab][aria-selected="true"] {
     background: var(--wx-green) !important; border-color: var(--wx-green) !important;
     color: var(--lenso-label-on-tint) !important; }
-  #memory-tabs [data-memory-tab]:focus-visible {
+  #memory-drawer[data-memory-shell='lenso'] #memory-tabs [data-memory-tab] { color: var(--wx-text) !important; }
+  #memory-drawer[data-memory-shell='lenso'] #memory-tabs [data-memory-tab][aria-selected="true"] {
+    background: var(--wx-green) !important; background-color: var(--wx-green) !important;
+    color: #1f2937 !important; }
+  #memory-drawer #memory-tabs [data-memory-tab]:focus-visible {
     outline: 2px solid var(--wx-green) !important; outline-offset: 2px !important; }
   .memory-panel { padding: 12px 14px 22px; }
   .memory-panel[hidden] { display: none; }
@@ -180,10 +191,11 @@ export const MEMORY_STYLE = `
     background: var(--wx-danger-tint); color: var(--wx-danger-text); }
   .memory-error-card.is-danger strong { color: var(--wx-danger-text); }
   @media (max-width: 759px) {
+    .memory-drawer[data-memory-shell='lenso'] { inset: 0; width: 100% !important; height: 100% !important; }
     .memory-card { width: 100%; border-left: 0; }
     .memory-panel { padding-bottom: calc(22px + env(safe-area-inset-bottom)); }
     .memory-tabs { gap: 3px; }
-    #memory-tabs [data-memory-tab] { flex: 1 1 auto !important;
+    #memory-drawer #memory-tabs [data-memory-tab] { flex: 1 1 auto !important;
       padding-left: 6px !important; padding-right: 6px !important; }
   }
 `;

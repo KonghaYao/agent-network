@@ -277,6 +277,171 @@ test.describe('Agent 记忆弹窗', () => {
     });
   });
 
+  test('Memory 右侧 Drawer：Lenso 路径保留壳契约、几何、焦点、滚动锁与 axe', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 844 });
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await enableAgentMemory(page);
+    await login(page, base, agentToken);
+    await page.locator('#memory-open').focus();
+    await page.locator('#memory-open').click();
+    const drawer = page.locator('#memory-drawer');
+    await expect(drawer).toBeVisible({ timeout: 15_000 });
+    await expect(drawer).toHaveAttribute('data-memory-shell', 'lenso');
+    await expect(drawer).toHaveAttribute('role', 'dialog');
+    await expect(drawer).toHaveAttribute('aria-labelledby', 'memory-title');
+    await expect(page.locator('#memory-title')).toHaveText('记忆');
+    await expect(page.locator('.spa-drawer-overlay')).toBeVisible();
+
+    const geometry = await drawer.evaluate((element) => {
+      const rect = (node: Element | null) => {
+        if (!node) return null;
+        const box = node.getBoundingClientRect();
+        return { x: box.x, y: box.y, width: box.width, height: box.height, right: box.right, bottom: box.bottom };
+      };
+      return {
+        drawer: rect(element),
+        card: rect(element.querySelector('.memory-card')),
+        overlay: rect(document.querySelector('.spa-drawer-overlay')),
+        close: rect(element.querySelector('#memory-close')),
+        overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      };
+    });
+    const desktop = geometry.drawer!;
+    expect(desktop.x).toBeGreaterThanOrEqual(799);
+    expect(desktop.x).toBeLessThanOrEqual(801);
+    expect(desktop.y).toBeGreaterThanOrEqual(-0.5);
+    expect(desktop.y).toBeLessThanOrEqual(0.5);
+    expect(desktop.width).toBeGreaterThanOrEqual(470);
+    expect(desktop.width).toBeLessThanOrEqual(481);
+    expect(desktop.height).toBeGreaterThanOrEqual(843);
+    expect(desktop.height).toBeLessThanOrEqual(845);
+    expect(desktop.right).toBeGreaterThanOrEqual(1279);
+    expect(desktop.right).toBeLessThanOrEqual(1280);
+    expect(desktop.bottom).toBeGreaterThanOrEqual(843.5);
+    expect(desktop.bottom).toBeLessThanOrEqual(844.5);
+    expect(geometry.card).not.toBeNull();
+    expect(geometry.card!.x).toBeGreaterThanOrEqual(799);
+    expect(geometry.card!.right).toBeLessThanOrEqual(1280);
+    expect(geometry.card!.height).toBeGreaterThanOrEqual(843);
+    expect(geometry.card!.bottom).toBeLessThanOrEqual(844);
+    expect(geometry.overlay).toEqual({ x: 0, y: 0, width: 1280, height: 844, right: 1280, bottom: 844 });
+    expect(geometry.close).not.toBeNull();
+    expect(geometry.close!.x).toBeGreaterThanOrEqual(0);
+    expect(geometry.close!.y).toBeGreaterThanOrEqual(0);
+    expect(geometry.close!.right).toBeLessThanOrEqual(1280);
+    expect(geometry.close!.bottom).toBeLessThanOrEqual(844);
+    expect(geometry.overflow).toBeLessThanOrEqual(1);
+    await expect(page.locator('[data-memory-tab="context"]')).toBeVisible();
+    await page.locator('[data-memory-tab="context"]').click();
+    await expect(page.locator('#memory-panel-context')).toBeVisible();
+    await page.locator('#memory-recall-query').focus();
+    await page.keyboard.press('Escape');
+    await expect(drawer).toBeHidden();
+    await expect(page.locator('#memory-open')).toBeFocused();
+
+    await page.locator('#memory-open').click();
+    await expect(drawer).toBeVisible({ timeout: 15_000 });
+    const violations = await new AxeBuilder({ page })
+      .include('#memory-drawer')
+      .analyze();
+    expect(violations.violations.filter((item) => item.impact === 'critical' || item.impact === 'serious')).toEqual([]);
+
+    await page.keyboard.press('Escape');
+    await expect(drawer).toBeHidden();
+    await expect(page.locator('#memory-open')).toBeFocused();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.locator('#memory-open').click();
+    await expect(drawer).toBeVisible({ timeout: 15_000 });
+    const mobileGeometry = await drawer.evaluate((element) => {
+      const rect = (node: Element | null) => {
+        if (!node) return null;
+        const box = node.getBoundingClientRect();
+        return { x: box.x, y: box.y, width: box.width, height: box.height, right: box.right, bottom: box.bottom };
+      };
+      return {
+        drawer: rect(element),
+        card: rect(element.querySelector('.memory-card')),
+        overlay: rect(document.querySelector('.spa-drawer-overlay')),
+        close: rect(element.querySelector('#memory-close')),
+        background: getComputedStyle(element.querySelector<HTMLElement>('.memory-card')!).backgroundColor,
+      };
+    });
+    const mobile = mobileGeometry.drawer!;
+    expect(mobile.x).toBeGreaterThanOrEqual(-0.5);
+    expect(mobile.x).toBeLessThanOrEqual(0.5);
+    expect(mobile.y).toBeGreaterThanOrEqual(-0.5);
+    expect(mobile.y).toBeLessThanOrEqual(0.5);
+    expect(mobile.width).toBeGreaterThanOrEqual(389.5);
+    expect(mobile.width).toBeLessThanOrEqual(390.5);
+    expect(mobile.height).toBeGreaterThanOrEqual(843.5);
+    expect(mobile.height).toBeLessThanOrEqual(844.5);
+    expect(mobile.right).toBeGreaterThanOrEqual(389.5);
+    expect(mobile.right).toBeLessThanOrEqual(390.5);
+    expect(mobile.bottom).toBeGreaterThanOrEqual(843.5);
+    expect(mobile.bottom).toBeLessThanOrEqual(844.5);
+    expect(mobileGeometry.card).not.toBeNull();
+    expect(mobileGeometry.card!.x).toBeGreaterThanOrEqual(-0.5);
+    expect(mobileGeometry.card!.y).toBeGreaterThanOrEqual(-0.5);
+    expect(mobileGeometry.card!.right).toBeLessThanOrEqual(390.5);
+    expect(mobileGeometry.card!.bottom).toBeLessThanOrEqual(844.5);
+    expect(mobileGeometry.overlay).toEqual({ x: 0, y: 0, width: 390, height: 844, right: 390, bottom: 844 });
+    const close = mobileGeometry.close!;
+    expect(close.x).toBeGreaterThanOrEqual(0);
+    expect(close.y).toBeGreaterThanOrEqual(0);
+    expect(close.right).toBeLessThanOrEqual(390);
+    expect(close.bottom).toBeLessThanOrEqual(844);
+    await expect(page.locator('#memory-close')).toBeInViewport();
+    expect(mobileGeometry.background).not.toBe('rgba(0, 0, 0, 0)');
+    await page.locator('#memory-close').click();
+    await expect(drawer).toBeHidden();
+    await expect(page.locator('#memory-open')).toBeFocused();
+  });
+
+  for (const mode of ['blocked', 'delayed'] as const) {
+    test(`Memory Drawer ${mode}：本次打开锁定 Radix，关闭重开升级`, async ({ page }) => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      let intercepted = 0;
+      await page.route('**/assets/index-*.js', async (route) => {
+        intercepted += 1;
+        if (mode === 'blocked') return route.abort('failed');
+        await gate;
+        await route.continue();
+      });
+      try {
+        await login(page, base, agentToken);
+        await page.locator('#memory-open').focus();
+        await page.locator('#memory-open').click();
+        const drawer = page.locator('#memory-drawer');
+        await expect(drawer).toBeVisible({ timeout: 15_000 });
+        await expect(drawer).toHaveAttribute('data-memory-shell', 'radix');
+        await drawer.evaluate((node) => {
+          const probe = window as unknown as { __memoryDrawerNode?: Element; __memoryDrawerFocus?: Element | null };
+          probe.__memoryDrawerNode = node;
+          probe.__memoryDrawerFocus = document.activeElement;
+        });
+        if (mode === 'delayed') {
+          release();
+          await expect.poll(() => page.locator('[data-lenso-slot="button"]').count()).toBeGreaterThan(0);
+          expect(await page.evaluate(() => {
+            const probe = window as unknown as { __memoryDrawerNode?: Element; __memoryDrawerFocus?: Element | null };
+            return Boolean(probe.__memoryDrawerNode?.isConnected) && probe.__memoryDrawerFocus === document.activeElement;
+          })).toBe(true);
+          await expect(drawer).toHaveAttribute('data-memory-shell', 'radix');
+        }
+        expect(intercepted).toBeGreaterThan(0);
+        await page.keyboard.press('Escape');
+        await expect(drawer).toBeHidden();
+        await expect(page.locator('#memory-open')).toBeFocused();
+        await page.locator('#memory-open').click();
+        await expect(drawer).toBeVisible({ timeout: 15_000 });
+        if (mode === 'delayed') await expect(drawer).toHaveAttribute('data-memory-shell', 'lenso');
+      } finally {
+        release?.();
+      }
+    });
+  }
+
   test('Memory 三个下拉使用 Lenso Select，保留空值 option 与提交值', async ({ page }) => {
     const calls: { name: string; args: Record<string, unknown> }[] = [];
     await page.route('**/mcp', async (route) => {
