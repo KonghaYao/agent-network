@@ -17,6 +17,7 @@ export const FILES_STYLE = `
     min-height: 0; display: flex; flex-direction: column;
     background: var(--wx-sidebar); border-left: 1px solid var(--wx-line); }
   .files-pane[hidden] { display: none; }
+  .files-resizer { display: none; }
   .files-list-view { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
   .files-list-view[hidden] { display: none; }
   .file-item[data-selected="true"] { background: var(--wx-hover); box-shadow: inset 3px 0 var(--wx-green); }
@@ -167,6 +168,15 @@ export const FILES_STYLE = `
   }
 
   @media (min-width: 1200px) {
+    .files-pane { position: relative; }
+    /* 命中区只向聊天侧扩展，预览正文与滚动条不被手柄覆盖。 */
+    .files-resizer { display: block; position: absolute; left: -10px; top: 0; bottom: 0;
+      width: 10px; z-index: var(--app-z-drop); cursor: col-resize; touch-action: none; }
+    .files-resizer::before { content: ""; position: absolute; right: 0; top: 0; bottom: 0;
+      width: 1px; background: var(--wx-line); }
+    .files-resizer:hover::before, .files-resizer:focus-visible::before {
+      background: var(--wx-green); }
+    .files-resizer:focus-visible { outline: 2px solid var(--wx-green); outline-offset: -2px; }
     .files-backdrop { display: none !important; }
     /* 聊天区与右侧文件栏默认 50/50，可拖动分隔条调整；宽度变量由 React 岛写入。 */
     .chat-pane { flex: 1 1 auto; min-width: var(--app-chat-min); }

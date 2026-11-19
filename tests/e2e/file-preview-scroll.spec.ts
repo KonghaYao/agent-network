@@ -239,6 +239,44 @@ async function expectPreviewBodyScrolls(page: Page): Promise<void> {
   await expect(page.locator('#file-preview-download')).toBeVisible();
 }
 
+async function expectFilesResizerDrags(page: Page, state: string): Promise<void> {
+  const handle = page.locator('#files-resizer');
+  await expect(handle).toBeVisible();
+  const before = await handle.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const pane = document.querySelector('#files-pane')!.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    return {
+      rect: rect.toJSON(), x, y, width: pane.width,
+      hit: element.contains(document.elementFromPoint(x, y)),
+      boundaryHit: element.contains(document.elementFromPoint(pane.left, y)),
+      zIndex: getComputedStyle(element).zIndex,
+    };
+  });
+  expect(before.rect.width).toBeGreaterThanOrEqual(8);
+  expect(before.rect.width).toBeLessThanOrEqual(12);
+  expect(before.hit).toBe(true);
+  expect(before.boundaryHit).toBe(true);
+  await page.mouse.move(before.x, before.y);
+  await page.mouse.down();
+  await page.mouse.move(before.x - 120, before.y, { steps: 20 });
+  await page.mouse.up();
+  const width = await page.locator('#files-pane').evaluate((element) => element.getBoundingClientRect().width);
+  expect(width).toBeGreaterThan(before.width + 50);
+  console.log(JSON.stringify({ state, ...before, widthAfterDrag: width }));
+
+  // 向右恢复实际增量，覆盖指针经过 HTML iframe 时仍持有拖拽的路径。
+  const moved = await handle.boundingBox();
+  if (!moved) throw new Error('文件栏手柄不可见');
+  await page.mouse.move(moved.x + moved.width / 2, before.y);
+  await page.mouse.down();
+  await page.mouse.move(before.x, before.y, { steps: 20 });
+  await page.mouse.up();
+  await expect.poll(() => page.locator('#files-pane').evaluate((element) => element.getBoundingClientRect().width))
+    .toBeCloseTo(before.width, 0);
+}
+
 test.describe('file preview scroll', () => {
   let base = '';
   let humanToken = '';
@@ -295,6 +333,38 @@ test.describe('file preview scroll', () => {
       }
     }, humanToken);
   });
+
+  for (const extension of ['md', 'html']) {
+    test(`right resizer remains draggable in list and ${extension} preview`, async ({ page }) => {
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.goto(`${base}/c/${roomId}`);
+      await expect(page.locator('#files-pane')).toBeVisible();
+      const fileName = `resizer-${Date.now()}.${extension}`;
+      await page.locator('#files-input').setInputFiles({
+        name: fileName,
+        mimeType: extension === 'md' ? 'text/markdown' : 'text/html',
+        buffer: Buffer.from(extension === 'md' ? longMarkdown('拖拽预览') : '<h1>拖拽预览</h1><p>HTML 预览</p>'),
+      });
+      const item = page.locator('#files-list .file-item').filter({ hasText: fileName });
+      await expect(item).toBeVisible({ timeout: 15_000 });
+      await expectFilesResizerDrags(page, `${extension}:list`);
+      await item.getByRole('button', { name: '预览', exact: true }).click();
+      const content = page.locator(extension === 'md' ? '#file-preview-body h1' : '#file-preview-body iframe');
+      await expect(content).toBeVisible();
+      await expectFilesResizerDrags(page, `${extension}:preview`);
+      if (extension === 'md') await expectPreviewBodyScrolls(page);
+      else await expect(content).toHaveAttribute('sandbox', '');
+      await page.locator('#file-preview-back').click();
+      await expect(item).toBeVisible();
+      await expectFilesResizerDrags(page, `${extension}:returned`);
+      const handle = page.locator('#files-resizer');
+      await handle.focus();
+      await page.keyboard.press('ArrowLeft');
+      await expect(handle).toHaveAttribute('aria-valuenow', '370');
+      await page.keyboard.press('ArrowRight');
+      await expect(handle).toHaveAttribute('aria-valuenow', '360');
+    });
+  }
 
   test('files pane keeps long markdown and source views scrollable', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
@@ -468,6 +538,12 @@ test.describe('file preview scroll', () => {
       await page.locator('#files-toggle').click();
       await expect(page.locator('#files-pane')).toBeVisible();
 
+      await expect(page.locator('#files-resizer, .spa-resizer, .pane-resizer').filter({ visible: true })).toHaveCount(0);
+      await expect(page.locator('.chat-pane, .sidebar').filter({ visible: true })).toHaveCount(0);
+      const paneBox = await page.locator('#files-pane').boundingBox();
+      expect(paneBox?.x).toBe(0);
+      expect(paneBox?.width).toBe(390);
+
       const fileName = `mobile-long-${Date.now()}.md`;
       await page.locator('#files-input').setInputFiles({
         name: fileName,
@@ -483,6 +559,8 @@ test.describe('file preview scroll', () => {
 
       await expect(page.locator('#file-preview[role="dialog"]')).toBeVisible();
       await expect(page.locator('#file-preview-pane')).toHaveCount(0);
+      await expect(page.locator('#files-resizer, .spa-resizer, .pane-resizer').filter({ visible: true })).toHaveCount(0);
+      await expect(page.locator('.chat-pane, .sidebar').filter({ visible: true })).toHaveCount(0);
       const body = page.locator('#file-preview-body');
       const geometry = await previewGeometry(page);
       expect(geometry.scrollHeight).toBeGreaterThan(geometry.clientHeight + 100);

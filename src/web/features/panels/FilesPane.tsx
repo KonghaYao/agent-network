@@ -8,7 +8,7 @@ import {
   Surface,
   Toolbar,
 } from '../../app/lenso-controls';
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type DragEvent } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties, type DragEvent } from 'react';
 
 import type { RoomFileItem } from '../../lib/files-ui';
 import {
@@ -85,6 +85,23 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, preview, onO
   const uploadRunning = useRef(false);
   const deleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const statusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const paneRef = useRef<HTMLElement>(null);
+  const resizeStart = useRef<{ x: number; width: number } | null>(null);
+  const [paneWidth, setPaneWidth] = useState<number | null>(null);
+
+  const resizePane = (width: number) => {
+    const pane = paneRef.current;
+    const chat = pane?.previousElementSibling;
+    if (!pane || !(chat instanceof HTMLElement)) return;
+    const style = getComputedStyle(pane);
+    const minimum = Number.parseFloat(style.minWidth);
+    const maximum = Math.min(
+      Number.parseFloat(style.maxWidth),
+      pane.getBoundingClientRect().width + chat.getBoundingClientRect().width -
+        Number.parseFloat(getComputedStyle(chat).minWidth),
+    );
+    setPaneWidth(Math.max(minimum, Math.min(maximum, width)));
+  };
 
   const showStatus = useCallback((text: string, options: { error?: boolean; transient?: boolean } = {}) => {
     if (statusTimer.current) clearTimeout(statusTimer.current);
@@ -259,7 +276,33 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, preview, onO
 
   return (
     <>
-      <aside className="files-pane" id="files-pane" aria-label="房间文件" hidden={!open}>
+      <aside ref={paneRef} className="files-pane" id="files-pane" aria-label="房间文件" hidden={!open}
+        style={paneWidth === null ? undefined : { '--app-pane-width': `${paneWidth}px` } as CSSProperties}>
+        <div id="files-resizer" className="files-resizer" role="separator" tabIndex={0}
+          aria-label="调整文件栏宽度" aria-orientation="vertical" aria-controls="files-pane"
+          aria-valuenow={paneWidth ?? Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--app-pane-width'))}
+          onPointerDown={(event) => {
+            if (event.button !== 0) return;
+            event.preventDefault();
+            event.currentTarget.focus();
+            event.currentTarget.setPointerCapture(event.pointerId);
+            resizeStart.current = { x: event.clientX, width: paneRef.current!.getBoundingClientRect().width };
+          }}
+          onPointerMove={(event) => {
+            const start = resizeStart.current;
+            if (start) resizePane(start.width + start.x - event.clientX);
+          }}
+          onPointerUp={(event) => {
+            resizeStart.current = null;
+            event.currentTarget.releasePointerCapture(event.pointerId);
+          }}
+          onLostPointerCapture={() => { resizeStart.current = null; }}
+          onKeyDown={(event) => {
+            if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+            event.preventDefault();
+            resizePane(paneRef.current!.getBoundingClientRect().width + (event.key === 'ArrowLeft' ? 10 : -10));
+          }}
+        />
         <header className="files-head">
           <Toolbar
             aria-label="文件操作"
