@@ -439,6 +439,12 @@ export function ChatPage({ roomId }: ChatPageProps) {
   const loadingShell = !ready && chat.status !== 'error';
   const filesRequested = desktop ? filesDesktopOpen : overlayPane === 'files';
   const filesVisible = ready && filesRequested;
+  // 用户是否仍希望文件栏打开：断点只改变呈现方式，不改变这个意图。
+  // 桌面缩窄到平板/移动后 overlayPane 为空，但 filesDesktopOpen 仍保留打开状态；
+  // 主动关闭文件栏/toggle 监控时该值会同步为 false。
+  const filesIntentOpen = desktop
+    ? filesDesktopOpen
+    : overlayPane === 'files' || (overlayPane === null && filesDesktopOpen);
   // 房间读取失败时不再显示骨架，避免错误页被永久占位；就绪前仍按最终宽度占位。
   const filesShellVisible = filesRequested && chat.status !== 'error';
   const monitorVisible =
@@ -506,17 +512,18 @@ export function ChatPage({ roomId }: ChatPageProps) {
   }, [desktop]);
 
   // 视口离开内联右栏断点时，将正在查看的文档移交给原有弹窗。
-  // 文件栏已隐藏时不得移交：那只是残留的 panePreviewFile，不能凭空弹出 modal。
+  // 不能直接看渲染后的 filesVisible：断点收窄会让它变为 false，但用户并没有关闭文件栏。
+  // 只有用户意图也关闭文件栏时才不移交，避免隐藏文件栏后的残留预览凭空弹出 modal。
   useEffect(() => {
-    if (desktop || !filesVisible || !panePreviewFile) return;
+    if (desktop || !filesIntentOpen || !panePreviewFile) return;
     setPreviewFile(panePreviewFile);
     setPanePreviewFile(null);
-  }, [desktop, filesVisible, panePreviewFile]);
+  }, [desktop, filesIntentOpen, panePreviewFile]);
 
-  // 文件栏不可见时内联预览不应继续存在，覆盖关闭、监控切换与跨断点等所有路径。
+  // 用户主动隐藏文件栏时内联预览不应继续存在；断点导致的不可见不算隐藏。
   useEffect(() => {
-    if (!filesVisible) setPanePreviewFile(null);
-  }, [filesVisible]);
+    if (!filesIntentOpen) setPanePreviewFile(null);
+  }, [filesIntentOpen]);
 
   const toggleFiles = useCallback(() => {
     if (!ready) return;

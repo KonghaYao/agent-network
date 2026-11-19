@@ -702,6 +702,8 @@ test.describe('SPA Chat file cards', () => {
     await openPreview();
     await page.locator('#files-toggle').click();
     await page.setViewportSize({ width: 390, height: 844 });
+    // 先等移动布局生效，避免 dialog 尚未挂载时 0 计数误判。
+    await expect(page.locator('.sidebar')).toHaveCount(0);
     await expect(page.locator('#file-preview[role="dialog"]')).toHaveCount(0);
 
     // 监控 toggle 关闭文件栏同样清除预览。
@@ -717,6 +719,62 @@ test.describe('SPA Chat file cards', () => {
     await page.locator('#files-toggle').click();
     await expect(page.locator('#files-list')).toBeVisible();
     await expect(page.locator('#file-preview-pane')).toHaveCount(0);
+  });
+
+  test('narrowing hands an open pane preview to the modal', async ({ page }) => {
+    const stamp = Date.now();
+    const docs = [];
+    for (const doc of [
+      {
+        name: `narrow-preview-${stamp}.md`,
+        mimeType: 'text/markdown',
+        body: Buffer.from('# 缩窄预览\n\n保留正文'),
+      },
+      {
+        name: `narrow-preview-${stamp}.html`,
+        mimeType: 'text/html',
+        body: Buffer.from('<h1>缩窄预览</h1>'),
+      },
+    ]) {
+      docs.push({ ...doc, file: await seedRoomFile(base, humanToken, directRoomId, doc) });
+    }
+
+    for (const width of [900, 390]) {
+      for (const doc of docs) {
+        await page.setViewportSize({ width: 1280, height: 800 });
+        await page.goto(`${base}/c/${directRoomId}`);
+        await expect(page.locator('#files-pane')).toBeVisible();
+        const item = page.locator(`#files-list .file-item[data-file-id="${doc.file.fileId}"]`);
+        await expect(item).toBeVisible({ timeout: 15_000 });
+        await item.locator('.file-row').click();
+        await expect(page.locator('#files-pane #file-preview-pane')).toBeVisible();
+
+        // Files 仍处于打开意图，断点只改变承载方式：预览必须移交弹窗。
+        await page.setViewportSize({ width, height: 844 });
+        if (width === 390) {
+          // 先等移动布局生效，再断言 dialog，避免即时空转。
+          await expect(page.locator('.sidebar')).toHaveCount(0);
+        } else {
+          await expect(page.locator('#files-pane')).toHaveCount(0);
+        }
+        const dialog = page.locator('#file-preview[role="dialog"]');
+        await expect(dialog).toBeVisible();
+        await expect(dialog.locator('#file-preview-title')).toHaveText(doc.name);
+        await expect(page.locator('#file-preview-pane')).toHaveCount(0);
+        if (doc.mimeType === 'text/html') {
+          await expect(page.frameLocator('#file-preview-body iframe').locator('h1')).toHaveText('缩窄预览');
+        } else {
+          await expect(page.locator('#file-preview-body h1')).toHaveText('缩窄预览');
+        }
+
+        // 关闭 modal 后回到聊天；重开 Files 是列表，不会重新弹出预览。
+        await page.locator('#file-preview-close').click();
+        await expect(page.locator('#file-preview')).toHaveCount(0);
+        await page.locator('#files-toggle').click();
+        await expect(page.locator('#files-list')).toBeVisible();
+        await expect(page.locator('#file-preview-pane')).toHaveCount(0);
+      }
+    }
   });
 
   test('HTML preview truncates at the existing 256 KB Range limit', async ({ page }) => {
