@@ -1,0 +1,279 @@
+/* 共享细节边界：几何由应用 role 持有，SDK 仍负责交互与定位。 */
+button[data-button-role='row'],
+button.task-dock-item-trigger,
+button.task-preview-recent {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+  justify-content: flex-start !important;
+  width: 100% !important;
+  min-width: 0;
+  height: auto !important;
+  min-height: var(--app-control-row-min) !important;
+  border-radius: var(--app-shape-control) !important;
+  white-space: normal;
+  text-align: left;
+}
+
+button[data-button-role='icon'] {
+  width: var(--app-control-icon) !important;
+  height: var(--app-control-icon) !important;
+  min-width: var(--app-control-icon) !important;
+  min-height: var(--app-control-icon) !important;
+  padding: 0 !important;
+}
+
+/* 显式 role 的两种 backend 共用几何；未声明 role 的业务按钮保留原尺寸。 */
+button:where([data-button-role]) {
+  box-sizing: border-box;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  min-height: var(--app-control-normal) !important;
+  padding: 0 12px !important;
+  gap: var(--app-space-detail-gap) !important;
+  border: 1px solid var(--wx-line) !important;
+  border-radius: var(--app-shape-control) !important;
+  background: var(--wx-panel) !important;
+  color: var(--wx-text) !important;
+  font-family: inherit !important;
+  font-weight: 400 !important;
+  letter-spacing: normal !important;
+  font-size: var(--app-type-detail) !important;
+  line-height: var(--app-type-detail-leading) !important;
+}
+
+button[data-button-role]:focus-visible {
+  outline: 2px solid var(--lenso-focus-ring);
+  outline-offset: -2px;
+}
+
+/* native shell 持有表面时，子原语只负责内容。不清除 outline。 */
+#task-dock [data-task-surface='panel'][data-lenso-slot],
+.task-status-badge > [data-lenso-slot^='badge'],
+[data-ui-visual-owner='shell'] > :is([data-lenso-slot^='surface'], [data-lenso-slot^='card'], [data-lenso-slot^='badge']) {
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: inherit !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+[data-ui-list] {
+  display: flex !important;
+  flex-direction: column;
+  gap: var(--app-space-detail-gap) !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  list-style: none;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+[data-ui-list] > [data-ui-list-item] {
+  display: block !important;
+  min-width: 0;
+  min-height: var(--app-control-row-min) !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.spa-dialog-content .list-hint { color: var(--app-muted); }
+
+/* 明确语义提高优先级，压过两个 backend，和 lazy CSS 到达次序无关。 */
+.spa-dialog-content.spa-dialog-content[role='dialog'] {
+  border-radius: var(--app-shape-dialog);
+  box-shadow: var(--app-elevation-detail);
+}
+.spa-dialog-content.spa-dialog-content[role='alertdialog'],
+#task-complete-dialog.task-complete-dialog {
+  --app-dialog-width: var(--app-dialog-confirm-width);
+  width: min(var(--app-dialog-confirm-width), calc(100vw - 32px));
+  border-radius: var(--app-shape-task-popover);
+}
+
+.spa-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--app-z-dialog-overlay);
+  background: var(--lenso-scrim);
+  animation: spa-fade-in 120ms ease-out;
+}
+
+.spa-dialog-content {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: var(--app-z-dialog);
+  transform: translate(-50%, -50%);
+  width: min(var(--app-dialog-edit-width), calc(100vw - 32px));
+  max-height: min(82dvh, 680px);
+  overflow-y: auto;
+  animation: spa-pop-in 140ms ease-out;
+}
+
+.spa-dialog-content.members-card {
+  width: min(680px, calc(100vw - 32px));
+  /* 双栏与底部动作固定在卡片内，只有 `.members-scroll` 滚动。 */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.spa-dialog-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--wx-muted);
+  font-size: 20px;
+  line-height: 1;
+}
+
+.spa-dialog-close:hover {
+  background: var(--wx-hover);
+}
+
+.spa-dialog-button {
+  padding: 8px 14px;
+  border-radius: 4px;
+  border: 1px solid var(--wx-line);
+  background: var(--wx-panel);
+  color: var(--wx-text);
+}
+
+.spa-dialog-button.primary:not([data-lenso-slot]),
+.spa-dialog-content button.primary:not([data-lenso-slot]) {
+  background: var(--app-prominent-fill);
+  border-color: var(--app-prominent-fill);
+  color: var(--lenso-label-on-tint);
+}
+
+.spa-dialog-content button[data-lenso-slot='button']:not(.primary):not(.danger):not([data-destructive]) {
+  color: var(--wx-text) !important;
+}
+
+.contact-segments button[data-lenso-slot='button'] {
+  color: var(--wx-text) !important;
+}
+
+.spa-dialog-button.primary:not([data-lenso-slot]):hover,
+.spa-dialog-content button.primary:not([data-lenso-slot]):hover {
+  background: var(--lenso-control-tint-hover-fill);
+  border-color: var(--lenso-control-tint-hover-fill);
+}
+
+.spa-dialog-button.danger:not([data-lenso-slot]) {
+  background: var(--wx-danger);
+  border-color: var(--wx-danger);
+  color: var(--lenso-label-on-destructive);
+}
+
+.spa-dialog-button.danger:not([data-lenso-slot]):hover {
+  background: var(--lenso-control-status-error-hover-fill);
+  border-color: var(--lenso-control-status-error-hover-fill);
+}
+
+.spa-dialog-content button.primary.danger:not([data-lenso-slot]) {
+  background: var(--wx-danger);
+  border-color: var(--wx-danger);
+  color: var(--lenso-label-on-destructive);
+}
+
+.spa-dialog-content button.primary.danger:not([data-lenso-slot]):hover {
+  background: var(--lenso-control-status-error-hover-fill);
+  border-color: var(--lenso-control-status-error-hover-fill);
+}
+
+.spa-popover {
+  z-index: var(--app-z-popover);
+  width: min(var(--app-announcement-popover-width), calc(100vw - 24px));
+  padding: 12px;
+  border: 1px solid var(--wx-line);
+  border-radius: var(--app-shape-control);
+  background: var(--wx-panel);
+  color: var(--wx-text);
+  box-shadow: var(--app-elevation-detail);
+}
+
+.spa-popover-text {
+  margin: 0 0 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+
+@keyframes spa-fade-in {
+  from { opacity: 0; }
+}
+
+@keyframes spa-pop-in {
+  from { opacity: 0; transform: translate(-50%, -48%) scale(0.98); }
+}
+
+.spa-dialog-content.contact-modal-card { width: min(760px, calc(100vw - 32px)); }
+.spa-dialog-content.handoff-card { width: min(720px, calc(100vw - 32px)); }
+.spa-dialog-content.archive-dialog { width: min(360px, calc(100vw - 32px)); }
+.spa-dialog-content.agent-reissue-card { width: min(620px, calc(100vw - 32px)); }
+.spa-dialog-content.forward-card { width: min(560px, calc(100vw - 32px)); }
+
+.spa-dialog-content.message-search-card {
+  width: min(680px, calc(100vw - 32px));
+  /* 标题/表单固定，只有结果列表滚动。 */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background-color: var(--wx-panel, var(--lenso-background-secondary));
+  color: var(--wx-text, var(--lenso-label-primary));
+  isolation: isolate;
+}
+
+.spa-dialog-content.message-search-card > h2,
+.spa-dialog-content.message-search-card .message-search-form,
+.spa-dialog-content.message-search-card #message-search-status,
+.spa-dialog-content.message-search-card > .list-retry,
+.spa-dialog-content.message-search-card > .modal-actions { flex: 0 0 auto; }
+.spa-dialog-content.message-search-card > .modal-actions { margin-top: 8px; }
+
+.spa-dialog-content.task-trace-card {
+  top: 0;
+  right: 0;
+  left: auto;
+  width: min(560px, 100vw);
+  height: 100dvh;
+  max-height: 100dvh;
+  transform: none;
+  border-radius: 0;
+}
+
+@media (max-width: 759px) {
+  .spa-dialog-content.spa-dialog-content[role='dialog'] {
+    border-radius: 0;
+    box-shadow: var(--app-elevation-fullscreen) !important;
+  }
+  .spa-dialog-content { width: calc(100vw - 24px); max-height: 86dvh; border-radius: 12px; }
+
+  .spa-dialog-content:is(.members-card, .contact-modal-card, .handoff-card,
+    .agent-reissue-card, .message-search-card, .forward-card, .task-trace-card) {
+    inset: 0;
+    width: 100vw;
+    height: 100dvh;
+    max-height: 100dvh;
+    transform: none;
+    border-radius: 0;
+    box-shadow: var(--app-elevation-fullscreen) !important;
+    padding: calc(16px + env(safe-area-inset-top)) 16px calc(16px + env(safe-area-inset-bottom));
+  }
+  .spa-dialog-content.members-card {
+    padding: calc(12px + env(safe-area-inset-top)) 14px calc(12px + env(safe-area-inset-bottom));
+  }
+}

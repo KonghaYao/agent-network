@@ -28,6 +28,27 @@
   --app-radius-xl: 12px;
   --app-radius-surface: 20px;
 
+  /* S1 细节 role：只供适配器与弹层消费，不覆盖品牌 palette。 */
+  --app-type-detail: 13px;
+  --app-type-detail-leading: 19px;
+  --app-type-caption: 12px;
+  --app-type-caption-leading: 16px;
+  --app-space-detail-gap: 8px;
+  --app-space-detail-inset: 16px;
+  --app-control-normal: 36px;
+  --app-control-icon: 32px;
+  --app-control-row-min: 44px;
+  --app-shape-control: var(--app-radius-md);
+  --app-shape-task-popover: var(--app-radius-xl);
+  --app-shape-dialog: var(--app-radius-surface);
+  --app-elevation-detail: var(--wx-shadow);
+  --app-elevation-fullscreen: none;
+  --app-task-popover-width: 400px;
+  --app-task-popover-mobile-width: min(92vw, 390px);
+  --app-announcement-popover-width: 320px;
+  --app-dialog-edit-width: 440px;
+  --app-dialog-confirm-width: 420px;
+
   /* 内容带：沿用现有 computed 值，不改既有层级。 */
   --app-z-dock: 4;
   --app-z-float: 5;
