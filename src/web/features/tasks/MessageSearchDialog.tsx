@@ -1,5 +1,6 @@
+import { LensoBackendProvider, useBackendLease } from '../../app/lenso-runtime';
 import { Button, Checkbox, Label, SearchInput } from '../../app/lenso-controls';
-import { useEffect, useState, type CSSProperties, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react';
 
 import { LIMITS } from '../../../contracts/limits';
 import type { McpError } from '../../lib/mcp-client';
@@ -92,6 +93,7 @@ export function MessageSearchDialog({
   token: string;
   onOpenTask: (rootId: string, focusMessageId: string | null) => void;
 }) {
+  const backend = useBackendLease(open);
   const [query, setQuery] = useState('');
   const [taskOnly, setTaskOnly] = useState(false);
   const [messages, setMessages] = useState<MessageHit[]>([]);
@@ -100,6 +102,7 @@ export function MessageSearchDialog({
   const [hasMore, setHasMore] = useState(false);
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
+  const contextTrigger = useRef<HTMLButtonElement | null>(null);
   const [contextId, setContextId] = useState<string | null>(null);
   const [contextItems, setContextItems] = useState<ContextPage['items']>([]);
   const [contextStatus, setContextStatus] = useState('');
@@ -218,12 +221,14 @@ export function MessageSearchDialog({
   };
 
   return (
-    <>
+    <LensoBackendProvider backend={backend}>
       <Modal
-        // TODO(N2b/N2c): 嵌套浮层迁移后恢复默认 Lenso，父子暂时同用 Radix。
-        shell="radix"
         open={open}
-        onOpenChange={onOpenChange}
+        onOpenChange={(next) => {
+          // fallback 的父层也可能收到 Escape；上下文打开时只关闭子层。
+          if (!next && contextId !== null) setContextId(null);
+          else onOpenChange(next);
+        }}
         title="搜索聊天记录"
         titleId="message-search-title"
         contentId="message-search-dialog"
@@ -305,7 +310,10 @@ export function MessageSearchDialog({
                   className="message-search-result"
                   style={SEARCH_RESULT_STYLE}
                   key={item.message_id}
-                  onClick={() => setContextId(item.message_id)}
+                  onClick={(event) => {
+                    contextTrigger.current = event.currentTarget;
+                    setContextId(item.message_id);
+                  }}
                 >
                   <strong>
                     {item.sender_name} · {timeLabel(item.created_at)}
@@ -327,8 +335,7 @@ export function MessageSearchDialog({
         ) : null}
       </Modal>
       <Modal
-        // TODO(N2b/N2c): 嵌套浮层迁移后恢复默认 Lenso，父子暂时同用 Radix。
-        shell="radix"
+        returnFocusRef={contextTrigger}
         open={contextId !== null}
         onOpenChange={(next) => {
           if (!next) setContextId(null);
@@ -363,6 +370,6 @@ export function MessageSearchDialog({
           ))}
         </div>
       </Modal>
-    </>
+    </LensoBackendProvider>
   );
 }

@@ -866,7 +866,7 @@ test.describe('浮动 Task dock', () => {
     await expect(trigger).toBeFocused();
   });
 
-  test('MessageSearch 内 TaskTrace 保持 Radix 壳，不改变既有父层时序', async ({ page }) => {
+  test('MessageSearch 内 TaskTrace 使用 Lenso Drawer，不改变既有父层时序', async ({ page }) => {
     const base = await baseUrl();
     const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
     const fixture = await setupTaskRoom(base, suffix, { roots: 1, replies: 1 });
@@ -883,10 +883,10 @@ test.describe('浮动 Task dock', () => {
 
     const trace = page.locator('#task-trace-drawer');
     await expect(trace).toBeVisible({ timeout: 15_000 });
-    await expect(trace).toHaveAttribute('data-modal-shell', 'radix');
-    await expect(trace).toHaveClass(/spa-dialog-content/u);
-    expect(await trace.getAttribute('data-task-trace-shell')).toBeNull();
-    // 既有 Task 分支先关闭搜索再打开 Trace；Radix 子层只随自身关闭。
+    await expect(trace).toHaveAttribute('data-task-trace-shell', 'lenso');
+    await expect(trace).toHaveClass(/task-trace-drawer/u);
+    await expect(trace).toHaveAttribute('role', 'dialog');
+    // 既有 Task 分支先关闭搜索再打开 Trace；Lenso Drawer 只随自身关闭。
     await expect(search).toHaveCount(0);
     await page.keyboard.press('Escape');
     await expect(trace).toHaveCount(0);

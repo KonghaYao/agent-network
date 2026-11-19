@@ -243,12 +243,12 @@ test('页面 confirm：真实 Lenso、ids、取消/Esc/背板、true/false、危
 });
 
 for (const parent of ['Members', 'ContactRequests']) {
-  test(`${parent}：Radix confirm 取消不误关父层且还焦`, async ({ page }) => {
+  test(`${parent}：Lenso confirm 取消不误关父层且还焦`, async ({ page }) => {
     await fixture(page);
     const members = parent === 'Members';
     await page.locator(members ? '#members-button' : '#contact-requests').click();
     const dialog = page.locator(members ? '#members-modal' : '#contact-modal');
-    await expect(dialog).toHaveAttribute('data-modal-shell', 'radix');
+    await expect(dialog).toHaveAttribute('data-lenso-slot', 'modal-popup');
     if (!members) {
       await page.locator('#contact-tab-more').click();
       await page.locator('#contact-link-create').click();
@@ -256,10 +256,10 @@ for (const parent of ['Members', 'ContactRequests']) {
     }
     const trigger = members ? page.getByRole('button', { name: '移除 S04 peer' })
       : page.locator('#contact-link-list').getByRole('button', { name: /撤销好友链接/ }).first();
-    for (const mode of ['cancel']) {
+    for (const mode of ['cancel', 'escape', 'backdrop']) {
       await trigger.click();
-      await expect(page.locator('#confirm-dialog')).toHaveAttribute('data-alert-shell', 'radix');
-      await expect(page.locator('#confirm-dialog')).not.toHaveAttribute('data-lenso-slot');
+      await expect(page.locator('#confirm-dialog')).toHaveAttribute('data-alert-shell', 'lenso');
+      await expect(page.locator('#confirm-dialog')).toHaveAttribute('data-lenso-slot', 'alert-dialog-popup');
       await expect(page.locator('#confirm-dialog-cancel')).toBeFocused();
       await close(page, mode, 'confirm-dialog-cancel');
       await expect(page.locator('#confirm-dialog')).toHaveCount(0);
