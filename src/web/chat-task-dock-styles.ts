@@ -7,7 +7,7 @@
  */
 export const TASK_DOCK_STYLE = `
   .task-dock-slot { position: absolute; left: 16px; right: 16px;
-    bottom: calc(100% + 8px); z-index: var(--app-z-dock); display: block;
+    bottom: calc(100% + 8px); z-index: var(--app-z-float); display: block;
     min-width: 0; max-width: 420px; }
   /* 无输入区（只读归档）时补上底部安全区。 */
   .composer-area:not(:has(.composer)) .task-dock-slot {
@@ -36,12 +36,25 @@ export const TASK_DOCK_STYLE = `
   .task-dock-caret { margin-left: auto; color: var(--wx-muted); font-size: 11px;
     line-height: 1; transition: transform .15s ease; }
   .task-dock.is-collapsed .task-dock-caret { transform: rotate(-90deg); }
+  /* 面板必须是 alpha=1 的主表面：与同色消息气泡靠边框和阴影分层，
+     不能使用 Lenso glass 材质，否则消息会从面板下透出。 */
   .task-dock-body { position: absolute; left: 0; right: 0;
-    bottom: calc(100% + 8px); box-sizing: border-box; display: flex;
-    flex-direction: column; width: 100%; max-height: min(50dvh, 460px);
+    bottom: calc(100% + 8px); z-index: var(--app-z-float); box-sizing: border-box;
+    display: flex; flex-direction: column; width: 100%; max-height: min(50dvh, 460px);
     border: 1px solid var(--lenso-separator); border-radius: var(--app-radius-surface);
-    background: var(--lenso-background-secondary); box-shadow: var(--lenso-overlay-shadow);
-    overflow: hidden; }
+    background: var(--lenso-background-primary);
+    box-shadow: 0 18px 48px rgb(0 0 0 / 20%), 0 2px 8px rgb(0 0 0 / 10%);
+    isolation: isolate; overflow: hidden; }
+  /* 面板展开时「回到最新」会落在面板与入口之间；Lenso bordered Button
+     的 fill-tertiary 会透出消息，实色覆盖必须压过库样式。 */
+  .chat-body:has(#task-dock[data-state='expanded']) #jump-latest {
+    background: var(--wx-panel) !important; }
+  /* 桌面端「回到最新」浮在输入框上方 70px；面板仅在它可见时抬高，
+     避免两个浮层互相遮挡，同时保持无该按钮时面板贴近入口。 */
+  @media (min-width: 760px) {
+    .chat-body:has(#jump-latest:not([hidden])) .task-dock-body {
+      bottom: calc(100% + 51px); }
+  }
   .task-dock-body[hidden] { display: none; }
   .task-dock-list { flex: 1 1 auto; min-width: 0; min-height: 0; margin: 0;
     padding: 4px 8px 8px; overflow-x: hidden; overflow-y: auto;
@@ -179,6 +192,8 @@ export const TASK_DOCK_STYLE = `
   @media (max-width: 759px) {
     .task-dock-slot { left: 8px; right: 8px; bottom: calc(100% + 6px);
       max-width: none; }
+    .chat-body:has(#jump-latest:not([hidden])) .task-dock-body {
+      bottom: calc(100% + 44px); }
     .task-preview-popover { width: calc(100vw - 20px);
       max-height: min(52dvh, 360px); }
   }

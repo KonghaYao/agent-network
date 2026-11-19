@@ -329,6 +329,125 @@ test.describe('浮动 Task dock', () => {
     }
   }
 
+  for (const width of [390, 1280]) {
+    for (const colorScheme of ['light', 'dark'] as const) {
+      test(`Task dock 不透明且不遮挡 composer/toggle ${width}/${colorScheme}`, async ({ page }, testInfo) => {
+        const base = await baseUrl();
+        const fixture = await setupTaskRoom(base, `opaque-${width}-${colorScheme}`, { roots: 0 });
+        const rootId = await createTask(base, fixture.owner.token, fixture.roomId, LONG_TASK_URL);
+        await sendMessage(base, fixture.agent.token, fixture.roomId, `\`\`\`text\n${LONG_TASK_URL}\n\`\`\``, { taskRootId: rootId });
+        await page.setViewportSize({ width, height: 844 });
+        await page.emulateMedia({ colorScheme });
+        await openRoom(page, base, fixture.owner.token, fixture.roomId);
+        await page.locator('#messages').evaluate((element) => {
+          element.scrollTop = 0;
+          element.dispatchEvent(new Event('scroll'));
+        });
+        const jump = page.locator('#jump-latest');
+        await expect(jump).toBeVisible();
+        await expandDock(page);
+
+        const geometry = await page.evaluate(() => {
+          const pick = (selector: string) => {
+            const node = document.querySelector<HTMLElement>(selector);
+            if (!node) throw new Error(`缺少 ${selector}`);
+            const box = node.getBoundingClientRect();
+            const css = getComputedStyle(node);
+            return {
+              background: css.backgroundColor,
+              zIndex: css.zIndex,
+              rect: { left: box.left, top: box.top, right: box.right, bottom: box.bottom, width: box.width, height: box.height },
+            };
+          };
+          const panel = pick('#task-dock-panel');
+          const card = pick('#task-dock-panel > [data-lenso-slot="card"]');
+          const toggle = pick('#task-dock-toggle');
+          const composer = pick('#composer');
+          const jumpLatest = pick('#jump-latest');
+          const messages = pick('#messages');
+          const slot = pick('#task-dock-slot');
+          const preview = pick('.task-dock-item .task-dock-preview');
+          const previewHit = document.elementFromPoint(
+            preview.rect.left + preview.rect.width / 2,
+            preview.rect.top + preview.rect.height / 2,
+          );
+          const item = document.querySelector<HTMLElement>('.task-dock-item [data-lenso-slot="card"]');
+          const trigger = item?.querySelector<HTMLElement>('.task-dock-item-trigger')?.getBoundingClientRect();
+          const actions = item?.querySelector<HTMLElement>('.task-dock-item-actions')?.getBoundingClientRect();
+          const itemBox = item?.getBoundingClientRect();
+          return {
+            panel,
+            card,
+            toggle,
+            composer,
+            jumpLatest,
+            messages,
+            slot,
+            panelOwnsPreview: previewHit !== null && previewHit.closest('#task-dock-panel') !== null,
+            triggerActions: trigger && actions && itemBox
+              ? {
+                  separated: trigger.right <= actions.left + 1 || trigger.bottom <= actions.top + 1,
+                  actionsInside: actions.right <= itemBox.right + 1 && actions.bottom <= itemBox.bottom + 1,
+                  triggerWidth: trigger.width,
+                  buttonHeights: [...(item?.querySelectorAll('.task-dock-item-actions button') ?? [])]
+                    .map((button) => button.getBoundingClientRect().height),
+                }
+              : null,
+            toggleHit: (() => {
+              const box = toggle.rect;
+              return document.elementFromPoint(
+                (box.left + box.right) / 2,
+                (box.top + box.bottom) / 2,
+              )?.closest('#task-dock-toggle') !== null;
+            })(),
+          };
+        });
+
+        const alpha = (color: string): number => {
+          const match = color.match(/rgba?\([^)]*?([\d.]+)\)$/u);
+          if (!match) return 1;
+          return color.startsWith('rgba') ? Number(match[1]) : 1;
+        };
+        const intersects = (
+          a: { left: number; top: number; right: number; bottom: number },
+          b: { left: number; top: number; right: number; bottom: number },
+        ) =>
+          Math.min(a.right, b.right) > Math.max(a.left, b.left) &&
+          Math.min(a.bottom, b.bottom) > Math.max(a.top, b.top);
+
+        expect(alpha(geometry.panel.background)).toBe(1);
+        expect(alpha(geometry.card.background)).toBe(1);
+        expect(alpha(geometry.jumpLatest.background)).toBe(1);
+        expect(Number(geometry.panel.zIndex)).toBeGreaterThan(
+          Number(geometry.messages.zIndex) || 0,
+        );
+        expect(Number(geometry.slot.zIndex)).toBeGreaterThan(
+          Number(geometry.messages.zIndex) || 0,
+        );
+        expect(intersects(geometry.panel.rect, geometry.composer.rect)).toBe(false);
+        expect(intersects(geometry.panel.rect, geometry.toggle.rect)).toBe(false);
+        expect(intersects(geometry.panel.rect, geometry.jumpLatest.rect)).toBe(false);
+        expect(geometry.panel.rect.top).toBeGreaterThanOrEqual(0);
+        expect(geometry.panel.rect.left).toBeGreaterThanOrEqual(0);
+        expect(geometry.panel.rect.right).toBeLessThanOrEqual(width);
+        expect(geometry.panel.rect.bottom).toBeLessThanOrEqual(844);
+        expect(geometry.panelOwnsPreview).toBe(true);
+        expect(geometry.toggleHit).toBe(true);
+        expect(geometry.triggerActions?.separated).toBe(true);
+        expect(geometry.triggerActions?.actionsInside).toBe(true);
+        expect(geometry.triggerActions?.triggerWidth).toBeGreaterThanOrEqual(120);
+        expect(geometry.triggerActions?.buttonHeights.every((height) => height >= 44)).toBe(true);
+        await expectNoHorizontalOverflow(page.locator('#task-dock-panel'));
+        await page.screenshot({ path: testInfo.outputPath(`dock-opaque-${width}-${colorScheme}.png`) });
+
+        const toggle = page.locator('#task-dock-toggle');
+        await toggle.click();
+        await expect(page.locator('#task-dock')).toHaveAttribute('data-state', 'collapsed');
+        await expect(page.locator('#task-dock-panel')).toBeHidden();
+      });
+    }
+  }
+
   test('Task delivery Badge 与 ProgressBar 按真实 pending/claimed/completed/failed 状态着色', async ({ page }) => {
     const base = await baseUrl();
     const fixture = await setupTaskRoom(base, 'delivery-colors', { roots: 0 });

@@ -304,8 +304,8 @@ export function RoomTaskDock({
           hidden={!expanded}
           aria-busy={tasks.loading || tasks.loadingMore ? 'true' : undefined}
         >
-          <Card style={{ display: 'flex', flexDirection: 'column', flex: '1 1 auto', minHeight: 0, minWidth: 0, padding: 0, background: 'transparent', overflow: 'hidden' }}>
-          <Toolbar aria-label="未完成 Task" style={{ display: 'flex', flex: '0 0 auto', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', gap: 8 }}>
+          <Card style={{ display: 'flex', flexDirection: 'column', flex: '1 1 auto', minHeight: 0, minWidth: 0, padding: 0, background: 'var(--lenso-background-primary)', overflow: 'hidden' }}>
+          <Toolbar aria-label="未完成 Task" style={{ display: 'flex', flex: '0 0 auto', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', gap: 8, background: 'transparent' }}>
             <span className="task-dock-title">Task</span>
             <Badge placement="" style={LENSO_BADGE_FILL}>{countLabel}</Badge>
           </Toolbar>
