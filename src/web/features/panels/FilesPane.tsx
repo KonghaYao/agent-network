@@ -8,7 +8,7 @@ import {
   Surface,
   Toolbar,
 } from '../../app/lenso-controls';
-import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type DragEvent } from 'react';
 
 import type { RoomFileItem } from '../../lib/files-ui';
 import {
@@ -28,7 +28,8 @@ import {
 } from '../../lib/files';
 import { callTool } from '../../lib/mcp-client';
 import { newRequestId } from '../../lib/request-id';
-import { LazyFilePreviewDialog } from './LazyFilePreviewDialog';
+
+const FilePreviewPane = lazy(() => import('./FilePreviewPane').then((module) => ({ default: module.FilePreviewPane })));
 
 interface FilesPaneProps {
   roomId: string;
@@ -36,6 +37,9 @@ interface FilesPaneProps {
   readOnly: boolean;
   open: boolean;
   onClose: () => void;
+  preview: RoomFileItem | null;
+  onOpenPreview: (item: RoomFileItem) => void;
+  onBack: () => void;
   files: {
     items: RoomFileItem[];
     loading: boolean;
@@ -68,14 +72,14 @@ interface FailedBind {
  * 上传仍走 XHR + `network_room_file_bind`，删除需要二次确认；所有文件名、
  * 链接与预览内容都用 React 文本/属性写入，不注入 HTML。
  */
-export function FilesPane({ roomId, token, readOnly, open, onClose, files }: FilesPaneProps) {
+export function FilesPane({ roomId, token, readOnly, open, onClose, preview, onOpenPreview, onBack, files }: FilesPaneProps) {
   const [status, setStatus] = useState('');
   const [statusError, setStatusError] = useState(false);
   const [upload, setUpload] = useState<UploadState | null>(null);
   const [failedBind, setFailedBind] = useState<FailedBind | null>(null);
   const [deletePending, setDeletePending] = useState<string | null>(null);
   const [busyDelete, setBusyDelete] = useState<string | null>(null);
-  const [preview, setPreview] = useState<RoomFileItem | null>(null);
+  const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const uploadRunning = useRef(false);
@@ -106,7 +110,12 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, files }: Fil
     setDeletePending(null);
     setFailedBind(null);
     setStatus('');
+    setSelectedFileId(null);
   }, [roomId]);
+
+  useEffect(() => {
+    if (preview) setSelectedFileId(preview.file_id);
+  }, [preview]);
 
   const uploadFiles = useCallback(
     async (list: File[]) => {
@@ -296,6 +305,12 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, files }: Fil
           </div>
         </Toolbar>
         </header>
+        {preview ? (
+          <Suspense fallback={<p role="status">正在读取预览…</p>}>
+            <FilePreviewPane item={preview} onBack={onBack} />
+          </Suspense>
+        ) : null}
+        <div className="files-list-view" hidden={preview !== null}>
         <input
           id="files-input"
           ref={inputRef}
@@ -395,8 +410,23 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, files }: Fil
                 const thumbnail = kind === 'image' ? fileSafeUrl(item.preview_url || item.download_url || item.public_url) : null;
                 const download = fileDownloadUrl(item);
                 return (
-                  <li className="file-item" data-file-id={item.file_id} key={key}>
-                    <div className="file-row">
+                  <li className="file-item" data-file-id={item.file_id}
+                    data-selected={(preview?.file_id ?? selectedFileId) === item.file_id} key={key}>
+                    <div className="file-row"
+                      role={kind === 'html' || kind === 'markdown' ? 'button' : undefined}
+                      tabIndex={kind === 'html' || kind === 'markdown' ? 0 : undefined}
+                      aria-label={kind === 'html' || kind === 'markdown' ? `预览 ${item.name || '文件'}` : undefined}
+                      onClick={() => {
+                        if (kind !== 'html' && kind !== 'markdown') return;
+                        setSelectedFileId(item.file_id);
+                        onOpenPreview(item);
+                      }}
+                      onKeyDown={(event) => {
+                        if ((kind !== 'html' && kind !== 'markdown') || !['Enter', ' '].includes(event.key)) return;
+                        event.preventDefault();
+                        setSelectedFileId(item.file_id);
+                        onOpenPreview(item);
+                      }}>
                       <span className="file-thumb">
                         {thumbnail && previewImageMime(item.mime_type, item.name) ? (
                           <img src={thumbnail} alt="" loading="lazy" referrerPolicy="no-referrer" />
@@ -412,7 +442,7 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, files }: Fil
                       </div>
                     </div>
                     <div className="file-actions">
-                      <Button className="file-action" type="button" variant="borderless" size="sm" onClick={() => setPreview(item)}>
+                      <Button className="file-action" type="button" variant="borderless" size="sm" onClick={() => { setSelectedFileId(item.file_id); onOpenPreview(item); }}>
                         预览
                       </Button>
                       {fileCopyUrl(item) ? (
@@ -487,8 +517,8 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, files }: Fil
           </Pagination>
         ) : null}
         </Surface>
+        </div>
       </aside>
-      <LazyFilePreviewDialog item={preview} onClose={() => setPreview(null)} />
     </>
   );
 }

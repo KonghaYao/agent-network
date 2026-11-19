@@ -577,6 +577,13 @@ test.describe('SPA Chat file cards', () => {
         if (new URL(request.url()).pathname === `/f/${file.fileId}`) reads.push(request.headers()['range'] ?? '');
       });
       await opener.click();
+      if (mobileDark) {
+        await expect(page.locator('#file-preview[role="dialog"]')).toBeVisible();
+        await expect(page.locator('#file-preview-pane')).toHaveCount(0);
+      } else {
+        await expect(page.locator('#files-pane #file-preview-pane')).toBeVisible();
+        await expect(page.locator('#file-preview, #file-preview-dialog, [role="dialog"]')).toHaveCount(0);
+      }
       const iframe = page.locator('#file-preview-body iframe');
       await expect(iframe).toHaveAttribute('sandbox', '');
       await expect(iframe).toHaveAttribute('referrerpolicy', 'no-referrer');
@@ -604,12 +611,66 @@ test.describe('SPA Chat file cards', () => {
       expect(reads).toEqual(['bytes=0-262143']);
       expect(errors).toEqual([]);
       await page.keyboard.press('Escape');
-      await expect(page.locator('#file-preview')).toHaveCount(0);
+      await expect(page.locator('#file-preview, #file-preview-pane')).toHaveCount(0);
       await expect(opener).toBeFocused();
       await opener.click();
       await expect(frame.locator('main')).toHaveText('安全 HTML 预览');
       await page.locator('#file-preview-close').click();
       await expect(opener).toBeFocused();
+    });
+  }
+
+  for (const width of [1280, 390]) {
+    test(`Agent HTML/MD use the right pane or modal at ${width}, reusing metadata`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 844 });
+      await page.emulateMedia({ colorScheme: 'dark' });
+      for (const kind of ['html', 'md']) {
+        const file = await seedRoomFile(base, agentToken, directRoomId, {
+          name: `agent-preview.${kind}`,
+          mimeType: kind === 'html' ? 'text/html' : 'text/markdown',
+          body: Buffer.from(kind === 'html' ? '<h1>Agent 文档</h1>' : '# Agent 文档\n\n' + '长内容 '.repeat(2000)),
+        });
+        await sendFileMessage(base, agentToken, directRoomId, `[Agent 文档](${file.publicUrl})`);
+        await page.goto(`${base}/c/${directRoomId}`);
+        const card = page.locator(`.msg-file[data-file-id="${file.fileId}"]`);
+        await card.scrollIntoViewIfNeeded();
+        await expect(card.locator('.msg-file-preview')).toBeVisible();
+        const metaReads: string[] = [];
+        const trackMeta = (request: import('@playwright/test').Request) => {
+          if (request.headers()['mcp-name'] === 'network_room_file_get' &&
+            request.postDataJSON()?.params?.arguments?.file_id === file.fileId) metaReads.push(request.url());
+        };
+        page.on('request', trackMeta);
+        if (width === 1280 && await page.locator('#files-pane').isVisible()) await page.locator('#files-close').click();
+        await card.locator('.msg-file-preview').click();
+        const expectRendered = async () => {
+          if (kind === 'html') await expect(page.frameLocator('#file-preview-body iframe').locator('h1')).toHaveText('Agent 文档');
+          else await expect(page.locator('#file-preview-body h1')).toHaveText('Agent 文档');
+          if (width === 1280) {
+            await expect(page.locator('#files-pane #file-preview-pane')).toBeVisible();
+            await expect(page.locator('#file-preview, #file-preview-dialog, [role="dialog"]')).toHaveCount(0);
+          } else {
+            await expect(page.locator('#file-preview[role="dialog"]')).toBeVisible();
+            await expect(page.locator('#file-preview-pane')).toHaveCount(0);
+            await expect(page.locator('.sidebar')).toBeHidden();
+          }
+          expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
+          expect(await page.locator('#file-preview-body').evaluate((node) => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
+        };
+        await expectRendered();
+        await page.screenshot({ path: test.info().outputPath(`agent-${kind}-${width}.png`) });
+        await page.locator('#file-preview-close').click();
+        if (width === 390) await page.locator('#files-toggle').click();
+        const row = page.locator(`#files-list .file-item[data-file-id="${file.fileId}"]`);
+        await expect(row).toBeVisible();
+        await row.locator('.file-row').click();
+        await expectRendered();
+        await page.locator('#file-preview-close').click();
+        await expect(page.locator('#files-list')).toBeVisible();
+        expect(metaReads).toEqual([]);
+        page.off('request', trackMeta);
+        if (width === 390) await page.locator('#files-close').click();
+      }
     });
   }
 

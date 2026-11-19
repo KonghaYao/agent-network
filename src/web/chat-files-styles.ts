@@ -17,6 +17,17 @@ export const FILES_STYLE = `
     min-height: 0; display: flex; flex-direction: column;
     background: var(--wx-sidebar); border-left: 1px solid var(--wx-line); }
   .files-pane[hidden] { display: none; }
+  .files-list-view { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+  .files-list-view[hidden] { display: none; }
+  .file-item[data-selected="true"] { background: var(--wx-hover); box-shadow: inset 3px 0 var(--wx-green); }
+  .file-row[role="button"] { cursor: pointer; }
+  .file-preview-inline { flex: 1 1 auto; min-height: 0; width: 100%; max-height: none;
+    border-radius: 0; box-shadow: none; }
+  .file-preview-inline .file-preview-head { flex-wrap: wrap; padding: 8px; gap: 6px; }
+  .file-preview-inline .file-preview-id { flex-basis: 100%; order: -1; }
+  .file-preview-inline .file-preview-body { min-width: 0; overflow-x: hidden; }
+  .file-preview-inline .file-preview-md-viewer { padding: 4px 10px 14px; overflow-wrap: anywhere; }
+  .file-preview-inline .file-preview-md-viewer pre { max-width: 100%; overflow-x: auto; }
   body.page-home .files-pane { display: none; }
   .files-head { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
     gap: 8px; min-height: 56px; padding: 0 12px; border-bottom: 1px solid var(--wx-line); }

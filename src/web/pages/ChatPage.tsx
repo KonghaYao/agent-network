@@ -44,7 +44,7 @@ import {
   type HistoryMessage,
 } from '../lib/chat';
 import { groupColorFor, groupColorStyle } from '../lib/group-colors';
-import type { RoomFileItem } from '../lib/files-ui';
+import { filePreviewKind, type RoomFileItem } from '../lib/files-ui';
 import { callTool, type McpError } from '../lib/mcp-client';
 import { queryKeys } from '../lib/query-keys';
 import { newRequestId } from '../lib/request-id';
@@ -154,6 +154,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [forwardItem, setForwardItem] = useState<HistoryMessage | null>(null);
   const [previewFile, setPreviewFile] = useState<RoomFileItem | null>(null);
+  const [panePreviewFile, setPanePreviewFile] = useState<RoomFileItem | null>(null);
   // 群成员弹窗从搜索右侧的常驻入口打开；关闭时必须显式回到该按钮。
   const membersButtonRef = useRef<HTMLButtonElement>(null);
   // 会话菜单项打开的弹窗（记忆、公告等）关闭后回到菜单入口。
@@ -448,6 +449,8 @@ export function ChatPage({ roomId }: ChatPageProps) {
   useEffect(() => {
     setOverlayPane(null);
     setOverlay(null);
+    setPreviewFile(null);
+    setPanePreviewFile(null);
   }, [roomId]);
 
   useEffect(() => {
@@ -487,6 +490,28 @@ export function ChatPage({ roomId }: ChatPageProps) {
     else if (monitorVisible) document.getElementById('monitor-close')?.focus();
   }, [filesVisible, mobile, monitorVisible]);
 
+  const openFilePreview = useCallback((item: RoomFileItem) => {
+    const kind = filePreviewKind(item);
+    if (desktop && (kind === 'html' || kind === 'markdown')) {
+      setPreviewFile(null);
+      setPanePreviewFile(item);
+      setMonitorDesktopOpen(false);
+      writePreference(MONITOR_OPEN_KEY, false);
+      setFilesDesktopOpen(true);
+      writePreference(FILES_OPEN_KEY, true);
+    } else {
+      setPanePreviewFile(null);
+      setPreviewFile(item);
+    }
+  }, [desktop]);
+
+  // 视口离开内联右栏断点时，将正在查看的文档移交给原有弹窗。
+  useEffect(() => {
+    if (desktop || !panePreviewFile) return;
+    setPreviewFile(panePreviewFile);
+    setPanePreviewFile(null);
+  }, [desktop, panePreviewFile]);
+
   const toggleFiles = useCallback(() => {
     if (!ready) return;
     if (desktop) {
@@ -518,6 +543,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
   }, [desktop, ready]);
 
   const closeFiles = useCallback(() => {
+    setPanePreviewFile(null);
     if (desktop) {
       setFilesDesktopOpen(false);
       writePreference(FILES_OPEN_KEY, false);
@@ -778,7 +804,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                     onMarkRead={chat.markRead}
                     onToggleTask={(item) => void onToggleTask(item)}
                     onOpenTask={openTrace}
-                    onOpenFile={setPreviewFile}
+                    onOpenFile={openFilePreview}
                     onRecall={(item) => void onRecall(item)}
                     onForward={setForwardItem}
                   />
@@ -839,7 +865,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                       onCancelReply={() => setReply(null)}
                       onSend={onSend}
                       onStatus={onStatus}
-                      onOpenFile={setPreviewFile}
+                      onOpenFile={openFilePreview}
                       registerFileDrop={registerFileDrop}
                     />
                   ) : null}
@@ -855,6 +881,9 @@ export function ChatPage({ roomId }: ChatPageProps) {
                     readOnly={room?.read_only === true}
                     open={filesVisible}
                     onClose={closeFiles}
+                    preview={desktop ? panePreviewFile : null}
+                    onOpenPreview={openFilePreview}
+                    onBack={() => setPanePreviewFile(null)}
                     files={files}
                   />
                 ) : (
