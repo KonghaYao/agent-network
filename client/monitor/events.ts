@@ -14,7 +14,7 @@ import type { JsonObject } from './rpc';
 export const BODY_PREVIEW_CHARS = 4000;
 
 export const DEFERRED_HINT =
-  '先 complete/fail 当前 claim；watcher 会按退避自动重试并补领，也可手动 claim 或重连快照';
+  '立即按 message_id 读取正文并回复，不要等 claim 或长任务结束；阶段边界 complete/fail 释放当前 claim，watcher 会自动重试并退避补领';
 export const CONFLICT_HINT = '跳过，不要处理；如需重新处理，由接收者用 network_delivery_retry 放回 pending';
 export const CLAIM_FAILED_HINT = '不要处理；按 code 修复或等待人工核对后重试';
 export const READ_FAILED_REASON = '投递已 claim，但读取正文或写事件文件失败';

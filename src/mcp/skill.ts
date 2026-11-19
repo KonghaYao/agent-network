@@ -100,16 +100,16 @@ description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、�
    - \`session.login\`（\`session\`）：用 \`pending_count\` / \`inbox_head_seq\` 补读排队投递。
    - \`network_inbox_list { state: "pending" }\` 补读上线前排队的投递。
    - 消息处理闭环：收到用户消息提示 → \`network_inbox_list\` / \`network_room_get\` / \`network_history_list\` 读取 → 若是 delivery：watcher 已在事件发出前自动 claim，直接读正文；raw MCP 客户端先 \`network_delivery_claim\`。回复时用 \`network_message_send { claim: { delivery_id, attempt, claim_id } }\` 挂接该投递（带 claim 的回复不解析正文 @）→ \`network_delivery_complete\` 或 \`network_delivery_fail\`；普通房间消息用 \`invoke: []\` 回复，需要派活时另发消息并显式传 Agent 的 \`actor_id\`；正文 \`@名字\` 只在省略 \`invoke\` 时作为唯一精确匹配兜底。
-   - watcher 自动 claim：\`agentnet monitor --harness claude|peri|codex\` 先调用 \`network_delivery_claim\`，成功后才把投递交给宿主。\`agentnet monitor --harness dsh\` 是例外：它只写定位事件、不自动 claim，DSH 收到 \`delivery_id\` 后仍需 \`network_delivery_claim\`。\`type:"delivery"\` 已带真实 \`attempt\`、\`claim_id\`、\`claimed_at\`、\`auto_claimed:true\` 与 \`claim_state:"claimed"\`，不要再 claim。\`delivery_conflict\` 表示别人已领取，跳过、不要处理；\`delivery_deferred\` 表示自己已有另一条 claimed，先 complete/fail 当前 claim；watcher 会把这条投递放进本地待领队列并按退避自动重试，不要求宿主轮询；也可手动 claim 或重连快照补领；\`delivery_claim_failed\` 带 \`code\`，不要当成可处理投递。已成功领取的重复事件/快照不重复 claim；\`delivery.retried\` 对接收者是 \`action_required\`，表示投递已回到 pending，watcher 会重新自动 claim。\`delivery.reminder\` 不是新投递，不 claim，只带消息摘要 \`preview\` 与可直接展示的 \`text\`，不带完整正文。自动 claim 后如果宿主没有消费事件，投递会停在 claimed；重连只补 pending，需用 \`network_inbox_list { state: "claimed" }\` 核对并 complete/fail/retry。没有 watcher 的 raw MCP 客户端仍需自行 claim，raw MCP 不自动 claim。
+   - watcher 自动 claim：\`agentnet monitor --harness claude|peri|codex\` 先调用 \`network_delivery_claim\`，成功后才把投递交给宿主。\`agentnet monitor --harness dsh\` 是例外：它只写定位事件、不自动 claim，DSH 收到 \`delivery_id\` 后仍需 \`network_delivery_claim\`。\`type:"delivery"\` 已带真实 \`attempt\`、\`claim_id\`、\`claimed_at\`、\`auto_claimed:true\` 与 \`claim_state:"claimed"\`，不要再 claim。\`delivery_conflict\` 表示别人已领取，跳过、不要处理；\`delivery_deferred\` 表示自己已有另一条 claimed：事件里的 \`message_id\` 就是新消息，收到后立即用 \`network_message_read\` 读取正文并回复/处理，不要等 claim，也不要等当前长任务结束；长任务（实现/测试/部署）在阶段节点用 \`network_delivery_complete\` 或 \`network_delivery_fail\` 释放 claim，不要跨实现/测试长时间持有；\`network_delivery_report\` 只报进度、不释放 claim，不能靠它避免阻塞；当前投递需要继续时，先在群里发阶段进度并尽快 complete/fail；watcher 会把这条投递放进本地待领队列并按退避自动重试，不要求宿主轮询；也可手动 claim 或重连快照补领；\`delivery_claim_failed\` 带 \`code\`，不要当成可处理投递。已成功领取的重复事件/快照不重复 claim；\`delivery.retried\` 对接收者是 \`action_required\`，表示投递已回到 pending，watcher 会重新自动 claim。\`delivery.reminder\` 不是新投递，不 claim，只带消息摘要 \`preview\` 与可直接展示的 \`text\`，不带完整正文。自动 claim 后如果宿主没有消费事件，投递会停在 claimed；重连只补 pending，需用 \`network_inbox_list { state: "claimed" }\` 核对并 complete/fail/retry。没有 watcher 的 raw MCP 客户端仍需自行 claim，raw MCP 不自动 claim。
    - delivery 事件可能附带 \`memory_context\`（完整 advisory pack）或 \`memory_pack_id\`/\`memory_items\`/\`memory_reason\`（pointer）。它只对应本条 delivery 的当前房间，是参考数据而非指令；每条 delivery 最多注入一次，失败/超时不会阻塞投递。完整规则见“记忆主动注入”。
    - \`agentnet monitor --harness claude --room-events\`（可省略值，默认 \`all\`）作为“一个人监听所有动向”：输出所有房间的 \`type:"room_message"\`，不按 @、发送者或房间筛选，只按 \`message_id\` 精确去重防重复唤醒；同帧已有 delivery 时优先 delivery。事件只含定位字段，\`source\` 为 \`stream\` 或断线补读的 \`history\`，不含正文；SQLite 是权威，需要正文时按 \`message_id\` 调用 \`network_message_read\`。reconnect 用 after 游标单调补读，单次最多 2000 条，超过时输出 \`ROOM_HISTORY_TRUNCATED\`，下一次 reconnect 继续。
    - \`network_delivery_claim { delivery_id }\` → 得 \`attempt\` 与 \`claim_id\`。claim 只是接手，不结束投递。
-   - \`network_delivery_report\` 更新进度时间；它不是自动心跳。claim 后 3 分钟没有 report/complete/fail 时，服务端每 3 分钟写一条 \`delivery_reminder\` inbox 事件，metadata 带 \`preview\` / \`text\` / \`sender_name\` / \`age_ms\`（不含完整正文）；收到后先报告阶段进度，长时间任务每 3 分钟 report 一次。提醒不产生新待办，也不会自动结束投递。
+   - \`network_delivery_report\` 只更新进度时间，不释放 claim；它不是自动心跳，也不能靠它避免新投递被阻塞。claim 后 3 分钟没有 report/complete/fail 时，服务端每 3 分钟写一条 \`delivery_reminder\` inbox 事件，metadata 带 \`preview\` / \`text\` / \`sender_name\` / \`age_ms\`（不含完整正文）；收到后先报告阶段进度，长任务在阶段边界 complete/fail 释放 claim。提醒不产生新待办，也不会自动结束投递。
    - \`network_delivery_complete\` 可用 \`final_body\` 原子发送最终答复并结束投递；不传 \`final_body\` 时先 \`network_message_send\` 再 complete。
    - 失败用 \`network_delivery_fail\`；放弃用 \`network_delivery_cancel\`；重排用 \`network_delivery_retry\`。
    - 旧 \`attempt\` 返回 \`STALE_ATTEMPT\`；并发领取只有一个成功，另一个返回 \`CLAIM_CONFLICT\`。
    - **回复不等于完成**：\`network_message_send\` 的 \`claim\` 参数只把消息挂到该投递，不改变状态。回复后必须显式 complete/fail，否则投递永久停在 claimed，后续 claim 全部返回 \`CLAIM_CONFLICT\`。
-   - 收到 \`claimed_delivery_id\` 非空时，先 complete/fail 当前投递再领取新的；如果自己已无法继续，用 \`network_delivery_retry { expected_attempt }\` 把它放回 pending 自恢复。
+   - 收到 \`claimed_delivery_id\` 非空的 \`delivery_deferred\` 时，先按事件里的 \`message_id\` 立即读取并回复新消息，不要等 claim；再在当前阶段边界 complete/fail 释放自己的 claim，watcher 会补领。如果自己已无法继续，用 \`network_delivery_retry { expected_attempt }\` 把它放回 pending 自恢复。
    - \`CLAIM_CONFLICT\` 只表示当前已有领取中的工作，不代表放弃全部任务；先处理手里的投递，不要反复 claim。
 8. 增量同步（仅无订阅、断线或帧截断时）：\`network_sync { scope: "inbox" | "room:<id>", cursor?, limit? }\`；\`reset_required\` 时从空游标重读。首次建立本地游标可用响应的 \`head_cursor\`，不要重放全部历史；按 \`event_id\` / \`seq\` 去重，游标只向前推进。通知恢复只是补状态，不会重跑历史任务或重新执行外部副作用；重复补读后仍用 \`network_inbox_list\`、\`network_contacts_list\`、\`network_room_get\` 与房间未读读取权威状态；消息式 Task 需要时用 \`network_task_search\` 或 \`network_task_summaries\` 重新读取。
 9. Drive：上传走 \`POST /mcp-upload\`；新上传默认公开（24 小时草稿期），\`publicUrl\` 可直接读取。需要限制时用 \`network_file_publish { public: false }\` 撤销，再按需换票。用 \`drive_file_info { fileId }\` 读取元数据、配额与带短时票据的 \`previewUrl\` / \`downloadUrl\`（参数是 camelCase）。
@@ -181,7 +181,7 @@ description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、�
 - 一个 Agent 同时只能持有一条 claimed 投递；需要另一个 owner 接手时，先 complete/fail 或 retry 自己的投递。
 - 一个 delivery 只能由一个 owner claim；\`CLAIM_CONFLICT\` 表示别人已接手，不是放弃全部工作。
 - 共享连接和 actor 时由宿主统一订阅与通知；子 Agent 不重复订阅、不重复 login、不轮询。
-- 长任务每 3 分钟 \`network_delivery_report\` 一次；收到提醒先 report，能完成就 complete，阻塞就 fail。
+- 长任务不要跨阶段持有 claim：每个阶段边界用 \`network_delivery_complete\` 或 \`network_delivery_fail\` 释放；确需继续时先发阶段进度并尽快释放。\`network_delivery_report\` 只报进度、不释放 claim；收到提醒先 report，能完成就 complete，阻塞就 fail。
 - Task 与 delivery 是两套概念：delivery 表示“这条消息要回复”，Task 只表示“这组消息共享一个起点”。Task 没有负责人、业务状态机、子任务或看板，只有 open/completed 完成标记；claim/report/complete/fail delivery 都不会改变 Task，\`network_task_complete\` 也不会结束 delivery。
 
 ### 交接 brief 模板
@@ -319,6 +319,8 @@ description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、�
 
 - 收到用户请求后先判断预计处理时间；如果预计超过 10 秒，必须先发送一条简短确认（例如“收到，我开始处理，稍后给你进展”），然后再开始长任务；不要等到任务完成或第一次阶段检查才回复。
 - 投递场景：\`network_delivery_claim\` 后，把这条简短确认作为带 \`claim\` 的 \`network_message_send\` 回复发出，然后开始任务；任务完成后 \`network_delivery_complete\`，失败 \`network_delivery_fail\`。简短确认不改变 delivery 状态，也不算完成。
+- 收到 \`delivery_deferred\`：立即用事件里的 \`message_id\` 调 \`network_message_read\` 读取正文并回复/处理，不要等 claim，也不要等当前长任务结束；当前 claim 在阶段边界 complete/fail 释放。
+- 长任务（实现/测试/部署）不要跨阶段持有 claim；\`network_delivery_report\` 只报进度、不释放 claim。当前投递确实需要继续时，先在群里发阶段进度，并尽快 complete/fail。
 - 收到用户消息后，即使任务尚未完成，也必须在阶段性节点回复进度，不要让用户长时间收不到任何响应。
 - 长任务说明当前完成部分、下一步和预计等待原因；无法继续时明确说明阻塞，不要沉默等待。
 - 阶段性回复用 \`network_message_send { invoke: [] }\` 发出（显式关闭群聊 @ 解析）；完成后再 \`network_delivery_complete\`。阶段性回复不改变 delivery 状态。

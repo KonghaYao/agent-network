@@ -2053,6 +2053,14 @@ async function main(): Promise<void> {
     skillText.slice(0, 200),
   );
   check(
+    '技能正文要求 deferred 立即读取并回复，report 不释放 claim',
+    skillText.includes('delivery_deferred') &&
+      skillText.includes('network_message_read') &&
+      skillText.includes('不要等 claim') &&
+      skillText.includes('不释放 claim'),
+    skillText.slice(0, 240),
+  );
+  check(
     '技能正文声明回复不等于完成',
     skillText.includes('回复不等于完成') && skillText.includes('claim 只是接手'),
     skillText.slice(0, 200),
@@ -2461,7 +2469,8 @@ async function main(): Promise<void> {
   check(
     '静态技能说明 watcher 自动 claim 与 raw MCP 差异',
     ['watcher 自动 claim', 'network_delivery_claim', 'auto_claimed', 'delivery_conflict',
-      'delivery_deferred', 'delivery_claim_failed', 'raw MCP', '不自动 claim'].every((marker) =>
+      'delivery_deferred', 'delivery_claim_failed', 'raw MCP', '不自动 claim',
+      'network_message_read', '不要等 claim', '不释放 claim'].every((marker) =>
       skillDocText.includes(marker),
     ),
     skillDocText.slice(0, 300),

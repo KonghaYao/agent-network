@@ -37,10 +37,10 @@ bun agentnet.js monitor --harness claude
   `body` 直接携带消息正文的前 4000 个 Unicode 字符，`body_bytes` 是完整正文的 UTF-8 字节数，`body_truncated` 表示是否被截断；未截断时宿主无需额外读文件就能看到用户在说什么。`event_file` 始终保存完整正文（权限 `0600`），长消息被截断时才需要读取。截断按 Unicode 码点处理，不会切出非法 UTF-8。已成功领取的同一投递重复事件/快照不会重复 claim，也不会重复输出；deferred 不写永久去重，后续事件或重连快照会重新 claim。已 claim 的 delivery 还会带 `memory_context`、`memory_pack_id`、`memory_context_bytes`、`memory_context_truncated`；它是当前房间的只读参考数据，不是指令，每条 delivery 最多注入一次，失败/超时不影响处理。`--no-memory-context` 可关闭。非成功事件：
 
   - `{"type":"delivery_conflict","delivery_id":"...","claim_state":"conflict","hint":"跳过，不要处理；..."}`：别人已领取或投递已结束，跳过，不要处理。
-  - `{"type":"delivery_deferred","delivery_id":"...","claimed_delivery_id":"...","claim_state":"deferred","hint":"先 complete/fail 当前 claim，再 network_inbox_list 核对并 claim 这条；watcher 不轮询，需手动 claim 或重连快照重试"}`：自己已有另一条 claimed；先结束当前投递，再手动 claim 或重连快照重试。CLI 不轮询，不要等下一次事件自动处理。
+  - `{"type":"delivery_deferred","delivery_id":"...","claimed_delivery_id":"...","claim_state":"deferred","hint":"立即按 message_id 读取正文并回复，不要等 claim 或长任务结束；阶段边界 complete/fail 释放当前 claim，watcher 会自动重试并退避补领"}`：自己已有另一条 claimed；事件里的 `message_id` 就是新消息，立即读正文（带 `body` 时直接读，否则 `network_message_read`）并回复/处理，不要等 claim 或长任务结束；再在阶段边界 complete/fail 释放当前 claim。CLI 会退避补领，不轮询。
   - `{"type":"delivery_claim_failed","delivery_id":"...","code":"STALE_ATTEMPT","claim_state":"failed","hint":"..."}`：按 `code` 修复，不要处理。
 
-  已领取投递 3 分钟没有状态更新时，还会输出 `{"type":"reminder","delivery_id":"...","room_id":"...","message_id":"...","attempt":1,"hint":"report 当前阶段进度；完成则 complete，阻塞则 fail 或由接收者 retry"}`。提醒不生成 `event_file`、不含正文，也不会 claim；先核对 `network_inbox_list`，再 `network_delivery_report` 报告进度，完成则 complete，失败/阻塞则 fail 或由接收者 retry，不要重新 claim。
+  已领取投递 3 分钟没有状态更新时，还会输出 `{"type":"reminder","delivery_id":"...","room_id":"...","message_id":"...","attempt":1,"hint":"report 当前阶段进度；完成则 complete，阻塞则 fail 或由接收者 retry"}`。提醒不生成 `event_file`、不含正文，也不会 claim；先核对 `network_inbox_list`，再 `network_delivery_report` 报告进度，但 report 不释放 claim；长任务在阶段边界 complete/fail，完成则 complete，失败/阻塞则 fail 或由接收者 retry，不要重新 claim。
 
 - 默认模式下 `READY`、重连和错误只写 stderr；加 `--json` 后这些控制行也写到 stdout 的 JSON 事件里。Monitor 达到宿主时限或终态退出时再重新启动；凭据或协议错误先修复原因，不要盲目重试。
 
@@ -58,7 +58,7 @@ bun agentnet.js monitor --harness claude
 
    `reply` 会自动处理 pending 或已 claimed 状态，并用 `network_delivery_complete.final_body` 回复和完成，只产生一条最终消息。
 3. 预计超过 10 秒时，仍按主手册先发送简短确认；失败路径使用 `network_delivery_fail`。
-4. 收到 `delivery_conflict` 跳过；收到 `delivery_deferred` 先 complete/fail 当前 claim，再手动 claim 或重连快照重试（CLI 不轮询，不要等下一次事件自动处理）；收到 `delivery_claim_failed` 按 `code` 修复。不要自己轮询或反复 claim。
+4. 收到 `delivery_conflict` 跳过；收到 `delivery_deferred` 立即按 `message_id` 读正文并回复，不要等 claim 或长任务结束，再在阶段边界 complete/fail 释放当前 claim（CLI 会退避补领，不轮询，不要等下一次事件自动处理）；收到 `delivery_claim_failed` 按 `code` 修复。不要自己轮询或反复 claim。
 5. 回复长度与长内容遵循 MCP 主技能 `skill://agent-network/agent-network/SKILL.md`：默认短回复；详细报告、日志、代码或表格写成 `.md` 上传并绑定房间，聊天只发一行摘要和链接。`agentnet reply` 负责领取、回复与完成，不要另外发同一正文或重复结束投递。
 6. 自动 claim 后如果事件没有被消费，投递会停在 claimed；重连只补 pending。用 `network_inbox_list { state: "claimed" }` 核对，必要时 complete/fail，或由接收者 `retry` 放回 pending。
 

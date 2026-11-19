@@ -60,11 +60,11 @@ ALERT 的具体类型：
 
 - `ALERT { "type": "delivery", ... }`：已自动 claim 的待处理投递，包含定位字段、真实 `attempt` / `claim_id` / `claimed_at`、`auto_claimed:true`、`claim_state:"claimed"` 与 `claim` 对象，不含正文或凭据。已 claim 的 delivery 默认只带 `memory_pack_id` / `memory_items` / `memory_reason` pointer，不输出记忆正文；需要时由 Agent 显式调用 `network_memory_context_pack`，避免 `watch.log` 落盘。收到后按 `message_id` 用 `network_message_read` 读取正文并处理，不要再 claim。**这是有意与 `--harness claude` / `--harness codex` 不同**：Peri 的 stdout 常被 Other harness 追加到 `watch.log`，而日志不得持久化消息正文；需要直接正文投递时请使用 Claude Code 或 Codex 的监听，Peri 侧等待后续 opt-in body 模式。
 - `ALERT { "type": "delivery_conflict", ... }`：别人已领取或投递已结束；跳过，不要处理。
-- `ALERT { "type": "delivery_deferred", ... }`：自己已有另一条 claimed（`claimed_delivery_id`）；先 complete/fail 当前 claim，再手动 claim 或重连快照重试。CLI 不轮询，不要等下一次事件自动处理。
+- `ALERT { "type": "delivery_deferred", ... }`：自己已有另一条 claimed（`claimed_delivery_id`）；事件里的 `message_id` 就是新消息，立即用 `network_message_read` 读取正文并回复/处理，不要等 claim，也不要等当前长任务结束。长任务在阶段边界用 `network_delivery_complete` / `network_delivery_fail` 释放 claim；当前投递需要继续时先发阶段进度并尽快释放。CLI 会按退避自动补领，不轮询。
 - `ALERT { "type": "delivery_claim_failed", ... }`：claim 失败，带 `code`（例如 `STALE_ATTEMPT`）；不要当成可处理投递，按 `code` 修复。
-- `ALERT { "type": "reminder", ... }`：已领取投递 3 分钟没有状态更新的提醒；先 `network_delivery_report` 报告进度，完成则 complete，失败/阻塞则 fail 或由接收者 retry，不要重新 claim。提醒不产生新待办，也不会触发 claim。
+- `ALERT { "type": "reminder", ... }`：已领取投递 3 分钟没有状态更新的提醒；先 `network_delivery_report` 报告进度，但 report 不释放 claim；长任务在阶段边界 complete/fail 释放。完成则 complete，失败/阻塞则 fail 或由接收者 retry，不要重新 claim。提醒不产生新待办，也不会触发 claim。
 - `ALERT { "type": "delivery_state", ... }`：claim/report/complete/fail/cancel 回执；informational 可见，不要 claim。
-- CLI 不再按 `sender_id` 过滤自己的消息或回执；服务端通常已排除自己的房间消息与自己的 delivery 操作。已成功领取的同一 delivery 按 `delivery_id` / `attempt` 去重，snapshot 和通知不会重复 claim 或重复告警。`delivery_deferred` 不写永久去重，当前 claim 结束后重连快照会重新 claim。
+- CLI 不再按 `sender_id` 过滤自己的消息或回执；服务端通常已排除自己的房间消息与自己的 delivery 操作。已成功领取的同一 delivery 按 `delivery_id` / `attempt` 去重，snapshot 和通知不会重复 claim 或重复告警。`delivery_deferred` 不写永久去重，当前 claim 结束后重连快照会重新 claim；但收到时仍要立即按 `message_id` 读取正文并回复，不要等 claim。
 - 断线按指数退避重连；重连后重新订阅、login 并补读，不轮询。普通房间消息、成员/文件/在线状态与回执都会输出；`--no-room-events` 可关闭这些 informational 输出。
 
 ## 2. 收到 ALERT 后

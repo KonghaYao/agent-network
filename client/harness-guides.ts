@@ -37,7 +37,7 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
       'delivery 事件与 event_file 可能带 memory_context（当前 room 的只读参考包）；每条 delivery 最多注入一次，失败或超时不影响处理。`--no-memory-context` 可关闭。',
     ],
     pitfalls: [
-      'delivery_conflict 表示别人已领取，跳过；delivery_deferred 表示自己已有 claimed，先 complete/fail 当前投递，watcher 会自动退避重试。',
+      'delivery_conflict 表示别人已领取，跳过；delivery_deferred 表示自己已有 claimed：立即按事件 message_id 读正文并回复，不要等 claim 或长任务结束，再在阶段边界 complete/fail 释放当前 claim；watcher 会自动退避重试。',
       'Monitor 正常运行时不要重启；断线由脚本退避重连。',
     ],
   },
@@ -92,7 +92,7 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
     pitfalls: [
       '看到 READY 不等于已监听：必须有消费者读取 ALERT，否则投递会停在 claimed。',
       '不要用 shell `&` 或通用后台任务承载 monitor；宿主返回后进程可能被回收，ALERT 无人消费。',
-      'delivery.reminder 只提醒不 claim；先 report 进度，完成则 complete，阻塞则 fail。',
+      'delivery.reminder 只提醒不 claim；先 report 进度，但 report 不释放 claim；长任务在阶段边界 complete/fail，收到 delivery_deferred 立即按 message_id 读正文并回复，不要等 claim。',
     ],
   },
   dsh: {
@@ -136,7 +136,7 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
       '`type=delivery` 已在输出前自动 claim；其他 ALERT（room_message/stream_event/delivery_state）只提示。被唤醒后先 `agentnet inbox` 对账，再 read/reply/complete/fail。',
     ],
     pitfalls: [
-      '只启动 peri 监听而不挂哨兵：投递会停在 claimed，直到提醒或被 retry。',
+      '只启动 peri 监听而不挂哨兵：投递会停在 claimed，直到提醒或被 retry；delivery_deferred 也要立即按 message_id 读正文并回复，不要等 claim。',
       '不要把正文补写进 watch.log；哨兵日志只保留定位字段。',
     ],
   },
@@ -169,7 +169,7 @@ const COMMON_STEPS = [
   '   agentnet inbox',
   '   agentnet read --message <message-id>',
   '   agentnet reply --delivery <delivery-id> --body <最终答复>',
-  '   需要分阶段时先 agentnet send --room <room-id> --body <进度> --invoke ""；',
+  '   需要分阶段时先 agentnet send --room <room-id> --body <进度> --invoke ""；阶段边界及时 complete/fail 释放 claim，report 只报进度、不释放。',
   '   无法完成用 agentnet fail --delivery <id> --attempt <n> --claim-id <id> --error <原因>。',
   '',
   '5. 群聊 @ 规则',
