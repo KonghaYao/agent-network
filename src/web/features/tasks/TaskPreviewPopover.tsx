@@ -6,7 +6,7 @@ import {
   Button,
   LENSO_BADGE_FILL,
 } from '../../app/lenso-controls';
-import * as PopoverPrimitive from '@radix-ui/react-popover';
+import { Popover } from '../../app/lenso-popover';
 import {
   useCallback,
   useEffect,
@@ -46,7 +46,7 @@ function taskAvatarStyle(name: string): CSSProperties {
  * Task 行的摘要预览。
  *
  * 桌面精细指针悬浮打开、移入浮层不闪关，且不移动焦点；点击/Enter/Space
- * 固定打开。移动端只靠点按，不依赖 hover。Esc/点击外部由 Radix 关闭，
+ * 固定打开。移动端只靠点按，不依赖 hover。Esc/点击外部由适配器关闭，
  * 固定打开时把焦点还给触发按钮。
  */
 export function TaskPreviewPopover({
@@ -151,7 +151,7 @@ export function TaskPreviewPopover({
   };
 
   const handleTriggerClick = (event: MouseEvent<HTMLButtonElement>) => {
-    // 悬浮已打开时，点击应固定而不是被 Radix 当作“再次点击关闭”。
+    // 悬浮已打开时，点击应固定而不是被触发器当作“再次点击关闭”。
     if (open && !pinned) {
       event.preventDefault();
       onRequestOpen(item.root_message_id);
@@ -174,9 +174,8 @@ export function TaskPreviewPopover({
   const preview = item.preview || '（无正文）';
 
   return (
-    <PopoverPrimitive.Root open={open} onOpenChange={handleOpenChange}>
-      <PopoverPrimitive.Trigger asChild>
-        <Button
+    <Popover open={open} onOpenChange={handleOpenChange}
+      trigger={<Button
           ref={triggerRef}
           type="button"
           variant="borderless"
@@ -213,10 +212,7 @@ export function TaskPreviewPopover({
             <span>{item.message_count} 消息</span>
             <span>最近 {taskTimeLabel(item.latest_activity_at)}</span>
           </span>
-        </Button>
-      </PopoverPrimitive.Trigger>
-      <PopoverPrimitive.Portal>
-        <PopoverPrimitive.Content
+        </Button>}
           id={`task-preview-${item.root_message_id}`}
           className="task-preview-popover"
           side="top"
@@ -318,8 +314,6 @@ export function TaskPreviewPopover({
               查看全部 {item.message_count} 条消息
             </Button>
           </div>
-        </PopoverPrimitive.Content>
-      </PopoverPrimitive.Portal>
-    </PopoverPrimitive.Root>
+    </Popover>
   );
 }

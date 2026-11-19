@@ -1,0 +1,44 @@
+/* 只约束迁移的两个浮层；SDK 负责定位，页面保留原微信尺寸与实色面板。 */
+:is(#room-announcement-popover, .task-preview-popover)[data-popover-backend='lenso'] {
+  box-sizing: border-box;
+  padding: 12px !important;
+  border: 1px solid var(--wx-line) !important;
+  border-radius: 8px !important;
+  background: var(--wx-panel) !important;
+  color: var(--wx-text) !important;
+  box-shadow: var(--wx-shadow) !important;
+  transform: none !important;
+  translate: none !important;
+  opacity: 1 !important;
+  transition: none !important;
+  animation: none !important;
+}
+
+#room-announcement-popover[data-popover-backend='lenso'] {
+  width: min(320px, calc(100vw - 24px));
+  max-height: min(var(--available-height), calc(100dvh - 24px));
+  overflow-y: auto !important;
+  font-size: inherit !important;
+  line-height: normal !important;
+}
+
+.task-preview-popover[data-popover-backend='lenso'] {
+  width: min(380px, calc(100vw - 24px));
+  max-height: min(58dvh, 420px) !important;
+  overflow-y: auto !important;
+  border-radius: 10px !important;
+  font-size: 12px !important;
+  line-height: normal !important;
+}
+
+/* 不让 SDK 的玻璃背景覆盖既有暗色面板。 */
+:is(#room-announcement-popover, .task-preview-popover)[data-popover-backend='lenso'] > [data-lenso-slot='popover-material'] {
+  display: none;
+}
+
+@media (max-width: 759px) {
+  .task-preview-popover[data-popover-backend='lenso'] {
+    width: calc(100vw - 20px);
+    max-height: min(52dvh, 360px) !important;
+  }
+}

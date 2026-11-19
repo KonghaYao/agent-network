@@ -1,6 +1,7 @@
 import { Tooltip } from '../../app/lenso-tooltip';
 import { Button } from '../../app/lenso-controls';
-import * as PopoverPrimitive from '@radix-ui/react-popover';
+import { useState } from 'react';
+import { Popover } from '../../app/lenso-popover';
 
 /**
  * 头部公告快捷查看：Popover 只承载只读摘要与编辑入口。
@@ -17,9 +18,16 @@ export function AnnouncementPopover({
   canEdit: boolean;
   onEdit: () => void;
 }) {
+  const [open, setOpen] = useState(false);
   return (
-    <PopoverPrimitive.Root>
-      <PopoverPrimitive.Trigger asChild>
+    <Popover open={open} onOpenChange={setOpen}
+      id="room-announcement-popover"
+      className="spa-popover"
+      sideOffset={6}
+      align="end"
+      collisionPadding={12}
+      aria-label="群公告"
+      trigger={
         <Tooltip as={Button}
           id="room-announcement-info"
           className="icon-btn announcement-dot"
@@ -29,32 +37,21 @@ export function AnnouncementPopover({
         >
           !
         </Tooltip>
-      </PopoverPrimitive.Trigger>
-      <PopoverPrimitive.Portal>
-        <PopoverPrimitive.Content
-          id="room-announcement-popover"
-          className="spa-popover"
-          sideOffset={6}
-          align="end"
-          collisionPadding={12}
-          aria-label="群公告"
-        >
-          <p className="spa-popover-text">{announcement}</p>
-          <div className="row">
-            {canEdit ? (
-              <PopoverPrimitive.Close asChild>
-                <Button id="room-announcement-edit" type="button" className="primary" onClick={onEdit}>
-                  编辑公告
-                </Button>
-              </PopoverPrimitive.Close>
-            ) : (
-              <PopoverPrimitive.Close asChild>
-                <Button type="button">关闭</Button>
-              </PopoverPrimitive.Close>
-            )}
-          </div>
-        </PopoverPrimitive.Content>
-      </PopoverPrimitive.Portal>
-    </PopoverPrimitive.Root>
+      }
+    >
+      <p className="spa-popover-text">{announcement}</p>
+      <div className="row">
+        {canEdit ? (
+          <Button id="room-announcement-edit" type="button" className="primary" onClick={() => {
+            setOpen(false);
+            onEdit();
+          }}>
+            编辑公告
+          </Button>
+        ) : (
+          <Button type="button" onClick={() => setOpen(false)}>关闭</Button>
+        )}
+      </div>
+    </Popover>
   );
 }
