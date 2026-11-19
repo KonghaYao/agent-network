@@ -4,6 +4,7 @@ import {
   AvatarGroup,
   Badge,
   Button,
+  Surface,
   LENSO_BADGE_FILL,
 } from '../../app/lenso-controls';
 import { Popover } from '../../app/lenso-popover';
@@ -181,6 +182,7 @@ export function TaskPreviewPopover({
           variant="borderless"
           size="sm"
           className="task-dock-item-trigger"
+          style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', justifyContent: 'flex-start', height: 'auto', whiteSpace: 'normal', color: 'var(--lenso-label-primary)' }}
           aria-label={`查看 Task：${preview}，${item.message_count} 条消息，${item.participant_count} 个 Agent 参与`}
           onPointerEnter={scheduleOpen}
           onPointerLeave={scheduleClose}
@@ -234,6 +236,7 @@ export function TaskPreviewPopover({
           onPointerEnter={clearCloseTimer}
           onPointerLeave={scheduleClose}
         >
+          <Surface style={{ minWidth: 0, padding: 0, background: 'transparent' }}>
           <div className="task-preview-head">
             <span className="task-preview-sender">
               {item.root_sender_name || (item.root_sender_kind === 'agent' ? 'Agent' : '成员')}
@@ -262,6 +265,7 @@ export function TaskPreviewPopover({
                         variant="borderless"
                         size="sm"
                         className={`task-preview-recent${message.recalled ? ' is-recalled' : ''}`}
+                        style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', height: 'auto', whiteSpace: 'normal', color: message.recalled ? 'var(--wx-muted)' : 'var(--lenso-label-primary)' }}
                         aria-label={`查看 ${sender} 的回复：${text}`}
                         onClick={() => {
                           // 先回到触发行，Trace 关闭时可把焦点还给它。
@@ -314,6 +318,7 @@ export function TaskPreviewPopover({
               查看全部 {item.message_count} 条消息
             </Button>
           </div>
+          </Surface>
     </Popover>
   );
 }

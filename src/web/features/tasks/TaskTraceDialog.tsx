@@ -142,6 +142,7 @@ function TraceContent({
               variant="borderless"
               size="sm"
               className={`task-trace-item${item.role === 'root' ? ' is-focus' : ''}${item.recalled ? ' is-recalled' : ''}`}
+              style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', justifyContent: 'flex-start', height: 'auto', whiteSpace: 'normal', color: item.recalled ? 'var(--wx-muted)' : 'var(--lenso-label-primary)' }}
               role="listitem"
               disabled={item.recalled}
               onClick={() => {

@@ -495,6 +495,7 @@ export const ChatMessage = memo(function ChatMessage({
       >
         <li
           className={`msg${mine ? ' mine has-receipt' : ''}`}
+          data-task-message={item.task_root_id ? 'true' : undefined}
           data-message-id={item.message_id}
           data-sender-kind={agent ? 'agent' : 'human'}
           data-message-preview={item.preview}
@@ -509,12 +510,6 @@ export const ChatMessage = memo(function ChatMessage({
           </span>
           <div className="msg-content">
             {!mine && room.kind === 'group' ? <div className="msg-sender">{name}</div> : null}
-            <TaskSummaryBar
-              item={item}
-              roomId={room.room_id}
-              headSeq={room.head_seq}
-              onOpen={onOpenTask}
-            />
             <Tooltip as="div"
               className={`bubble${collapsed ? ' is-collapsed' : ''}`}
               hint={fullTime(item.created_at)}
@@ -531,6 +526,12 @@ export const ChatMessage = memo(function ChatMessage({
                 <HumanBody text={shown} mentions={mentions} />
               )}
             </Tooltip>
+            <TaskSummaryBar
+              item={item}
+              roomId={room.room_id}
+              headSeq={room.head_seq}
+              onOpen={onOpenTask}
+            />
             {cards.length > 0 ? (
               <div className="msg-files">
                 <Suspense fallback={null}>

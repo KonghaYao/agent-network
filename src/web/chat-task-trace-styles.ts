@@ -5,13 +5,17 @@
  */
 export const TASK_TRACE_STYLE = `
   /* 起点消息的紧凑摘要行：icon · 参与 Agent · 短文本 · N 消息。 */
-  .msg-task-bar-slot { margin: 0 0 6px; max-width: 100%; }
+  .msg-task-bar-slot { margin: 6px 0; min-width: 0; width: 100%; max-width: 100%; }
+  .msg-task-bar-slot > [data-lenso-slot] { overflow: hidden; }
   .msg-task-bar-slot[hidden] { display: none; }
   .msg.mine .msg-task-bar-slot { margin-left: auto; }
-  .task-bar { display: flex; align-items: center; gap: 8px; box-sizing: border-box;
-    width: 100%; min-height: 44px; max-width: 100%; padding: 5px 10px;
-    border: 1px solid var(--wx-line); border-radius: 10px; background: var(--wx-panel);
-    color: var(--wx-text); text-align: left; cursor: pointer; }
+  .task-bar.task-bar { display: grid; grid-template-columns: auto 1fr auto;
+    align-items: center; gap: 8px; box-sizing: border-box;
+    width: 100%; min-width: 0; height: auto; min-height: 64px; max-width: 100%; padding: 10px 12px;
+    border: 1px solid var(--lenso-separator); border-radius: var(--app-radius-surface);
+    background: transparent; white-space: normal;
+    color: var(--lenso-label-primary); text-align: left; cursor: pointer;
+    overflow-wrap: anywhere; word-break: break-word; }
   .task-bar:hover, .task-bar:focus-visible { background: var(--wx-hover); }
   .task-bar:focus-visible { outline: 2px solid var(--wx-link); outline-offset: 2px; }
   .task-bar-pending { cursor: progress; color: var(--wx-muted); }
@@ -31,10 +35,29 @@ export const TASK_TRACE_STYLE = `
     padding: 0 4px; border-radius: 10px; background: var(--wx-search);
     color: var(--wx-muted); font-size: 10px; line-height: 1; box-sizing: border-box;
     box-shadow: 0 0 0 2px var(--wx-panel); }
-  .task-bar-preview { flex: 1 1 auto; min-width: 0; overflow: hidden;
-    text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
-  .task-bar-count { flex: 0 0 auto; color: var(--wx-muted); font-size: 11px;
-    white-space: nowrap; }
+  .task-bar-icon { grid-column: 1; grid-row: 1; color: var(--lenso-tint-text);
+    font-size: 12px; font-weight: 700; }
+  .task-bar-avatars { grid-column: 2; grid-row: 1; }
+  .task-bar-preview { grid-column: 1 / -1; grid-row: 2;
+    min-width: 0; display: -webkit-box; -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical; overflow: hidden; white-space: normal;
+    overflow-wrap: anywhere; word-break: break-word; font-size: 12.5px; line-height: 1.5; }
+  .task-bar-count { grid-column: 3; grid-row: 1; min-width: 48px;
+    color: var(--wx-muted); font-size: 11px; }
+  .task-bar-states { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+  .task-status-badge { display: inline-flex; align-self: center; padding: 3px 7px;
+    border-radius: 6px; font-size: 11px; line-height: 1.3;
+    color: var(--task-status-text); background: var(--task-status-fill);
+    --task-status-text: var(--lenso-status-info-text);
+    --task-status-fill: var(--lenso-control-tint-subtle-fill); }
+  .task-status-badge[data-task-status='pending'] {
+    --task-status-text: var(--lenso-status-warning-text);
+    --task-status-fill: var(--lenso-control-status-warning-soft-fill); }
+  .task-status-badge:is([data-task-status='done'], [data-task-status='completed']) {
+    --task-status-text: var(--lenso-status-success-text);
+    --task-status-fill: var(--lenso-control-status-success-soft-fill); }
+  .task-status-badge[data-task-status='failed'] { --task-status-text: var(--wx-danger-text);
+    --task-status-fill: var(--lenso-control-status-error-soft-fill); }
   .task-bar-meta { flex: 0 0 auto; color: var(--wx-muted); font-size: 11px;
     white-space: nowrap; }
   .task-bar-skeleton { flex: 1 1 auto; height: 12px; border-radius: 4px;
@@ -140,6 +163,15 @@ export const TASK_TRACE_STYLE = `
   .task-trace-note { color: var(--wx-muted); font-size: 10px; }
   .task-trace-empty { margin: 0; padding: 32px 16px; color: var(--wx-muted);
     font-size: 13px; text-align: center; }
+
+  .task-trace-drawer :is(h2, p, span, button, pre, code),
+  .task-trace-card { min-width: 0; max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
+  .task-trace-drawer .task-trace-item { height: auto; white-space: normal; align-items: stretch; }
+  .task-trace-drawer :is(pre, code) { white-space: pre-wrap; }
+  .task-trace-drawer .task-trace-item-head { flex-wrap: wrap; }
+  .task-trace-drawer #task-trace-title { white-space: normal; line-height: 1.4; }
+  .task-trace-items { overflow-x: hidden; }
+  .task-trace-preview { width: 100%; white-space: normal; }
 
   @media (max-width: 759px) {
     .task-trace-card { width: 100%; border-left: 0; }

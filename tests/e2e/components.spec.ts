@@ -3,6 +3,7 @@ import { expect, test } from '@playwright/test';
 import { baseUrl, callTool, createComponentRoom, dragFile, expectAccountMenuClearOfDialog, login, requestId } from './fixtures/components';
 
 import { semanticColor } from './fixtures/semantic-colors';
+import { expectNoHorizontalOverflow, LONG_TASK_URL } from './fixtures/task-layout';
 
 // 真实 MCP fixture 与浏览器交互覆盖组件、RHF、持久化及可访问性。
 
@@ -24,6 +25,33 @@ test.describe.serial('SPA 组件库与状态管理', () => {
 
   test.beforeEach(async ({ page }) => {
     await login(page, base, tokenA);
+  });
+
+  test('Task Lenso Surface/Card/Badge 保留完成确认动作，390 暗色长内容可换行', async ({ page }) => {
+    const sent = await callTool<{ message: { message_id: string } }>(base, tokenA, 'network_message_send', {
+      request_id: requestId('task_layout'), client_message_id: requestId('task_layout'),
+      room_id: roomId, body: LONG_TASK_URL, invoke: [],
+    });
+    await callTool(base, tokenA, 'network_task_mark', {
+      request_id: requestId('task_mark'), room_id: roomId, message_id: sent.message.message_id,
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.goto(`${base}/c/${roomId}`);
+    await expect(page.locator('#task-dock-count [data-lenso-slot="badge"]')).toHaveText('1');
+    await expect(page.locator('#task-dock > [data-lenso-slot="surface"]')).toBeVisible();
+    await page.locator('#task-dock-toggle').click();
+    const status = page.locator('#task-dock-panel [data-task-status="open"]');
+    await expect(status).toHaveCSS('color', await semanticColor(page, '--lenso-status-info-text', 'color'));
+    await expectNoHorizontalOverflow(page.locator('#task-dock-panel'));
+    await page.locator('.task-dock-complete').click();
+    await expectNoHorizontalOverflow(page.locator('#task-complete-dialog'));
+    await expect(page.locator('#task-complete-confirm')).toHaveAttribute('data-lenso-slot', 'button');
+    await page.locator('#task-complete-cancel').click();
+    await expect(page.locator('.task-dock-complete')).toBeFocused();
+    await page.locator('.task-dock-complete').click();
+    await page.locator('#task-complete-confirm').click();
+    await expect(page.locator('#task-dock-empty')).toBeVisible();
   });
 
   test('home 保留筛选与 zustand 持久化，面板可键盘缩放并双击复位', async ({ page }) => {

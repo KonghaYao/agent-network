@@ -1,4 +1,17 @@
 export const MESSAGE_ACTIONS_STYLE = `
+  /* Task 的正文、代码与文件共用可收缩内容列；只保留纵向滚动。 */
+  .msg[data-task-message] .bubble { box-sizing: border-box; min-width: 0;
+    border-radius: var(--app-radius-xl); }
+  .msg[data-task-message] .bubble::before { display: none; }
+  .msg[data-task-message] :is(.bubble, .msg-files, .msg-file, .msg-file-main,
+    .msg-markdown, .msg-markdown a, pre, code) {
+    min-width: 0; max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
+  .msg[data-task-message] .msg-markdown :is(pre, code) { white-space: pre-wrap; }
+  .msg[data-task-message] .msg-markdown :is(.md-pre, .md-table-wrap) {
+    overflow-x: hidden; overflow-y: auto; }
+  .msg[data-task-message] .msg-markdown .md-table {
+    width: 100%; min-width: 0; max-width: 100%; table-layout: fixed; }
+
   .message-action-menu { position: fixed; z-index: var(--app-z-message-menu); min-width: 140px; padding: 6px;
     background: var(--wx-panel); color: var(--wx-text); border: 1px solid var(--wx-line);
     border-radius: 8px; box-shadow: var(--lenso-surface-shadow); }

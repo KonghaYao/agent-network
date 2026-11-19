@@ -1,5 +1,5 @@
 import { Tooltip } from '../../app/lenso-tooltip';
-import { Button } from '../../app/lenso-controls';
+import { Badge, Button, Card, LENSO_BADGE_FILL } from '../../app/lenso-controls';
 import { TaskPreviewPopover } from './TaskPreviewPopover';
 import type { TaskListItemView } from './types';
 
@@ -51,6 +51,10 @@ export function TaskListItem({
 
   return (
     <li className="task-dock-item" data-task-root={item.root_message_id}>
+      <Card style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', alignItems: 'stretch', width: '100%', minWidth: 0, padding: 4, borderRadius: 'var(--app-radius-xl)', background: 'var(--lenso-background-secondary)' }}>
+      <span data-task-status={item.status} className="task-status-badge">
+        <Badge placement="" style={LENSO_BADGE_FILL}>{item.status === 'completed' ? '已完成' : 'Task'}</Badge>
+      </span>
       <TaskPreviewPopover
         item={item}
         open={previewOpen}
@@ -98,6 +102,7 @@ export function TaskListItem({
           </span>
         ) : null}
       </div>
+      </Card>
     </li>
   );
 }

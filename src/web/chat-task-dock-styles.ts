@@ -17,7 +17,7 @@ export const TASK_DOCK_STYLE = `
     width: 100%; min-width: 0; }
   .task-dock-head { display: flex; align-items: center; width: fit-content;
     max-width: 100%; box-sizing: border-box; border: 1px solid var(--wx-line);
-    border-radius: 10px; background: var(--wx-panel);
+    border-radius: var(--app-radius-surface); background: var(--lenso-background-secondary);
     box-shadow: var(--lenso-overlay-shadow); overflow: hidden; }
   .task-dock-toggle { flex: 1 1 auto; display: flex; align-items: center; gap: 8px;
     min-height: 44px; min-width: 0; padding: 6px 10px; border: 0; border-radius: 0;
@@ -39,12 +39,15 @@ export const TASK_DOCK_STYLE = `
   .task-dock-body { position: absolute; left: 0; right: 0;
     bottom: calc(100% + 8px); box-sizing: border-box; display: flex;
     flex-direction: column; width: 100%; max-height: min(50dvh, 460px);
-    border: 1px solid var(--wx-line); border-radius: 10px;
-    background: var(--wx-panel); box-shadow: var(--lenso-overlay-shadow);
+    border: 1px solid var(--lenso-separator); border-radius: var(--app-radius-surface);
+    background: var(--lenso-background-secondary); box-shadow: var(--lenso-overlay-shadow);
     overflow: hidden; }
   .task-dock-body[hidden] { display: none; }
-  .task-dock-list { flex: 1 1 auto; min-height: 0; margin: 0;
-    padding: 0; overflow-y: auto; overscroll-behavior: contain; list-style: none; }
+  .task-dock-list { flex: 1 1 auto; min-width: 0; min-height: 0; margin: 0;
+    padding: 4px 8px 8px; overflow-x: hidden; overflow-y: auto;
+    overscroll-behavior: contain; list-style: none; }
+  .task-dock-list .task-dock-item { margin-bottom: 6px; border: 1px solid var(--lenso-separator);
+    border-radius: var(--app-radius-xl); }
   .task-dock-status { margin: 0; padding: 12px;
     color: var(--wx-muted); font-size: 12px; text-align: center; }
   .task-dock-empty { display: flex; flex-direction: column; align-items: center;
@@ -73,7 +76,10 @@ export const TASK_DOCK_STYLE = `
     outline-offset: -2px; }
   /* 触发按钮内部是两行信息，不能被 Lenso 的水平居中布局改写。 */
   .task-dock-list .task-dock-item-trigger { display: flex; flex-direction: column;
-    align-items: stretch; justify-content: flex-start; width: 100%; text-align: left; }
+    flex: 1 1 180px; min-width: 0; height: auto; white-space: normal;
+    align-items: stretch; justify-content: flex-start; width: auto; text-align: left; }
+  .task-dock-list .task-dock-item-trigger > span { width: 100%; min-width: 0; }
+  .task-dock-item-actions { margin-left: auto; flex-wrap: wrap; }
   .task-dock-preview { display: -webkit-box; -webkit-line-clamp: 2;
     -webkit-box-orient: vertical; overflow: hidden; font-size: 12.5px;
     line-height: 1.45; overflow-wrap: anywhere; }
@@ -155,6 +161,19 @@ export const TASK_DOCK_STYLE = `
     overflow-wrap: anywhere; }
   .task-complete-error { margin: 0 0 12px; color: var(--wx-unread); font-size: 12px;
     line-height: 1.5; overflow-wrap: anywhere; }
+
+  .task-dock :is(button, span, p), .task-preview-popover :is(button, span, p),
+  .task-complete-dialog :is(p, h2, pre, code) {
+    min-width: 0; max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
+  .task-preview-popover { overflow-x: hidden; border-radius: var(--app-radius-surface);
+    border-color: var(--lenso-separator); box-shadow: var(--lenso-overlay-shadow); }
+  .task-preview-popover .task-preview-recent { height: auto; white-space: normal; align-items: stretch; }
+  .task-preview-recent-head { flex-wrap: wrap; }
+  .task-preview-recent-text, .task-dock-preview { width: 100%; white-space: normal; }
+  .task-preview-popover :is(pre, code), .task-complete-dialog :is(pre, code) { white-space: pre-wrap; }
+  .task-complete-dialog { max-height: 80dvh; overflow-x: hidden; overflow-y: auto; }
+  .task-complete-dialog .modal-actions { flex-wrap: wrap; gap: 8px; }
+  .task-complete-dialog button { min-height: 44px; }
 
   /* 「回到底部」保持原位，靠 chat-styles 的更高 z-index 盖在浮动面板之上。 */
   @media (max-width: 759px) {

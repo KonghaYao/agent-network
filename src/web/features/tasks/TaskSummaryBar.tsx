@@ -4,13 +4,15 @@ import {
   AvatarGroup,
   Badge,
   Button,
+  Surface,
+  ProgressBar,
   LENSO_BADGE_FILL,
 } from '../../app/lenso-controls';
 import { useQuery } from '@tanstack/react-query';
 import type { CSSProperties } from 'react';
 
 import { useWebSession } from '../../hooks/useWebSession';
-import type { HistoryMessage } from '../../lib/chat';
+import { receiptStatus, type HistoryMessage } from '../../lib/chat';
 import { callTool } from '../../lib/mcp-client';
 import { queryKeys } from '../../lib/query-keys';
 import { avatarColor, firstChar } from '../../lib/rooms';
@@ -82,11 +84,19 @@ export function TaskSummaryBar({
   if (!marked || !summary) return null;
   const participants = summary.participants.slice(0, 3);
   const more = Math.max(0, summary.participant_count - participants.length);
+  const deliveries = Object.entries(item.delivery_states).filter(([, count]) => count > 0);
+  const total = deliveries.reduce((sum, [, count]) => sum + count, 0);
+  const settled =
+    (item.delivery_states.completed ?? 0) +
+    (item.delivery_states.failed ?? 0) +
+    (item.delivery_states.cancelled ?? 0);
   return (
     <div className="msg-task-bar-slot">
+      <Surface style={{ minWidth: 0, maxWidth: '100%', padding: 0, borderRadius: 'var(--app-radius-surface)' }}>
       <Button
         type="button"
         className="task-bar"
+        style={{ display: 'grid', height: 'auto', whiteSpace: 'normal', color: 'var(--lenso-label-primary)' }}
         data-task-root={item.message_id}
         aria-label={`Task：${summary.preview || '任务'}，${summary.message_count} 条消息`}
         onClick={() => onOpen(item.message_id, null)}
@@ -113,8 +123,27 @@ export function TaskSummaryBar({
           ) : null}
         </span>
         <span className="task-bar-preview">{summary.preview || item.preview || '（无正文）'}</span>
-        <span className="task-bar-count">{summary.message_count} 消息</span>
+        <span className="task-bar-count"><Badge placement="" style={LENSO_BADGE_FILL}>{summary.message_count} 消息</Badge></span>
+        {deliveries.length > 0 ? (
+          <span className="task-bar-states">
+            {deliveries.map(([state, count]) => (
+              <span key={state} className="task-status-badge" data-task-status={state}>
+                <Badge placement="" style={LENSO_BADGE_FILL}>{receiptStatus({ [state]: count }, false)}</Badge>
+              </span>
+            ))}
+          </span>
+        ) : null}
       </Button>
+      {total > 0 ? (
+        <ProgressBar
+          value={settled}
+          max={total}
+          aria-label="Task"
+          size="sm"
+          style={{ width: '100%', minWidth: 0, padding: '0 12px 8px', boxSizing: 'border-box' }}
+        />
+      ) : null}
+      </Surface>
     </div>
   );
 }

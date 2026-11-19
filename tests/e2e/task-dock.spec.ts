@@ -2,6 +2,8 @@ import { AxeBuilder } from '@axe-core/playwright';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { expectNoHorizontalOverflow, LONG_TASK_URL } from './fixtures/task-layout';
+import { semanticColor } from './fixtures/semantic-colors';
 
 /**
  * 浮动 Task dock：默认收起、展开/收起、布局稳定、预览、完成、分页与实时刷新。
@@ -279,6 +281,88 @@ async function expandDock(page: Page) {
 }
 
 test.describe('浮动 Task dock', () => {
+  for (const width of [390, 1280]) {
+    for (const colorScheme of ['light', 'dark'] as const) {
+      test(`Lenso Task 长内容 ${width}/${colorScheme}：摘要、列表、预览、追踪与完成无横向滚动`, async ({ page }, testInfo) => {
+        const base = await baseUrl();
+        const fixture = await setupTaskRoom(base, `layout-${width}-${colorScheme}`, { roots: 0 });
+        const rootId = await createTask(base, fixture.owner.token, fixture.roomId, LONG_TASK_URL);
+        await sendMessage(base, fixture.agent.token, fixture.roomId, `\`\`\`text\n${LONG_TASK_URL}\n\`\`\`\n[${LONG_TASK_URL}](${LONG_TASK_URL})`, { taskRootId: rootId });
+        await page.setViewportSize({ width, height: 844 });
+        await page.emulateMedia({ colorScheme });
+        await openRoom(page, base, fixture.owner.token, fixture.roomId);
+        const toggle = page.locator('#task-dock-toggle');
+        await expect(toggle).toHaveAttribute('data-lenso-slot', 'button');
+        expect((await toggle.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+        await expect(page.locator('#task-dock-count [data-lenso-slot="badge"]')).toHaveText('1');
+        const bar = page.locator(`.task-bar[data-task-root="${rootId}"]`);
+        await expectNoHorizontalOverflow(bar);
+        await bar.click();
+        const trace = page.locator('#task-trace-drawer');
+        await expectNoHorizontalOverflow(trace);
+        await page.locator('#task-trace-close').click();
+        await expandDock(page);
+        const panel = page.locator('#task-dock-panel');
+        await expect(panel.locator('[data-lenso-slot="card"]').first()).toBeVisible();
+        await expect(panel.locator('[data-lenso-slot="toolbar"]')).toBeVisible();
+        const item = itemLocator(page, rootId);
+        await expect(item.locator('[data-lenso-slot="card"]')).toBeVisible();
+        await expect(item.locator('[data-task-status="open"] [data-lenso-slot="badge"]')).toHaveText('Task');
+        await expectNoHorizontalOverflow(panel);
+        await page.screenshot({ path: testInfo.outputPath(`task-${width}-${colorScheme}.png`) });
+        await item.locator('.task-dock-item-trigger').click();
+        const preview = page.locator(`#task-preview-${rootId}`);
+        await expect(preview).toContainText('github.com');
+        await expectNoHorizontalOverflow(preview);
+        await page.keyboard.press('Escape');
+        await item.locator('.task-dock-complete').click();
+        await expectNoHorizontalOverflow(page.locator('#task-complete-dialog'));
+        await page.locator('#task-complete-cancel').click();
+        await expect(item).toBeVisible();
+        await page.locator('#task-dock-toggle').click();
+        const markdown = page.locator('[data-task-message] .msg-markdown').last();
+        await expect(markdown.locator('pre')).toBeVisible();
+        await expectNoHorizontalOverflow(markdown);
+        await expectNoHorizontalOverflow(page.locator('#messages'));
+        expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+      });
+    }
+  }
+
+  test('Task delivery Badge 与 ProgressBar 按真实 pending/claimed/completed/failed 状态着色', async ({ page }) => {
+    const base = await baseUrl();
+    const fixture = await setupTaskRoom(base, 'delivery-colors', { roots: 0 });
+    const rootId = await createTask(base, fixture.owner.token, fixture.roomId, '核对 Task 状态', [fixture.agent.actor_id]);
+    const inbox = await callTool<{ items: { delivery_id: string; message_id: string }[] }>(base, fixture.agent.token, 'network_inbox_list', { state: 'pending', limit: 50 });
+    const deliveryId = inbox.items.find((item) => item.message_id === rootId)!.delivery_id;
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await openRoom(page, base, fixture.owner.token, fixture.roomId);
+    const bar = page.locator(`.task-bar[data-task-root="${rootId}"]`);
+    const progress = page.locator('.msg-task-bar-slot [data-lenso-slot="progress-bar"]');
+    const checkState = async (state: string, token: string) => {
+      const badge = bar.locator(`[data-task-status="${state}"]`);
+      await expect(badge.locator('[data-lenso-slot="badge"]')).toBeVisible();
+      await expect(badge).toHaveCSS('color', await semanticColor(page, token, 'color'));
+      await expectNoHorizontalOverflow(bar);
+    };
+    await checkState('pending', '--lenso-status-warning-text');
+    await expect(progress).toHaveAttribute('aria-valuenow', '0');
+    const claim = await callTool<{ attempt: number; claim_id: string }>(base, fixture.agent.token, 'network_delivery_claim', { request_id: requestId('claim'), delivery_id: deliveryId });
+    await checkState('claimed', '--lenso-status-info-text');
+    await callTool(base, fixture.agent.token, 'network_delivery_complete', { request_id: requestId('complete'), delivery_id: deliveryId, attempt: claim.attempt, claim_id: claim.claim_id });
+    await checkState('completed', '--lenso-status-success-text');
+    await expect(progress).toHaveAttribute('aria-valuenow', '1');
+    const failedRoot = await createTask(base, fixture.owner.token, fixture.roomId, '核对失败状态', [fixture.agent.actor_id]);
+    const pending = await callTool<{ items: { delivery_id: string; message_id: string }[] }>(base, fixture.agent.token, 'network_inbox_list', { state: 'pending', limit: 50 });
+    const failedId = pending.items.find((item) => item.message_id === failedRoot)!.delivery_id;
+    const failedClaim = await callTool<{ attempt: number; claim_id: string }>(base, fixture.agent.token, 'network_delivery_claim', { request_id: requestId('claim'), delivery_id: failedId });
+    await callTool(base, fixture.agent.token, 'network_delivery_fail', { request_id: requestId('fail'), delivery_id: failedId, attempt: failedClaim.attempt, claim_id: failedClaim.claim_id, error: '验收失败状态' });
+    const failedBadge = page.locator(`.task-bar[data-task-root="${failedRoot}"] [data-task-status="failed"]`);
+    await expect(failedBadge).toHaveCSS('color', await semanticColor(page, '--wx-danger-text', 'color'));
+    await expect(failedBadge).toHaveCSS('background-color', await semanticColor(page, '--lenso-control-status-error-soft-fill'));
+  });
+
   test('默认收起、点击展开/收起、悬浮预览、固定与完成确认', async ({ page }) => {
     const base = await baseUrl();
     const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
