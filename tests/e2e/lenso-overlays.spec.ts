@@ -146,6 +146,10 @@ async function nestedFallback(page: Page, item: Consumer) {
     await page.locator('#confirm-dialog-cancel').click();
     await expect(revoke).toBeFocused();
     await expect(page.locator('#contact-modal')).toBeVisible();
+    await revoke.click();
+    await expect(page.locator('#confirm-dialog')).toHaveAttribute('data-alert-shell', 'radix');
+    await page.locator('#confirm-dialog-ok').click();
+    await expect(page.locator('#contact-link-status')).toContainText('已撤销好友链接');
   } else if (item === search) {
     await page.locator('#message-search-input').fill('N2a overlay');
     await page.locator('#message-search-form button[type=submit]').click();
@@ -358,6 +362,9 @@ for (const width of [1280, 390]) {
       await expect(page.locator('#contact-modal')).toBeVisible();
       await expect(revoke).toBeFocused();
       await expect(page.locator('#contact-link-status')).toContainText('链接已生成');
+      await revoke.click();
+      await page.locator('#confirm-dialog-ok').click();
+      await expect(page.locator('#contact-link-status')).toContainText('已撤销好友链接');
     });
     test(`${width} ${colorScheme}：几何、焦点围栏、scroll lock 与卸载`, async ({ page }) => {
       test.setTimeout(90_000);
