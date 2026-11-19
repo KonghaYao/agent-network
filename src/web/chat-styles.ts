@@ -58,6 +58,25 @@ export const APP_STYLE = `
 
   button:where(:not([data-lenso-slot])) { border-radius: 4px; border: 1px solid var(--wx-line); background: var(--wx-panel);
     color: var(--wx-text); padding: 7px 14px; font-size: 13px; cursor: pointer; }
+  /* 页面内原生控件采用共享的紧凑 role，避免影响 Task 等独立区域。 */
+  :is(.sidebar, .chat-head, .composer) button:where(:not([data-lenso-slot])) {
+    box-sizing: border-box; height: var(--app-control-normal) !important;
+    min-height: var(--app-control-normal) !important; padding: 0 12px;
+    border-radius: var(--app-shape-control); }
+  :is(.sidebar, .chat-head) button[data-lenso-slot="button"],
+  .composer button[data-lenso-slot="button"]:not(.composer-file-thumb, .composer-file-remove, .attach-btn, .send-btn) {
+    box-sizing: border-box; height: var(--app-control-normal) !important;
+    min-height: var(--app-control-normal) !important; border-radius: var(--app-shape-control) !important;
+  }
+  .sidebar button.icon-btn.icon-btn[data-lenso-slot="button"] {
+    width: var(--app-control-icon) !important; height: var(--app-control-icon) !important;
+    min-width: var(--app-control-icon) !important; min-height: var(--app-control-icon) !important;
+    padding: 0 !important; border-radius: var(--app-shape-control) !important; position: relative;
+  }
+  .sidebar button.icon-btn.icon-btn[data-lenso-slot="button"]::after {
+    content: ""; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px;
+    transform: translate(-50%, -50%);
+  }
   button:where(:not([data-lenso-slot])):hover { background: var(--wx-hover); }
   button:where(:not([data-lenso-slot])).primary { background: var(--app-prominent-fill); border-color: var(--app-prominent-fill); color: var(--lenso-label-on-tint); }
   button:where(:not([data-lenso-slot])).primary:hover { background: var(--wx-green-strong); border-color: var(--wx-green-strong); }
@@ -85,8 +104,10 @@ export const APP_STYLE = `
   .search-box [data-lenso-slot="search-field"] { width: 100%; max-width: none; gap: 0; }
   /* StyleX 的 :not(#\#) 提权要求这里显式 important，才能保持 32px 微信密度。 */
   .search-box [data-lenso-slot="search-field-group"] { height: 32px !important; gap: 5px !important;
-    padding: 0 8px 0 9px !important; border-radius: 6px !important; background: var(--wx-search) !important;
+    padding: 0 8px 0 9px !important; border-radius: var(--app-shape-control) !important; background: var(--wx-search) !important;
     box-shadow: none !important; color: var(--wx-text) !important; }
+  .search-box [data-lenso-slot="search-field-group"]:focus-within {
+    outline: 2px solid var(--wx-green); outline-offset: 1px; }
   .search-box [data-lenso-slot="search-field-search-icon"] { width: 15px !important;
     height: 15px !important; color: var(--wx-muted) !important; }
   .search-box [data-lenso-slot="search-field-group"] input { font-size: 13px !important; }
@@ -116,7 +137,7 @@ export const APP_STYLE = `
   .room-list { list-style: none; margin: 0; padding: 2px 8px 12px; }
   .room-list li { margin: 0; }
   .room-item { position: relative; display: flex; align-items: center; gap: 10px;
-    height: 64px; padding: 0 8px; border-radius: 6px; color: inherit; text-decoration: none;
+    height: 64px; padding: 0 8px; border: 0; border-radius: var(--app-shape-control); color: inherit; text-decoration: none;
     touch-action: pan-y; -webkit-touch-callout: none; }
   .room-item:hover { background: var(--wx-hover); }
   .room-item.active { background: var(--wx-active); }
@@ -153,7 +174,7 @@ export const APP_STYLE = `
   .room-menu-sep { height: 1px; margin: 4px 6px; background: var(--wx-line); }
   .room-menu-sep[hidden] { display: none; }
   .room-menu-item { display: block; width: 100%; box-sizing: border-box;
-    padding: 9px 10px; border: 0; border-radius: 4px; background: transparent;
+    min-height: 44px; padding: 8px 10px; border: 0; border-radius: var(--app-shape-control); background: transparent;
     color: var(--wx-text); font: inherit; font-size: 13px; text-align: left;
     white-space: nowrap; }
   .room-menu-item:hover, .room-menu-item:focus-visible { background: var(--wx-hover); }
@@ -400,13 +421,15 @@ export const APP_STYLE = `
     background: var(--wx-line); animation: skeleton-pulse 1.3s ease-in-out infinite; }
   .chat-skeleton-line--title { top: 3px; width: 72px; height: 15px; }
   .chat-skeleton-line--subtitle { top: 23px; width: 96px; height: 8px; }
-  .head-skeleton { flex: 0 0 auto; display: block; height: 32px; border-radius: 4px;
-    background: var(--wx-line); animation: skeleton-pulse 1.3s ease-in-out infinite; }
+  /* 与头部真实按钮同高，否则加载完成后操作行会从 32px 长到 36px。 */
+  .head-skeleton { flex: 0 0 auto; display: block; height: var(--app-control-normal);
+    border-radius: 4px; background: var(--wx-line);
+    animation: skeleton-pulse 1.3s ease-in-out infinite; }
   .head-skeleton--search { width: 40px; }
   .head-skeleton--monitor { width: 42px; }
   .head-skeleton--files { width: 46px; }
-  .head-skeleton--account { width: 32px; border-radius: 50%; }
-  .head-skeleton--menu { width: 28px; height: 28px; }
+  .head-skeleton--account { width: 36px; border-radius: 50%; }
+  .head-skeleton--menu { width: 28px; }
   .chat-error, #chat-error { margin: 0; padding: 26px 20px; text-align: center; color: var(--wx-muted); }
   .chat-error[hidden], #chat-error[hidden] { display: none; }
   #chat-error [data-lenso-slot="alert-content"] { width: 100%; }
@@ -478,8 +501,8 @@ export const APP_STYLE = `
   .msg.mine .msg-content { align-items: flex-end; }
   .msg-sender { max-width: 100%; margin: 0 0 4px 2px; font-size: 11px; color: var(--wx-muted);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .bubble { position: relative; max-width: 100%; padding: 9px 12px; border-radius: 4px;
-    background: var(--wx-bubble); color: var(--wx-text); font-size: 14.5px; line-height: 1.5;
+  .bubble { position: relative; max-width: 100%; padding: 8px 12px; border: 0; border-radius: var(--app-shape-control);
+    background: var(--wx-bubble); color: var(--wx-text); font-size: 15px; line-height: 22px;
     white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
   .bubble::before { content: ""; position: absolute; top: 12px; width: 0; height: 0;
     border-top: 5px solid transparent; border-bottom: 5px solid transparent; }
@@ -537,14 +560,19 @@ export const APP_STYLE = `
   .composer-main textarea { width: 100%; flex: 1 1 auto; min-width: 0; min-height: 38px; max-height: 96px;
     padding: 8px 10px;
     border: var(--lenso-field-stroke-width) solid var(--lenso-control-field-border);
-    border-radius: var(--app-radius-md);
+    border-radius: var(--app-shape-control);
     background: var(--lenso-control-field-fill); color: var(--lenso-label-primary); font: inherit;
     font-size: 14px; line-height: 22px; resize: none; overflow-y: auto;
     box-shadow: var(--lenso-field-shadow); }
   .composer-main textarea:focus-visible {
     outline: var(--lenso-focus-ring-width) solid var(--lenso-focus-ring);
     outline-offset: var(--lenso-focus-ring-offset); }
-  .composer .send-btn { position: relative; flex: 0 0 auto; height: 38px; min-height: 38px;
+  .composer .composer-file-remove { width: 22px !important; height: 22px !important;
+    min-width: 22px !important; min-height: 22px !important; padding: 0 !important; position: relative; }
+  .composer .composer-file-remove::after { content: ""; position: absolute; left: 50%; top: 50%;
+    width: 44px; height: 44px; transform: translate(-50%, -50%); }
+  .composer .attach-btn, .composer .send-btn { height: 38px !important; min-height: 38px !important; }
+  .composer .send-btn { position: relative; flex: 0 0 auto;
     min-width: 64px; padding: 0 14px; border: 0;
     border-radius: var(--lenso-shape-field); font-size: 13px; }
   .composer .send-btn::after { content: ""; position: absolute; left: 50%; top: 50%;
