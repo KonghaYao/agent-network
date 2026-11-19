@@ -1,6 +1,7 @@
 import { Badge, Card } from '../../app/lenso-controls';
 import { useMemo } from 'react';
 
+import { normalizeCount } from '../../lib/display-format';
 import { MemoryChip } from './memory-row';
 import type { MemoryCatalog, MemoryMe, MemoryStatus } from './memory-panel-types';
 
@@ -23,10 +24,10 @@ export function MemoryCapabilitySection({
   const titleCounts = useMemo(() => {
     const counts = status?.counts ?? {};
     return [
-      ['待处理作业', counts.jobs_pending ?? 0],
-      ['失败作业', counts.jobs_failed ?? 0],
-      ['待提炼', counts.retain_pending ?? 0],
-      ['就绪上下文', counts.contexts_ready ?? 0],
+      ['待处理作业', normalizeCount(counts.jobs_pending)],
+      ['失败作业', normalizeCount(counts.jobs_failed)],
+      ['待提炼', normalizeCount(counts.retain_pending)],
+      ['就绪上下文', normalizeCount(counts.contexts_ready)],
     ] as const;
   }, [status]);
 
@@ -77,9 +78,16 @@ export function MemoryCapabilitySection({
                 <div className="memory-stat" key={label}>
                   <Card
                     variant="transparent"
-                    style={{ padding: 0, gap: 0, borderRadius: 0, boxShadow: 'none', minWidth: 0 }}
+                    style={{
+                      padding: 0,
+                      gap: 0,
+                      borderRadius: 0,
+                      boxShadow: 'none',
+                      minWidth: 0,
+                      background: 'transparent',
+                    }}
                   >
-                    <strong>{value}</strong>
+                    <strong>{value ?? '—'}</strong>
                     <span>{label}</span>
                   </Card>
                 </div>

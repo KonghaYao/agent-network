@@ -1,13 +1,15 @@
 import { Tooltip } from '../../app/lenso-tooltip';
-import { Button, Surface } from '../../app/lenso-controls';
+import { Button } from '../../app/lenso-controls';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { LIMITS } from '../../../contracts/limits';
+import { formatDisplayTime, mimeFriendlyName } from '../../lib/display-format';
 import {
   fileDownloadUrl,
   fileIconLabel,
   filePreviewKind,
   fileSafeUrl,
+  fileTypeLabel,
   formatFileSize,
   previewImageMime,
   type RoomFileItem,
@@ -31,6 +33,18 @@ type MetaState =
   | { status: 'loading' }
   | { status: 'ready'; item: RoomFileItem; fetchedAt: number }
   | { status: 'error'; message: string };
+
+/** 44px 是真实命中盒；视觉只靠文字与 hover 底色，不再依赖小号 Lenso 默认值。 */
+const FILE_ACTION_STYLE = {
+  height: 44,
+  minWidth: 44,
+  padding: '0 8px',
+  borderRadius: 8,
+  background: 'transparent',
+  color: 'var(--wx-link)',
+  fontSize: 13,
+  lineHeight: '20px',
+} as const;
 
 /**
  * 消息文件卡片。
@@ -130,7 +144,14 @@ export const MessageFileCard = memo(function MessageFileCard({
   const imageUrl = imageMime ? previewUrl : null;
   const download = item ? fileDownloadUrl(item) : null;
   const name = cleanFileName(item?.name) || fallbackName || `附件 ${fileId.slice(0, 10)}`;
-  const sizeText = item ? formatFileSize(item.size) : state.status === 'error' ? '' : '正在读取…';
+  const typeText = item ? mimeFriendlyName(item.mime_type) || fileTypeLabel(kind) : '';
+  const sizeText = item
+    ? formatFileSize(item.size) || '大小未知'
+    : state.status === 'error'
+      ? ''
+      : '正在读取…';
+  const created = item ? formatDisplayTime(item.created_at, { mode: 'detail' }) : null;
+  const metaText = [typeText, sizeText].filter((part) => part.length > 0).join(' · ');
   const showThumb = Boolean(imageUrl) && !thumbBroken && !thumbRetrying;
 
   const resign = async (): Promise<void> => {
@@ -201,7 +222,6 @@ export const MessageFileCard = memo(function MessageFileCard({
   };
 
   return (
-    <Surface style={{ display: 'contents' }}>
     <div
       className={`msg-file${showThumb ? ' has-image' : ''}${state.status === 'error' ? ' unavailable' : ''}`}
       data-file-id={fileId}
@@ -219,7 +239,7 @@ export const MessageFileCard = memo(function MessageFileCard({
             height: 'auto',
             padding: 0,
             border: 0,
-            borderRadius: 6,
+            borderRadius: 8,
             overflow: 'hidden',
             background: 'var(--wx-search)',
           }}
@@ -246,7 +266,17 @@ export const MessageFileCard = memo(function MessageFileCard({
         <Tooltip as="span" className="msg-file-name" hint={name}>
           {name}
         </Tooltip>
-        <span className="msg-file-size">{sizeText}</span>
+        <span className="msg-file-size">
+          {metaText}
+          {created?.display ? (
+            <>
+              {metaText ? ' · ' : ''}
+              <time dateTime={created.iso ?? undefined} title={created.full}>
+                {created.display}
+              </time>
+            </>
+          ) : null}
+        </span>
         {state.status === 'error' ? (
           <span className="msg-file-note">文件信息读取失败</span>
         ) : null}
@@ -263,14 +293,7 @@ export const MessageFileCard = memo(function MessageFileCard({
             variant="borderless"
             size="sm"
             className="msg-file-action msg-file-preview"
-            style={{
-              height: 'auto',
-              padding: '3px 5px',
-              background: 'transparent',
-              color: 'var(--wx-link)',
-              fontSize: 12,
-              lineHeight: 1.4,
-            }}
+            style={FILE_ACTION_STYLE}
             onClick={() => {
               void openPreview();
             }}
@@ -301,14 +324,7 @@ export const MessageFileCard = memo(function MessageFileCard({
             variant="borderless"
             size="sm"
             className="msg-file-action msg-file-retry"
-            style={{
-              height: 'auto',
-              padding: '3px 5px',
-              background: 'transparent',
-              color: 'var(--wx-danger-text)',
-              fontSize: 12,
-              lineHeight: 1.4,
-            }}
+            style={{ ...FILE_ACTION_STYLE, color: 'var(--wx-danger-text)' }}
             onClick={retry}
           >
             重试
@@ -316,7 +332,6 @@ export const MessageFileCard = memo(function MessageFileCard({
         ) : null}
       </span>
     </div>
-    </Surface>
   );
 });
 

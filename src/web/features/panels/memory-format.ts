@@ -1,3 +1,4 @@
+import { formatByteSize, formatDisplayTime } from '../../lib/display-format';
 import type { McpError } from '../../lib/mcp-client';
 
 export type MemoryRecord = Record<string, unknown>;
@@ -16,16 +17,17 @@ export function num(value: unknown, fallback = 0): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
+/** 文件大小走 S2 单源；未知值显示“大小未知”，不伪装 0 B。 */
 export function bytes(value: unknown): string {
-  const size = num(value, 0);
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  return formatByteSize(value) || '大小未知';
 }
 
+/** 时间走 S2 detail 口径；无效/非正时间显示 `—`，不落回 1970。 */
 export function time(value: unknown): string {
-  const ms = typeof value === 'number' ? value : Date.parse(String(value ?? ''));
-  return Number.isFinite(ms) && ms > 0 ? new Date(ms).toLocaleString('zh-CN') : '';
+  const input = typeof value === 'string' || typeof value === 'number' || value instanceof Date
+    ? value
+    : null;
+  return formatDisplayTime(input, { mode: 'detail' }).display || '—';
 }
 
 export function excerpt(value: unknown, max = 160): string {

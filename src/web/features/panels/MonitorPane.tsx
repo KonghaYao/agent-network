@@ -79,103 +79,106 @@ export function MonitorPane({ open, onClose, monitor }: MonitorPaneProps) {
           xstyle={{
             display: 'flex',
             width: '100%',
-            alignItems: 'center',
-            gap: 6,
+            flexDirection: 'column',
+            alignItems: 'stretch',
+            gap: 8,
             borderRadius: 0,
           }}
         >
-        <h2 id="monitor-title" className="monitor-title">
-          网页监控
-        </h2>
-        <Input
-          id="monitor-url"
-          type="text"
-          inputMode="url"
-          enterKeyHint="go"
-          autoComplete="off"
-          spellCheck={false}
-          aria-label="网页地址"
-          maxLength={LIMITS.roomMonitorUrlMax}
-          placeholder="https://…"
-          aria-invalid={formState.errors.url ? true : undefined}
-          aria-describedby={formState.errors.url ? 'monitor-url-error' : undefined}
-          style={{ height: 36, borderRadius: 8 }}
-          {...register('url')}
-        />
-        <div className="monitor-actions">
-          <Tooltip as={Button}
-            className="monitor-icon primary"
-            id="monitor-save"
-            type="submit"
-            variant="prominent"
-            size="sm"
-            aria-label="保存网页地址"
-            hint="保存网页地址（Enter）"
-            disabled={monitor.busy}
-          >
-            保存
-          </Tooltip>
-          <Tooltip as={Button}
-            className="monitor-icon"
-            id="monitor-clear"
-            type="button"
-            variant="borderless"
-            size="sm"
-            style={{ color: 'var(--wx-text)' }}
-            aria-label="清除网页地址"
-            hint="清除网页地址"
-            disabled={monitor.busy}
-            onClick={() => void clear()}
-          >
-            清除
-          </Tooltip>
-          <Separator
-            orientation="vertical"
-            style={{ flex: '0 0 auto', margin: '0 2px' }}
-          />
-          <Tooltip as="a"
-            className="monitor-icon monitor-external"
-            id="monitor-external"
-            href={monitor.url ?? '#'}
-            target="_blank"
-            rel="noopener"
-            aria-disabled={monitor.url ? 'false' : 'true'}
-            hint="仅打开可信网页；目标站点可能拒绝嵌入（X-Frame-Options/CSP），HTTPS 可能阻止 HTTP 目标；iframe 未加 sandbox，同源页面可读取本页登录凭据。"
-            aria-label="新标签页打开网页；仅限可信地址，iframe 未加 sandbox，同源页面可读取本页登录凭据"
-            onClick={(event) => {
-              if (!monitor.url) event.preventDefault();
-            }}
-          >
-            外链
-          </Tooltip>
-          <Tooltip as={Button}
-            className="monitor-icon"
-            id="monitor-refresh"
-            type="button"
-            variant="borderless"
-            size="sm"
-            style={{ color: 'var(--wx-text)' }}
-            aria-label="刷新网页"
-            hint="刷新网页（重新读取地址）"
-            disabled={monitor.busy}
-            onClick={() => void monitor.refresh()}
-          >
-            刷新
-          </Tooltip>
-          <Tooltip as={Button}
-            className="monitor-icon monitor-close"
-            id="monitor-close"
-            type="button"
-            variant="borderless"
-            size="sm"
-            style={{ color: 'var(--wx-text)' }}
-            aria-label="关闭网页监控"
-            hint="关闭网页监控"
-            onClick={onClose}
-          >
-            关闭
-          </Tooltip>
-        </div>
+          <div className="monitor-row monitor-row-main">
+            <h2 id="monitor-title" className="monitor-title">
+              网页监控
+            </h2>
+            <Input
+              id="monitor-url"
+              type="text"
+              inputMode="url"
+              enterKeyHint="go"
+              autoComplete="off"
+              spellCheck={false}
+              aria-label="网页地址"
+              maxLength={LIMITS.roomMonitorUrlMax}
+              placeholder="https://…"
+              aria-invalid={formState.errors.url ? true : undefined}
+              aria-describedby={formState.errors.url ? 'monitor-url-error' : undefined}
+              style={{ height: 36, borderRadius: 8 }}
+              {...register('url')}
+            />
+            <Tooltip as={Button}
+              className="monitor-icon primary"
+              id="monitor-save"
+              type="submit"
+              variant="prominent"
+              size="sm"
+              aria-label="保存网页地址"
+              hint="保存网页地址（Enter）"
+              disabled={monitor.busy}
+            >
+              保存
+            </Tooltip>
+          </div>
+          <div className="monitor-row monitor-row-actions">
+            <Tooltip as={Button}
+              className="monitor-icon"
+              id="monitor-clear"
+              type="button"
+              variant="borderless"
+              size="sm"
+              style={{ color: 'var(--wx-text)' }}
+              aria-label="清除网页地址"
+              hint="清除网页地址"
+              disabled={monitor.busy}
+              onClick={() => void clear()}
+            >
+              清除
+            </Tooltip>
+            <Separator
+              orientation="vertical"
+              style={{ flex: '0 0 auto', margin: '0 2px' }}
+            />
+            <Tooltip as="a"
+              className="monitor-icon monitor-external"
+              id="monitor-external"
+              href={monitor.url ?? '#'}
+              target="_blank"
+              rel="noopener"
+              aria-disabled={monitor.url ? 'false' : 'true'}
+              hint="仅打开可信网页；目标站点可能拒绝嵌入（X-Frame-Options/CSP），HTTPS 可能阻止 HTTP 目标；iframe 未加 sandbox，同源页面可读取本页登录凭据。"
+              aria-label="新标签页打开网页；仅限可信地址，iframe 未加 sandbox，同源页面可读取本页登录凭据"
+              onClick={(event) => {
+                if (!monitor.url) event.preventDefault();
+              }}
+            >
+              外链
+            </Tooltip>
+            <Tooltip as={Button}
+              className="monitor-icon"
+              id="monitor-refresh"
+              type="button"
+              variant="borderless"
+              size="sm"
+              style={{ color: 'var(--wx-text)' }}
+              aria-label="刷新网页"
+              hint="刷新网页（重新读取地址）"
+              disabled={monitor.busy}
+              onClick={() => void monitor.refresh()}
+            >
+              刷新
+            </Tooltip>
+            <Tooltip as={Button}
+              className="monitor-icon monitor-close"
+              id="monitor-close"
+              type="button"
+              variant="borderless"
+              size="sm"
+              style={{ color: 'var(--wx-text)' }}
+              aria-label="关闭网页监控"
+              hint="关闭网页监控"
+              onClick={onClose}
+            >
+              关闭
+            </Tooltip>
+          </div>
         </Toolbar>
       </form>
       {formState.errors.url ? (
@@ -208,7 +211,7 @@ export function MonitorPane({ open, onClose, monitor }: MonitorPaneProps) {
           margin: '8px 10px 10px',
           overflow: 'hidden',
           border: '1px solid var(--wx-line)',
-          borderRadius: 6,
+          borderRadius: 8,
           background: '#fff',
         }}
       >

@@ -234,7 +234,7 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                       </Tabs.List>
                     </div>
                     <div id="memory-panels" className="memory-panels">
-                      <Tabs.Panel value="recall" id="memory-panel-recall" className="memory-panel" style={{ padding: '12px 14px calc(22px + env(safe-area-inset-bottom))' }}>
+                      <Tabs.Panel value="recall" id="memory-panel-recall" className="memory-panel" style={{ padding: '16px 16px calc(24px + env(safe-area-inset-bottom))' }}>
                         <MemoryRecallPanel
                           recallMode={controller.recallMode}
                           setRecallMode={controller.setRecallMode}
@@ -248,7 +248,7 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                         />
                       </Tabs.Panel>
 
-                      <Tabs.Panel value="context" id="memory-panel-context" className="memory-panel" style={{ padding: '12px 14px calc(22px + env(safe-area-inset-bottom))' }}>
+                      <Tabs.Panel value="context" id="memory-panel-context" className="memory-panel" style={{ padding: '16px 16px calc(24px + env(safe-area-inset-bottom))' }}>
                         <MemoryContextPanel
                           contextKind={controller.contextKind}
                           setContextKind={controller.setContextKind}
@@ -261,7 +261,7 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                         />
                       </Tabs.Panel>
 
-                      <Tabs.Panel value="experience" id="memory-panel-experience" className="memory-panel" style={{ padding: '12px 14px calc(22px + env(safe-area-inset-bottom))' }}>
+                      <Tabs.Panel value="experience" id="memory-panel-experience" className="memory-panel" style={{ padding: '16px 16px calc(24px + env(safe-area-inset-bottom))' }}>
                         <MemoryExperiencePanel
                           experiences={controller.experiences}
                           experienceStatus={controller.experienceStatus}
@@ -272,7 +272,7 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                         />
                       </Tabs.Panel>
 
-                      <Tabs.Panel value="host" id="memory-panel-host" className="memory-panel" style={{ padding: '12px 14px calc(22px + env(safe-area-inset-bottom))' }}>
+                      <Tabs.Panel value="host" id="memory-panel-host" className="memory-panel" style={{ padding: '16px 16px calc(24px + env(safe-area-inset-bottom))' }}>
                         <MemoryHostPanel
                           manifestId={controller.manifestId}
                           setManifestId={controller.setManifestId}
@@ -282,7 +282,7 @@ export function MemoryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                         />
                       </Tabs.Panel>
 
-                      <Tabs.Panel value="governance" id="memory-panel-governance" className="memory-panel" style={{ padding: '12px 14px calc(22px + env(safe-area-inset-bottom))' }}>
+                      <Tabs.Panel value="governance" id="memory-panel-governance" className="memory-panel" style={{ padding: '16px 16px calc(24px + env(safe-area-inset-bottom))' }}>
                         <MemoryGovernancePanel
                           governanceStatus={controller.governanceStatus}
                           forgetTarget={controller.forgetTarget}
