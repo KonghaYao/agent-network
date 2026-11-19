@@ -5,6 +5,8 @@
  * `/f/` 链接、预览类型先归一化 MIME、文件名与正文都走 React 文本节点。
  */
 
+import { formatByteSize, formatDisplayTime, normalizeMimeType } from './display-format';
+
 export interface RoomFileItem {
   file_id: string;
   room_file_id?: string;
@@ -49,7 +51,7 @@ function extension(name: string | undefined): string {
 
 /** `image/jpg` 与 octet-stream + 图片扩展名按同一归一化 MIME 处理。 */
 export function previewImageMime(mimeType: string | undefined, name: string | undefined): string | null {
-  const mime = String(mimeType ?? '').toLowerCase().split(';')[0]?.trim() ?? '';
+  const mime = normalizeMimeType(mimeType);
   if (mime === 'image/jpg') return 'image/jpeg';
   if (mime.startsWith('image/') && !mime.includes('svg')) return mime;
   if (mime === 'application/octet-stream' || mime === '') {
@@ -65,7 +67,7 @@ export function previewImageMime(mimeType: string | undefined, name: string | un
  * 等主动内容即使文件名像 Markdown 也不进入 Markdown 渲染器。
  */
 export function isMarkdownPreview(item: RoomFileItem): boolean {
-  const mime = String(item.mime_type ?? '').toLowerCase().split(';')[0]?.trim() ?? '';
+  const mime = normalizeMimeType(item.mime_type);
   if (MARKDOWN_MIMES.has(mime)) return true;
   if (mime && mime !== 'text/plain' && mime !== 'application/octet-stream') return false;
   return MARKDOWN_EXTENSION.test(String(item.name ?? ''));
@@ -73,15 +75,20 @@ export function isMarkdownPreview(item: RoomFileItem): boolean {
 
 /** HTML 只按明确的 MIME 识别，文件名与服务端预览提示不能放宽边界。 */
 export function isHtmlPreview(item: RoomFileItem): boolean {
-  const mime = String(item.mime_type ?? '').toLowerCase().split(';')[0]?.trim() ?? '';
-  return mime === 'text/html';
+  return normalizeMimeType(item.mime_type) === 'text/html';
+}
+
+/** 显式 SVG MIME 一律不预览，避免内联脚本进入图片预览路径。 */
+function isSvgMime(mime: string): boolean {
+  return mime === 'image/svg' || mime === 'image/svg+xml';
 }
 
 export function filePreviewKind(item: RoomFileItem): PreviewKind {
   if (isHtmlPreview(item)) return 'html';
   const kind = String(item.preview_kind ?? '').toLowerCase();
-  const mime = String(item.mime_type ?? '').toLowerCase().split(';')[0]?.trim() ?? '';
+  const mime = normalizeMimeType(item.mime_type);
   if (kind === 'pdf' && !mime.startsWith('application/pdf')) return 'other';
+  if (isSvgMime(mime)) return 'other';
   if (previewImageMime(item.mime_type, item.name)) return 'image';
   if (kind === 'markdown' || isMarkdownPreview(item)) return 'markdown';
   if (['image', 'pdf', 'text', 'audio', 'video'].includes(kind)) return kind as PreviewKind;
@@ -134,37 +141,29 @@ export function fileIconLabel(kind: PreviewKind): string {
   return 'FILE';
 }
 
-export function formatFileSize(value: unknown): string {
-  const size = Number(value);
-  if (!Number.isFinite(size) || size < 0) return '';
-  if (size < 1024) return `${Math.round(size)} B`;
-  const units = ['KB', 'MB', 'GB', 'TB'];
-  let amount = size / 1024;
-  let index = 0;
-  while (amount >= 1024 && index < units.length - 1) {
-    amount /= 1024;
-    index += 1;
-  }
-  return `${amount >= 10 ? Math.round(amount) : Math.round(amount * 10) / 10} ${units[index]}`;
+const FILE_TYPE_LABELS: Record<PreviewKind, string> = {
+  image: '图片',
+  pdf: 'PDF',
+  html: '网页',
+  markdown: 'Markdown',
+  text: '文本',
+  audio: '音频',
+  video: '视频',
+  other: '文件',
+};
+
+/** 类型友好名；HTML 保留独立 kind，未知类型显示“文件”。 */
+export function fileTypeLabel(kind: PreviewKind): string {
+  return FILE_TYPE_LABELS[kind] ?? '文件';
 }
 
+export function formatFileSize(value: unknown): string {
+  return formatByteSize(value);
+}
+
+/** 文件时间统一走 detail 口径；未知时间返回空串。 */
 export function fileTimeLabel(value: string | number | undefined): string {
-  let ms = 0;
-  if (typeof value === 'number') ms = value;
-  else if (typeof value === 'string') {
-    if (/^[0-9]+$/u.test(value)) ms = Number(value);
-    else {
-      const parsed = Date.parse(value);
-      if (!Number.isNaN(parsed)) ms = parsed;
-    }
-  }
-  if (ms <= 0) return '';
-  const diff = Date.now() - ms;
-  if (diff < 60_000) return '刚刚';
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
-  if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)} 天前`;
-  return new Date(ms).toLocaleDateString('zh-CN');
+  return formatDisplayTime(value, { mode: 'detail' }).display;
 }
 
 export function fileMetaText(item: RoomFileItem): string {
