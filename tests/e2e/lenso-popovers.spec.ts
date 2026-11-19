@@ -127,6 +127,44 @@ test('非管理员只读公告：默认收起、无编辑入口、关闭归还�
   await expect(trigger).toBeFocused();
 });
 
+test('浏览器后退到已缓存房间：上一个房间的公告浮层不残留', async ({ page }) => {
+  const base = await baseUrl();
+  const fixture = await createComponentRoom(base);
+  await callTool(base, fixture.tokenA, 'network_room_announcement_set', {
+    request_id: requestId('s07_back_b'), room_id: fixture.roomId,
+    announcement: 'B 房间公告', expected_announcement_revision: 1,
+  });
+  const titleA = `后退缓存群 ${crypto.randomUUID().replaceAll('-', '').slice(0, 8)}`;
+  const created = await callTool<{ room: { room_id: string } }>(base, fixture.tokenA, 'network_room_create', {
+    request_id: requestId('s07_back_room'), kind: 'group', title: titleA, members: [fixture.actorB],
+  });
+  const roomA = created.room.room_id;
+  await callTool(base, fixture.tokenA, 'network_room_announcement_set', {
+    request_id: requestId('s07_back_a'), room_id: roomA,
+    announcement: 'A 房间公告', expected_announcement_revision: 1,
+  });
+
+  await login(page, base, fixture.tokenA);
+  // B 先进入历史与查询缓存；从 B 客户端跳转到 A，再后退回到 B，页面不重载。
+  await page.goto(`${base}/c/${fixture.roomId}`);
+  await expect(page.locator('#title')).toContainText(fixture.roomTitle);
+  const linkA = page.locator(`#room-list a.room-item[href="/c/${encodeURIComponent(roomA)}"]`);
+  await expect(linkA).toBeVisible();
+  await linkA.click();
+  await expect(page.locator('#title')).toContainText(titleA);
+  await expect(page.locator('#room-announcement-info')).toHaveAttribute('aria-expanded', 'false');
+  await page.locator('#room-announcement-info').click();
+  await expect(page.locator('#room-announcement-popover')).toContainText('A 房间公告');
+
+  await page.goBack();
+  await expect(page.locator('#title')).toContainText(fixture.roomTitle);
+  await announcementClosed(page);
+  await expect(page.locator('#room-announcement-popover')).toHaveCount(0);
+  await expect(page.locator('#room-announcement-info')).toHaveAttribute('aria-expanded', 'false');
+  await page.locator('#room-announcement-info').click();
+  await expect(page.locator('#room-announcement-popover')).toContainText('B 房间公告');
+});
+
 test('Task hover 延迟、不抢焦点、移入保持、pinned、外点判定与 Escape', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 844 });
   const fixture = await room(page);

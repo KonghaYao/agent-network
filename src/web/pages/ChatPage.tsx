@@ -645,6 +645,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                     {identity && mobile ? <AccountMenu me={identity} /> : null}
                     {room.announcement ? (
                       <AnnouncementPopover
+                        roomId={room.room_id}
                         announcement={room.announcement}
                         canEdit={
                           !room.read_only && room.capabilities?.manage_announcement === true
