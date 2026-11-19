@@ -36,6 +36,8 @@ export const MEMORY_STYLE = `
   .memory-icon-btn { flex: 0 0 auto; width: 44px; height: 44px; padding: 0;
     border: 0; border-radius: 8px; background: transparent; color: var(--wx-muted);
     font-size: 20px; line-height: 1; cursor: pointer; }
+  /* 抽屉在侧栏内渲染，需压过 chat-styles 的侧栏紧凑按钮高度，保住 44px 触达尺寸。 */
+  #memory-drawer .memory-head .memory-icon-btn { width: 44px !important; height: 44px !important; }
   .memory-icon-btn:hover { background: var(--wx-hover); color: var(--wx-text); }
   .memory-icon-btn:focus-visible { outline: 2px solid var(--wx-green); outline-offset: -2px; }
   .memory-state { margin: 0; padding: 8px 16px; color: var(--wx-muted);
@@ -155,6 +157,8 @@ export const MEMORY_STYLE = `
     min-height: 44px !important; padding: 7px 14px !important; border: 0;
     border-radius: 8px; background: transparent; color: inherit;
     text-align: left; white-space: normal !important; cursor: pointer; }
+  /* 侧栏紧凑按钮规则同样会命中抽屉内部，用 id 提权保住行高与触达尺寸。 */
+  #memory-drawer .memory-row { height: auto !important; min-height: 44px !important; }
   .memory-row:hover, .memory-row:focus-visible { background: var(--wx-hover); }
   .memory-row[aria-current="true"] { background: var(--wx-hover);
     outline: 1px solid var(--wx-link); }
