@@ -305,7 +305,7 @@ export const MessageFileCard = memo(function MessageFileCard({
               height: 'auto',
               padding: '3px 5px',
               background: 'transparent',
-              color: 'var(--wx-danger)',
+              color: 'var(--wx-danger-text)',
               fontSize: 12,
               lineHeight: 1.4,
             }}

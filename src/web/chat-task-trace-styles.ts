@@ -15,7 +15,7 @@ export const TASK_TRACE_STYLE = `
   .task-bar:hover, .task-bar:focus-visible { background: var(--wx-hover); }
   .task-bar:focus-visible { outline: 2px solid var(--wx-link); outline-offset: 2px; }
   .task-bar-pending { cursor: progress; color: var(--wx-muted); }
-  .task-bar-failed { color: var(--wx-danger); cursor: pointer; }
+  .task-bar-failed { color: var(--wx-danger-text); cursor: pointer; }
   .task-bar-icon { flex: 0 0 auto; display: inline-flex; width: 18px; height: 18px;
     align-items: center; justify-content: center; }
   .task-bar-icon svg { display: block; width: 18px; height: 18px; }

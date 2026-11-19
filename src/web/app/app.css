@@ -769,7 +769,7 @@ body .memory-drawer {
 }
 
 .archive-popover-status[data-error='1'] {
-  color: var(--wx-danger);
+  color: var(--wx-danger-text);
 }
 
 .spa-dialog-content .pairing-status[data-success='1'] {
@@ -1010,7 +1010,7 @@ body .memory-drawer {
 #group-policy-status[data-error='1'],
 #members-invites-status[data-error='1'],
 #contact-search-status[data-error='1'] {
-  color: var(--wx-danger);
+  color: var(--wx-danger-text);
 }
 
 .spa-dialog-content.agent-reissue-card {

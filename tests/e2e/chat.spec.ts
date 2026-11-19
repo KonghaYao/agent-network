@@ -528,6 +528,18 @@ test.describe('SPA Chat', () => {
     await expect(page.locator('#messages .msg.mine .reply-reference').last()).toContainText(
       'Chat E2E 初始消息',
     );
+    // 引用块只留低对比左边框，不用红色或实色底。
+    await page.mouse.move(0, 0);
+    const quoteStyle = await page
+      .locator('#messages .msg.mine .reply-reference')
+      .last()
+      .evaluate((node) => {
+        const style = getComputedStyle(node);
+        return { borderWidth: style.borderLeftWidth, background: style.backgroundColor, color: style.color };
+      });
+    expect(quoteStyle.borderWidth).toBe('2px');
+    expect(quoteStyle.background).toBe('rgba(0, 0, 0, 0)');
+    expect(quoteStyle.color).not.toContain('255, 56, 60');
     const hasReplyTo = await page.evaluate(() => {
       const calls = (
         window as unknown as {

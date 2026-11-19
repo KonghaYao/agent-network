@@ -33,7 +33,7 @@ export const MESSAGE_FILES_STYLE = `
   .msg-file-size { min-height: 1em; font-size: 11px; line-height: 1.3;
     color: var(--wx-muted); overflow-wrap: anywhere; }
   .msg-file-size:empty { display: none; }
-  .msg-file-note { font-size: 11px; line-height: 1.3; color: var(--wx-danger);
+  .msg-file-note { font-size: 11px; line-height: 1.3; color: var(--wx-danger-text);
     overflow-wrap: anywhere; }
   .msg-file-note[hidden] { display: none; }
   .msg-file-actions { flex: 0 0 auto; display: flex; flex-wrap: wrap;
@@ -44,7 +44,7 @@ export const MESSAGE_FILES_STYLE = `
   .msg-file-action:hover { background: var(--wx-hover); }
   .msg-file-download[data-unavailable="1"] { color: var(--wx-muted); cursor: help; }
   .msg-file-download[aria-busy="true"] { color: var(--wx-muted); cursor: progress; }
-  .msg-file-retry { color: var(--wx-danger); }
+  .msg-file-retry { color: var(--wx-danger-text); }
   .msg-file.unavailable .msg-file-kind { color: var(--wx-muted); }
 
   @media (max-width: 759px) {

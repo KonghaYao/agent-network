@@ -5,8 +5,13 @@ export const MESSAGE_ACTIONS_STYLE = `
   .message-action-menu button { min-height: 40px; }
   .message-actions-trigger { display: inline-flex; align-items: center; justify-content: center;
     min-width: 32px; min-height: 24px; color: var(--wx-muted); background: transparent;
-    border: 0; cursor: pointer; padding: 0 8px; }
-  .message-actions-trigger:focus-visible, .message-actions-trigger:hover { background: var(--wx-hover); }
+    border: 0; cursor: pointer; padding: 0 8px; --lg-menu-trigger-opacity: .55; }
+  .message-actions-trigger:focus-visible, .message-actions-trigger:hover {
+    background: var(--wx-hover); --lg-menu-trigger-opacity: 1; }
+  /* 双类名兜底非 Lenso 菜单 trigger 场景。 */
+  .message-actions-trigger.message-actions-trigger { opacity: .55; transition: opacity .12s; }
+  .message-actions-trigger.message-actions-trigger:focus-visible,
+  .message-actions-trigger.message-actions-trigger:hover { opacity: 1; }
   .message-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
   .message-actions button, .reply-reference { border: 0; background: transparent;
     color: var(--wx-muted); cursor: pointer; font: inherit; font-size: 12px; padding: 5px 8px; }
@@ -14,10 +19,11 @@ export const MESSAGE_ACTIONS_STYLE = `
   .reply-reference { box-sizing: border-box; display: -webkit-box; max-width: 100%;
     margin: 6px 0 0; padding: 4px 8px; text-align: left; overflow: hidden;
     text-overflow: ellipsis; overflow-wrap: anywhere; -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2; border-left: 3px solid var(--wx-line); border-radius: 4px;
-    background: var(--wx-hover); color: var(--wx-muted); }
+    -webkit-line-clamp: 2;
+    border-left: 2px solid color-mix(in srgb, var(--wx-line) 60%, transparent);
+    border-radius: 4px; background: transparent !important; color: var(--wx-muted) !important; }
   .reply-reference:hover, .reply-reference:focus-visible {
-    background: var(--wx-active); color: var(--wx-text); }
+    background: var(--wx-hover) !important; color: var(--wx-text) !important; }
   .composer-reply { display: flex; align-items: center; gap: 8px; padding: 6px 12px;
     box-sizing: border-box; width: 100%; background: var(--lenso-control-fill);
     border: 1px solid var(--lenso-separator); border-radius: var(--lenso-shape-content-2xl);

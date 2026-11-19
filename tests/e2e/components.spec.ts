@@ -981,6 +981,38 @@ test.describe.serial('SPA 组件库与状态管理', () => {
     expect(await violations('#mention-picker')).toEqual([]);
   });
 
+  test('危险色降饱和，消息操作按钮默认弱化', async ({ page }) => {
+    await page.goto(`${base}/c/${roomId}`);
+    const trigger = page.locator('.message-actions-trigger').first();
+    await expect(trigger).toBeVisible();
+
+    expect(await semanticColor(page, '--wx-danger')).toBe('rgb(201, 74, 79)');
+    expect(await semanticColor(page, '--wx-unread')).toBe('rgb(201, 74, 79)');
+    expect(await semanticColor(page, '--wx-danger-text', 'color')).toBe('rgb(168, 50, 54)');
+    expect(await semanticColor(page, '--wx-danger')).not.toBe('rgb(255, 56, 60)');
+
+    expect(await trigger.evaluate((node) => getComputedStyle(node).opacity)).toBe('0.55');
+    await trigger.hover();
+    await expect
+      .poll(() => trigger.evaluate((node) => getComputedStyle(node).opacity))
+      .toBe('1');
+    await page.mouse.move(0, 0);
+    await expect
+      .poll(() => trigger.evaluate((node) => getComputedStyle(node).opacity))
+      .toBe('0.55');
+
+    // 键盘焦点仍恢复完全可见，避免弱化后无法发现操作入口。
+    await page.keyboard.press('Tab');
+    await trigger.focus();
+    await expect
+      .poll(() => trigger.evaluate((node) => getComputedStyle(node).opacity))
+      .toBe('1');
+
+    await page.emulateMedia({ colorScheme: 'dark' });
+    expect(await semanticColor(page, '--wx-danger-text', 'color')).toBe('rgb(224, 127, 131)');
+    expect(await semanticColor(page, '--wx-danger')).toBe('rgb(201, 74, 79)');
+  });
+
   test('移动端 <760 单栏、弹窗不横向溢出', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${base}/`);

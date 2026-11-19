@@ -24,14 +24,15 @@ export const APP_STYLE = `
     --wx-bubble: var(--lenso-background-secondary);
     --wx-mine: var(--lenso-control-tint-subtle-fill);
     --wx-mine-text: var(--lenso-label-primary);
-    --wx-unread: var(--lenso-status-error-fill);
+    /* 危险色降饱和：Lenso 默认红 #ff383c 在聊天界面过于抢眼。 */
+    --wx-unread: #c94a4f;
     --wx-unread-muted: var(--lenso-label-tertiary);
     --wx-pref-label: var(--lenso-label-secondary);
-    --wx-danger: var(--lenso-action-destructive);
-    --wx-danger-strong: var(--lenso-control-status-error-hover-fill);
-    --wx-danger-text: var(--lenso-action-destructive-text);
-    --wx-danger-tint: var(--lenso-control-status-error-soft-fill);
-    --wx-danger-tint-strong: var(--lenso-control-status-error-soft-hover-fill);
+    --wx-danger: #c94a4f;
+    --wx-danger-strong: color-mix(in srgb, #c94a4f 86%, #000);
+    --wx-danger-text: #a83236;
+    --wx-danger-tint: color-mix(in srgb, #c94a4f 8%, var(--lenso-background-primary));
+    --wx-danger-tint-strong: color-mix(in srgb, #c94a4f 12%, var(--lenso-background-primary));
     --wx-link: var(--lenso-tint-text);
     --wx-search: var(--lenso-control-field-fill);
     --wx-shadow: var(--lenso-surface-shadow);
@@ -41,6 +42,13 @@ export const APP_STYLE = `
     --right-pane-ratio: 0.5;
     /* 品牌图标统一浅色底：单色 SVG 以 currentColor 编码，<img> 中会渲染为黑色。 */
     --wx-avatar-icon-bg: var(--lenso-background-tertiary);
+  }
+  /* 暗色下保持柔和红，只提亮文字与未读点以满足可读性。 */
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --wx-unread: #e07f83;
+      --wx-danger-text: #e07f83;
+    }
   }
   body.wide { background: var(--wx-bg); color: var(--wx-text);
     font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue",
