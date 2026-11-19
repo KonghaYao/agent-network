@@ -245,12 +245,18 @@ async function expectFilesResizerDrags(page: Page, state: string): Promise<void>
   const before = await handle.evaluate((element) => {
     const rect = element.getBoundingClientRect();
     const pane = document.querySelector('#files-pane')!.getBoundingClientRect();
+    const messages = document.querySelector('#messages')!.getBoundingClientRect();
+    const chat = document.querySelector('.chat-pane');
     const x = rect.left + rect.width / 2;
     const y = rect.top + rect.height / 2;
+    const scrollbar = document.elementFromPoint(messages.right - 3, y);
     return {
-      rect: rect.toJSON(), x, y, width: pane.width,
+      rect: rect.toJSON(), x, y, width: pane.width, paneLeft: pane.left,
+      chatRight: messages.right,
       hit: element.contains(document.elementFromPoint(x, y)),
       boundaryHit: element.contains(document.elementFromPoint(pane.left, y)),
+      scrollbarBlocked: element.contains(scrollbar),
+      scrollbarInChat: chat !== null && chat.contains(scrollbar),
       zIndex: getComputedStyle(element).zIndex,
     };
   });
@@ -258,6 +264,11 @@ async function expectFilesResizerDrags(page: Page, state: string): Promise<void>
   expect(before.rect.width).toBeLessThanOrEqual(12);
   expect(before.hit).toBe(true);
   expect(before.boundaryHit).toBe(true);
+  // 手柄必须收在面板左缘以内，聊天滚动条（宽度 6px）保持可拖。
+  expect(before.rect.left).toBeGreaterThanOrEqual(before.paneLeft);
+  expect(before.chatRight).toBeCloseTo(before.paneLeft, 0);
+  expect(before.scrollbarBlocked).toBe(false);
+  expect(before.scrollbarInChat).toBe(true);
   await page.mouse.move(before.x, before.y);
   await page.mouse.down();
   await page.mouse.move(before.x - 120, before.y, { steps: 20 });
@@ -365,6 +376,35 @@ test.describe('file preview scroll', () => {
       await expect(handle).toHaveAttribute('aria-valuenow', '360');
     });
   }
+
+  test('right resizer clamps at token limits and keeps the chat scrollbar draggable', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${base}/c/${roomId}`);
+    await expect(page.locator('#files-pane')).toBeVisible();
+    const handle = page.locator('#files-resizer');
+    const paneWidth = () =>
+      page.locator('#files-pane').evaluate((element) => element.getBoundingClientRect().width);
+    await expect(handle).toHaveAttribute('aria-valuemin', '280');
+    await expect(handle).toHaveAttribute('aria-valuemax', '440');
+
+    await handle.focus();
+    // ArrowLeft 加宽右栏，ArrowRight 收窄。
+    for (let step = 0; step < 12; step += 1) await page.keyboard.press('ArrowLeft');
+    await expect(handle).toHaveAttribute('aria-valuenow', '440');
+    expect(await paneWidth()).toBeCloseTo(440, 0);
+    // 越过上限后继续加宽，宽度停在上限。
+    for (let step = 0; step < 5; step += 1) await page.keyboard.press('ArrowLeft');
+    await expect(handle).toHaveAttribute('aria-valuenow', '440');
+    expect(await paneWidth()).toBeCloseTo(440, 0);
+
+    for (let step = 0; step < 20; step += 1) await page.keyboard.press('ArrowRight');
+    await expect(handle).toHaveAttribute('aria-valuenow', '280');
+    expect(await paneWidth()).toBeCloseTo(280, 0);
+    // 越过下限后继续收窄，宽度停在下限。
+    for (let step = 0; step < 5; step += 1) await page.keyboard.press('ArrowRight');
+    await expect(handle).toHaveAttribute('aria-valuenow', '280');
+    expect(await paneWidth()).toBeCloseTo(280, 0);
+  });
 
   test('files pane keeps long markdown and source views scrollable', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });

@@ -31,6 +31,13 @@ import { newRequestId } from '../../lib/request-id';
 
 const FilePreviewPane = lazy(() => import('./FilePreviewPane').then((module) => ({ default: module.FilePreviewPane })));
 
+/** 读取 tokens.css 的像素变量；非浏览器环境返回 undefined，交给 React 省略属性。 */
+function readCssPixels(name: string): number | undefined {
+  if (typeof document === 'undefined') return undefined;
+  const value = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue(name));
+  return Number.isFinite(value) ? value : undefined;
+}
+
 interface FilesPaneProps {
   roomId: string;
   token: string;
@@ -280,7 +287,9 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, preview, onO
         style={paneWidth === null ? undefined : { '--app-pane-width': `${paneWidth}px` } as CSSProperties}>
         <div id="files-resizer" className="files-resizer" role="separator" tabIndex={0}
           aria-label="调整文件栏宽度" aria-orientation="vertical" aria-controls="files-pane"
-          aria-valuenow={paneWidth ?? Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--app-pane-width'))}
+          aria-valuemin={readCssPixels('--app-pane-min')}
+          aria-valuemax={readCssPixels('--app-pane-max')}
+          aria-valuenow={paneWidth ?? readCssPixels('--app-pane-width')}
           onPointerDown={(event) => {
             if (event.button !== 0) return;
             event.preventDefault();

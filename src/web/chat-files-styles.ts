@@ -169,10 +169,11 @@ export const FILES_STYLE = `
 
   @media (min-width: 1200px) {
     .files-pane { position: relative; }
-    /* 命中区只向聊天侧扩展，预览正文与滚动条不被手柄覆盖。 */
-    .files-resizer { display: block; position: absolute; left: -10px; top: 0; bottom: 0;
-      width: 10px; z-index: var(--app-z-drop); cursor: col-resize; touch-action: none; }
-    .files-resizer::before { content: ""; position: absolute; right: 0; top: 0; bottom: 0;
+    /* 命中区收在面板自身左缘以内：聊天侧 6px 滚动条（右边界与面板左边界重合）
+       不被覆盖；内侧 8px 与列表、预览头的 8px padding 对齐，不压任何控件。 */
+    .files-resizer { display: block; position: absolute; left: -1px; top: 0; bottom: 0;
+      width: 8px; z-index: var(--app-z-drop); cursor: col-resize; touch-action: none; }
+    .files-resizer::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0;
       width: 1px; background: var(--wx-line); }
     .files-resizer:hover::before, .files-resizer:focus-visible::before {
       background: var(--wx-green); }
