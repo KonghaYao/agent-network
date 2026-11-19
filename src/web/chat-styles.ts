@@ -421,13 +421,15 @@ export const APP_STYLE = `
     background: var(--wx-line); animation: skeleton-pulse 1.3s ease-in-out infinite; }
   .chat-skeleton-line--title { top: 3px; width: 72px; height: 15px; }
   .chat-skeleton-line--subtitle { top: 23px; width: 96px; height: 8px; }
-  .head-skeleton { flex: 0 0 auto; display: block; height: 32px; border-radius: 4px;
-    background: var(--wx-line); animation: skeleton-pulse 1.3s ease-in-out infinite; }
+  /* 与头部真实按钮同高，否则加载完成后操作行会从 32px 长到 36px。 */
+  .head-skeleton { flex: 0 0 auto; display: block; height: var(--app-control-normal);
+    border-radius: 4px; background: var(--wx-line);
+    animation: skeleton-pulse 1.3s ease-in-out infinite; }
   .head-skeleton--search { width: 40px; }
   .head-skeleton--monitor { width: 42px; }
   .head-skeleton--files { width: 46px; }
-  .head-skeleton--account { width: 32px; border-radius: 50%; }
-  .head-skeleton--menu { width: 28px; height: 28px; }
+  .head-skeleton--account { width: 36px; border-radius: 50%; }
+  .head-skeleton--menu { width: 28px; }
   .chat-error, #chat-error { margin: 0; padding: 26px 20px; text-align: center; color: var(--wx-muted); }
   .chat-error[hidden], #chat-error[hidden] { display: none; }
   #chat-error [data-lenso-slot="alert-content"] { width: 100%; }
