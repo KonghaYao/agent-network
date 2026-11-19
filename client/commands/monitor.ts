@@ -13,10 +13,12 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+import { assertExpectedActor, ActorMismatchError } from '../expect-actor';
 import {
   CLIENT_NAME,
   CLIENT_VERSION,
   CliError,
+  McpClient,
   redact,
   resolveConfig,
 } from '../mcp';
@@ -58,6 +60,8 @@ export interface MonitorContext {
 
 export interface MonitorOptions {
   harness?: string;
+  /** network_me 校验通过后才允许 login、订阅或 claim。 */
+  expectActor?: string;
   /** 真实握手：连接服务 + network_me。 */
   check?: boolean;
   /** 静态入口检查，不连接服务；up --check 使用。 */
@@ -407,6 +411,24 @@ export async function monitor(
     );
   }
   if (options.checkConfig === true) return checkHarnessConfig(harness, options, extra);
+  if (options.expectActor !== undefined) {
+    if (harness === 'other' || (harness === 'dsh' && !['run', 'start'].includes(dshCommand!))) {
+      throw new CliError('--expect-actor 只支持连接服务的 monitor（dsh 仅 run/start）');
+    }
+    const config = resolveConfig({
+      url: context.baseUrl ?? undefined,
+      token: context.token ?? undefined,
+      json: false,
+    });
+    try {
+      // READY 在订阅 ack/login 后才输出；必须更早检查，才能保证错身份零订阅。
+      await assertExpectedActor(new McpClient(config), options.expectActor);
+    } catch (error) {
+      if (!(error instanceof ActorMismatchError)) throw error;
+      process.stderr.write(`${redact(error.message, context.token)}\n`);
+      return 1;
+    }
+  }
   const checkOnly = options.check === true || options.dryRun === true;
   if (checkOnly) return await checkHarnessLive(harness, context, options, extra);
 

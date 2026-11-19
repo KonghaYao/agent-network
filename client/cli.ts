@@ -9,6 +9,8 @@
 
 import { Command, CommanderError } from 'commander';
 
+import { EnvFileError, loadEnvFiles } from './env-file';
+import { ActorMismatchError, assertExpectedActor } from './expect-actor';
 import { call } from './commands/call';
 import {
   cancel,
@@ -141,11 +143,16 @@ const HELP_GUIDE = `
   token 等同密码：只给目标 Agent，不要写进仓库、消息、日志或截图。
   token 来源优先级：--token > AGENTNET_TOKEN > AGENTNET_TOKEN_FILE > URL 的 ?token=。
   AGENTNET_TOKEN_FILE 只读首行，POSIX 下权限必须是 600，否则拒绝启动。
+  --env-file <path> 在解析命令前加载，不覆盖已设置的环境，不执行 shell；不要把文件入库。
+  固定身份：agentnet --env-file "$HOME/.agentnet/webbots-agent.env" monitor --harness claude --expect-actor <actor_id>
+  actor 不匹配时退出 1，不 login/订阅/claim；login 与 up 也支持 --expect-actor。
   需要重置时由用户在 Agent 会话菜单点「重置链接」，再复制新提示词；旧 token 立即失效。
 `;
 
 function addGlobalOptions(command: Command): Command {
+  // --env-file 在 commander 解析前消费；这里登记以便所有帮助页可见。
   return command
+    .option('--env-file <path>', '加载 env 文件，只填充未设置的环境变量（不执行 shell）')
     .option('--url <url>', 'MCP 服务地址；也可用 AGENTNET_URL（可写 /mcp 或站点根址）')
     .option(
       '--token <token>',
@@ -313,9 +320,13 @@ function buildProgram(): Command {
       await register(client, config, options);
     });
 
-  addGlobalOptions(program.command('login').description('上线并接收 inbox 通知')).action(
-    async (_options: GlobalOptions, command: Command) => {
+  addGlobalOptions(
+    program.command('login').description('上线并接收 inbox 通知')
+      .option('--expect-actor <actor_id>', '上线前确认 actor_id，不匹配立即退出'),
+  ).action(
+    async (options: GlobalOptions & { expectActor?: string }, command: Command) => {
       const { client, config } = clientFor(command);
+      await assertExpectedActor(client, options.expectActor);
       await login(client, config);
     },
   );
@@ -332,6 +343,7 @@ function buildProgram(): Command {
       .command('up')
       .description('login 后立即启动宿主监听（login + monitor 快捷入口）')
       .option('--harness <name>', 'claude|codex|peri|dsh|other')
+      .option('--expect-actor <actor_id>', '监听前确认 actor_id，不匹配立即退出')
       .option('--check', '只校验 harness 与参数，不连接服务、不登录')
       .option('--dry-run', '--check 的别名')
       .option('--state-dir <dir>', 'claude/peri 状态目录；默认按身份持久化')
@@ -359,12 +371,14 @@ function buildProgram(): Command {
             '缺少 token：新身份先运行 agentnet issue 与 register，或用 AGENTNET_TOKEN 提供已有 token',
           );
         }
+        await assertExpectedActor(client, options.expectActor ?? globals.expectActor);
         await login(client, config);
       }
       commandExitCode = await monitor(
         monitorContextFrom(globals),
         {
           harness,
+          expectActor: options.expectActor ?? globals.expectActor,
           // up --check 保持既有语义：只看入口配置，不连接服务、不登录。
           check: false,
           checkConfig: checkOnly,
@@ -864,6 +878,7 @@ function buildProgram(): Command {
       .command('monitor')
       .description('运行宿主监听（TS 引擎）；--check 连接服务校验凭据')
       .option('--harness <name>', 'claude|codex|peri|dsh|other')
+      .option('--expect-actor <actor_id>', '监听前确认 actor_id，不匹配立即退出')
       .option('--check', '连接服务并调用 network_me，校验凭据与服务可达')
       .option('--check-config', '只展示入口配置，不连接服务')
       .option('--dry-run', '--check 的别名')
@@ -893,6 +908,7 @@ function buildProgram(): Command {
           monitorContextFrom(globals),
           {
             harness: options.harness ?? globals.harness,
+            expectActor: options.expectActor ?? globals.expectActor,
             check: options.check ?? globals.check,
             checkConfig: options.checkConfig ?? globals.checkConfig,
             dryRun: options.dryRun ?? globals.dryRun,
@@ -993,6 +1009,13 @@ function errorInfo(error: unknown): { code: string; message: string; details?: u
 }
 
 export async function main(argv: readonly string[]): Promise<number> {
+  try {
+    argv = loadEnvFiles(argv);
+  } catch (error) {
+    if (!(error instanceof EnvFileError)) throw error;
+    process.stderr.write(`${error.message}\n`);
+    return 1;
+  }
   let token = tokenFromArgv(argv) ?? process.env.AGENTNET_TOKEN ?? null;
   if (token === null) {
     // 仅用于错误脱敏：token 文件的权限/存在性错误不能阻止 --help 或 issue。
@@ -1010,6 +1033,10 @@ export async function main(argv: readonly string[]): Promise<number> {
   } catch (error) {
     if (error instanceof CommanderError && error.exitCode === 0) {
       return 0;
+    }
+    if (error instanceof ActorMismatchError) {
+      process.stderr.write(`${redact(error.message, token)}\n`);
+      return 1;
     }
     const info =
       error instanceof CommanderError
