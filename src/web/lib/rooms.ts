@@ -1,3 +1,4 @@
+import { formatDisplayTime } from './display-format';
 import { roomPreference, type RoomPreferenceMap } from './room-preferences';
 
 /**
@@ -155,25 +156,12 @@ export function roomFilterEmptyMessage(
   return '还没有好友会话。通过好友申请或好友链接添加后即可开始。';
 }
 
-function pad2(value: number): string {
-  return value < 10 ? `0${value}` : String(value);
-}
-
-/** 会话列表时间：今天显示时:分，昨天显示“昨天”，更早显示日期。 */
+/**
+ * 会话列表时间：保持 compact 口径（今天时:分、昨天、更早日期）。
+ * 未知时间返回空串；detail 口径由 `formatDisplayTime` 统一提供。
+ */
 export function relativeTime(value: string | null | undefined): string {
-  const ms = Number(value);
-  if (!ms || Number.isNaN(ms)) return '';
-  const date = new Date(ms);
-  const now = new Date();
-  if (date.toDateString() === now.toDateString()) {
-    return `${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
-  }
-  const yesterday = new Date(now);
-  yesterday.setDate(yesterday.getDate() - 1);
-  if (date.toDateString() === yesterday.toDateString()) return '昨天';
-  const monthDay = `${date.getMonth() + 1}/${date.getDate()}`;
-  if (date.getFullYear() === now.getFullYear()) return monthDay;
-  return `${date.getFullYear()}/${monthDay}`;
+  return formatDisplayTime(value, { mode: 'compact' }).display;
 }
 
 const AVATAR_COLORS = ['#5b8def', '#e8a33d', '#6aa84f', '#d96459', '#8e7cc3', '#3d9a9a'];
