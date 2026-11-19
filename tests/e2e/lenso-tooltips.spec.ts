@@ -84,6 +84,7 @@ test('真实 index chunk 阻断仍保留原生提示与交互', async ({ page })
   await trigger.hover();
   await page.waitForTimeout(650);
   await expect(page.getByRole('tooltip')).toHaveCount(0);
+  await expect(page.locator('[data-app-tooltip]')).toHaveCount(0);
   expect(blocked).toBeGreaterThan(0);
   await trigger.click();
   await expect(page.locator('#group-modal')).toBeVisible();
@@ -160,8 +161,64 @@ test('会话行与监控五个提示保留语义、安全说明及确认框还�
   await expect(row).not.toHaveAttribute('aria-label');
   await expect(row).toHaveAccessibleName(name);
   await row.hover();
-  await expect(page.getByRole('tooltip')).toContainText('右键或长按');
+  await expect(page.getByRole('tooltip')).toHaveText('右键或长按打开会话操作');
+  for (const { width, scheme } of [
+    { width: 1280, scheme: 'light' as const },
+    { width: 1280, scheme: 'dark' as const },
+    { width: 390, scheme: 'light' as const },
+    { width: 390, scheme: 'dark' as const },
+  ]) {
+    await page.setViewportSize({ width, height: 844 });
+    await page.emulateMedia({ colorScheme: scheme });
+    await page.mouse.move(600, 400);
+    await row.hover();
+    const popup = page.locator('[data-app-tooltip]');
+    await expect(popup).toBeVisible();
+    const visual = await popup.evaluate((root) => {
+      const style = getComputedStyle(root);
+      const rect = root.getBoundingClientRect();
+      const parse = (value: string) => value.match(/[\d.]+/g)!.map(Number);
+      const [r, g, b, alpha = 1] = parse(style.backgroundColor);
+      const [tr, tg, tb] = parse(style.color);
+      const luminance = (red: number, green: number, blue: number) => {
+        const channel = (value: number) => {
+          const normalized = value / 255;
+          return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+        };
+        return 0.2126 * channel(red) + 0.7152 * channel(green) + 0.0722 * channel(blue);
+      };
+      const foreground = luminance(tr!, tg!, tb!);
+      const background = luminance(r!, g!, b!);
+      return { width: rect.width, left: rect.left, right: rect.right,
+        fontSize: style.fontSize, alpha,
+        contrast: (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05),
+        materialDisplays: [...root.querySelectorAll(':scope > [data-lenso-slot="tooltip-material"]')]
+          .map((layer) => getComputedStyle(layer).display) };
+    });
+    expect(visual.width).toBeLessThanOrEqual(240);
+    expect(visual.fontSize).toBe('12px');
+    expect(visual.alpha).toBe(1);
+    expect(visual.contrast).toBeGreaterThanOrEqual(4.5);
+    expect(visual.materialDisplays.every((display) => display === 'none')).toBe(true);
+    expect(visual.left).toBeGreaterThanOrEqual(0);
+    expect(visual.right).toBeLessThanOrEqual(width);
+    await page.screenshot({ path: `/tmp/roomrow-tooltip-${width}-${scheme}.png` });
+    await page.keyboard.press('Escape');
+    await expect(popup).toHaveCount(0);
+    await page.mouse.move(600, 400);
+    await row.hover();
+    await expect(popup).toBeVisible();
+    await page.evaluate(() => window.dispatchEvent(new Event('scroll')));
+    await expect(popup).toHaveCount(0);
+  }
   await expect(row).toHaveAccessibleName(name);
+  await expect(row).not.toHaveAttribute('aria-label');
+  await page.setViewportSize({ width: 1280, height: 844 });
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.mouse.move(600, 400);
+  await expect(page.getByRole('tooltip')).toHaveCount(0);
+  await row.hover();
+  await expect(page.getByRole('tooltip')).toBeVisible();
   const describedBy = (await row.getAttribute('aria-describedby'))?.split(/\s+/) ?? [];
   const tooltipId = await page.locator('[data-app-tooltip]').getAttribute('id');
   expect(tooltipId).toBeTruthy();

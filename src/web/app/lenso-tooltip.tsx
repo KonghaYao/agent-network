@@ -6,6 +6,7 @@ import {
 import {
   LensoBackendProvider, useBackendLease, useLenso, useLensoBackendScope,
 } from './lenso-runtime';
+import './lenso-tooltip.css';
 
 /** 复用原宿主及其 props/ref，不额外包裹布局节点或生成第二个按钮。 */
 export type TooltipProps<T extends ElementType> = {
@@ -128,10 +129,12 @@ export function Tooltip<T extends ElementType>({
       onOpenChange={(next) => { if (!next) close(); }} container={document.body}>
       <lenso.Tooltip.Content ref={localPortal} id={id} anchor={origin.current} side={side} sideOffset={8}
         collisionPadding={12} data-app-tooltip="" style={{
-          zIndex: 'var(--app-z-portal-local-menu)', maxWidth: 'min(360px, calc(100vw - 24px))',
+          zIndex: 'var(--app-z-portal-local-menu)', boxSizing: 'border-box',
+          maxWidth: 'min(240px, calc(100vw - 24px))',
           whiteSpace: 'normal', overflowWrap: 'anywhere', pointerEvents: 'none',
-          background: 'var(--wx-text)', color: 'var(--wx-panel)',
-          padding: '8px 10px', borderRadius: 6, fontSize: 12, lineHeight: 1.5,
+          background: '#1f2937', color: '#ffffff',
+          padding: '6px 8px', borderRadius: 7, fontSize: 12, lineHeight: 1.4,
+          boxShadow: '0 4px 14px rgb(0 0 0 / 18%)', opacity: 1,
         }}>{hint}</lenso.Tooltip.Content>
     </lenso.Tooltip> : null}
   </LensoBackendProvider>;
