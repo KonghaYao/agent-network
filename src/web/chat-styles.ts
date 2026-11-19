@@ -270,6 +270,11 @@ export const APP_STYLE = `
     display: grid; place-items: center; overflow: hidden; color: #fff;
     font-size: 16px; font-weight: 500; }
   /*
+   * Agent 明确离线时只降饱和头像元素本身（首字或品牌图），未读点、状态点
+   * 与 avatar-wrap 保持原色；人类与未知状态不会带上该属性。
+   */
+  [data-presence="offline"] { filter: grayscale(1); opacity: .55; }
+  /*
    * 群聊单块瓦片：44px、13px 圆角，背景是同一群色的柔和明暗渐变，
    * 白色标签最多 2 字。--group-color 同时供头部色标使用；变量缺失时
    * 回退到调色板首色，保证瓦片始终有底色。
