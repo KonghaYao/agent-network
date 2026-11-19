@@ -9,6 +9,9 @@ const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 
+/** ECMAScript Date 可表示的最大时间戳（±8.64e15 ms），超出后 `toISOString()` 抛错。 */
+const MAX_DATE_MS = 8.64e15;
+
 export type DisplayTimeValue = string | number | Date | null | undefined;
 
 export type DisplayTimeMode = 'compact' | 'detail';
@@ -45,7 +48,7 @@ function pad2(value: number): string {
   return value < 10 ? `0${value}` : String(value);
 }
 
-/** 只接受正数时间戳；0、负数、NaN、Infinity 与不可解析文本都视为未知。 */
+/** 只接受 Date 范围内的正数时间戳；0、负数、NaN、Infinity 与不可解析文本都视为未知。 */
 function parseTimestamp(value: DisplayTimeValue): number | null {
   let ms: number;
   if (typeof value === 'number') {
@@ -60,12 +63,18 @@ function parseTimestamp(value: DisplayTimeValue): number | null {
   } else {
     return null;
   }
-  return Number.isFinite(ms) && ms > 0 ? Math.trunc(ms) : null;
+  if (!Number.isFinite(ms) || ms <= 0 || ms > MAX_DATE_MS) return null;
+  return Math.trunc(ms);
 }
 
 function parseNow(value: DisplayTimeOptions['now']): number {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (value instanceof Date && Number.isFinite(value.getTime())) return value.getTime();
+  if (typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= MAX_DATE_MS) {
+    return value;
+  }
+  if (value instanceof Date) {
+    const ms = value.getTime();
+    if (Number.isFinite(ms) && Math.abs(ms) <= MAX_DATE_MS) return ms;
+  }
   return Date.now();
 }
 

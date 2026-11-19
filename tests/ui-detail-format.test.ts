@@ -123,6 +123,28 @@ describe('formatDisplayTime', () => {
       expect(formatDisplayTime(value, { now: NOW, timeZone: 'UTC' })).toEqual(unknown);
     }
   });
+
+  test('ECMAScript Date 边界内合法、越界一律未知且不抛异常', () => {
+    const max = 8.64e15;
+    const boundary = formatDisplayTime(max, { now: NOW, timeZone: 'UTC' });
+    expect(boundary.iso).toBe('+275760-09-13T00:00:00.000Z');
+    expect(boundary.timestamp).toBe(max);
+
+    const unknown = { display: '', full: '', iso: null, timestamp: null };
+    const outOfRange = [
+      max + 1,
+      1e16,
+      -1e16,
+      Number.NaN,
+      '8640000000000001',
+      '1e16',
+      'not-a-date',
+    ];
+    for (const value of outOfRange) {
+      expect(() => formatDisplayTime(value, { now: NOW, timeZone: 'UTC' })).not.toThrow();
+      expect(formatDisplayTime(value, { now: NOW, timeZone: 'UTC' })).toEqual(unknown);
+    }
+  });
 });
 
 describe('计数与入口顺序', () => {
@@ -186,6 +208,7 @@ describe('计数与入口顺序', () => {
       );
       expect(taskTimeLabel(String(now))).toBe('刚刚');
       expect(taskTimeLabel('invalid')).toBe('');
+      expect(taskTimeLabel('8640000000000001')).toBe('');
       expect(taskTimeLabel(null)).toBe('');
     });
   });
@@ -340,6 +363,8 @@ describe('文件大小与类型', () => {
       expect(fileTimeLabel(undefined)).toBe('');
       expect(fileTimeLabel(0)).toBe('');
       expect(fileTimeLabel('invalid')).toBe('');
+      expect(fileTimeLabel(8_640_000_000_000_001)).toBe('');
+      expect(fileTimeLabel(1e16)).toBe('');
       expect(fileTimeLabel(now - 3 * MINUTE)).toBe('3 分钟前');
       expect(fileTimeLabel(now - 2 * HOUR)).toBe('2 小时前');
       expect(fileTimeLabel(new Date(2026, 10, 15, 12, 0).getTime())).toBe(
