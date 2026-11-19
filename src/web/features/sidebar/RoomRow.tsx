@@ -46,7 +46,7 @@ export function RoomRow({
         <Tooltip as={Link}
           className="room-item"
           to={`/c/${encodeURIComponent(room.room_id)}`}
-          hint={`${room.name}（右键或长按打开会话操作）`}
+          hint="右键或长按打开会话操作"
           data-room-id={room.room_id}
           data-room-name={room.name}
           data-room-kind={room.kind}

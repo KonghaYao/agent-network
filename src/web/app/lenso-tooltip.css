@@ -1,0 +1,4 @@
+/* Tooltip Content is portalled to body; remove Lenso's translucent material layers. */
+[data-app-tooltip] > [data-lenso-slot='tooltip-material'] {
+  display: none !important;
+}
