@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 // 全部测试走生产 Vite chunk 与真实工具；故障注入拦截实际 index-*.js，不用 stub。
+const manifest = JSON.parse(readFileSync('dist/web/.vite/manifest.json', 'utf8')) as Record<string, { file: string; name?: string; isDynamicEntry?: boolean }>;
+const lensoChunk = Object.values(manifest).find((chunk) => chunk.name === 'index' && chunk.isDynamicEntry)!.file;
 let base: string;
 let token: string;
 let group: string;
@@ -60,6 +62,15 @@ interface Consumer {
   returnTo: string;
 }
 
+const search = { name: 'MessageSearchDialog', id: 'message-search-dialog', title: 'message-search-title',
+  returnTo: '#message-search-button', open: async (page: Page) => { await page.locator('#message-search-button').click(); } };
+const context = { name: 'MessageContextDialog', id: 'message-context-dialog', title: 'message-context-title',
+  returnTo: '.message-search-result', open: async (page: Page) => {
+    if (!(await page.locator('#message-search-dialog').isVisible())) await search.open(page);
+    await page.locator('#message-search-input').fill('N2a overlay');
+    await page.locator('#message-search-form button[type=submit]').click();
+    await page.locator('.message-search-result').first().click();
+  } };
 const consumers: Consumer[] = [
   { name: 'ForwardDialog', id: 'forward-modal', title: 'forward-title', returnTo: '[data-message-id].msg',
     open: async (page) => {
@@ -88,6 +99,12 @@ const consumers: Consumer[] = [
     returnTo: '#room-menu-toggle', open: (page) => roomMenu(page, 'report') },
   { name: 'TransferDialog', id: 'transfer-modal', title: 'transfer-title', room: () => direct,
     returnTo: '#room-menu-toggle', open: (page) => roomMenu(page, 'transfer') },
+  { name: 'MembersDialog', id: 'members-modal', title: 'members-modal-title',
+    returnTo: '#members-button', open: async (page) => { await page.locator('#members-button').click(); } },
+  { name: 'ContactRequestsDialog', id: 'contact-modal', title: 'contact-modal-title',
+    returnTo: '#contact-requests', open: async (page) => { await page.locator('#contact-requests').click(); } },
+  search,
+  context,
 ];
 
 async function contract(page: Page, item: Consumer): Promise<Locator> {
@@ -103,6 +120,65 @@ async function contract(page: Page, item: Consumer): Promise<Locator> {
   expect(await dialog.evaluate((node) => node.matches(':popover-open') || Boolean(node.closest(':popover-open')))).toBe(true);
   return dialog;
 }
+
+async function nestedFallback(page: Page, item: Consumer) {
+  if (item.name === 'MembersDialog') {
+    await page.locator('#members-current-search').fill('');
+    const remove = page.getByRole('button', { name: `移除 ${peerName}` });
+    await remove.click();
+    await expect(page.locator('#confirm-dialog')).toHaveAttribute('data-alert-shell', 'radix');
+    await page.locator('#confirm-dialog-cancel').click();
+    await expect(remove).toBeFocused();
+    const avatar = page.locator('#members-modal .memory-avatar-trigger').first();
+    await avatar.click({ button: 'right' });
+    await expect(page.locator('#members-modal #memory-avatar-menu')).toBeVisible();
+    await expect(page.locator('#members-modal #memory-avatar-menu')).not.toHaveAttribute('data-lenso-slot');
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#members-modal')).toBeVisible();
+    await expect(avatar).toBeFocused();
+  } else if (item.name === 'ContactRequestsDialog') {
+    await page.locator('#contact-tab-more').click();
+    await page.locator('#contact-link-create').click();
+    await expect(page.locator('#contact-link-status')).toContainText('链接已生成');
+    const revoke = page.locator('#contact-link-list').getByRole('button', { name: /撤销好友链接/ }).first();
+    await revoke.click();
+    await expect(page.locator('#confirm-dialog')).toHaveAttribute('data-alert-shell', 'radix');
+    await page.locator('#confirm-dialog-cancel').click();
+    await expect(revoke).toBeFocused();
+    await expect(page.locator('#contact-modal')).toBeVisible();
+    await revoke.click();
+    await expect(page.locator('#confirm-dialog')).toHaveAttribute('data-alert-shell', 'radix');
+    await page.locator('#confirm-dialog-ok').click();
+    await expect(page.locator('#contact-link-status')).toContainText('已撤销好友链接');
+  } else if (item === search) {
+    await page.locator('#message-search-input').fill('N2a overlay');
+    await page.locator('#message-search-form button[type=submit]').click();
+    await page.locator('.message-search-result').first().click();
+    await expect(page.locator('#message-context-dialog')).toHaveAttribute('data-modal-shell', 'fallback');
+    await expect.poll(() => page.locator('#message-context-dialog').evaluate((node) => node.contains(document.activeElement))).toBe(true);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#message-search-dialog')).toBeVisible();
+    await expect(page.locator('.message-search-result').first()).toBeFocused();
+  }
+}
+
+test('共享 Modal：14/14 默认 Lenso，TaskTrace 仅保留 Drawer 的 Radix fallback', () => {
+  expect(consumers).toHaveLength(14);
+  const paths = ['chat/ForwardDialog', 'overlays/AgentReissueDialog', 'overlays/AnnouncementDialog',
+    'overlays/ContactRequestsDialog', 'overlays/GroupCreateDialog', 'overlays/MeRenameDialog',
+    'overlays/MembersDialog', 'overlays/NewAgentDialog', 'overlays/RenameAgentDialog',
+    'overlays/RenameRoomDialog', 'overlays/ReportDialog', 'overlays/TransferDialog', 'tasks/MessageSearchDialog'];
+  let instances = 0;
+  for (const path of paths) {
+    const source = readFileSync(`src/web/features/${path}.tsx`, 'utf8');
+    instances += [...source.matchAll(/<Modal\b/g)].length;
+    expect(source).not.toContain('shell="radix"');
+    expect(source).not.toMatch(/TODO\(N2[b-c]/);
+  }
+  expect(instances).toBe(14);
+  const runtime = readFileSync('src/web/app/lenso-runtime.ts', 'utf8');
+  expect(runtime).toContain("import('@lenso/ui')");
+});
 
 test.beforeAll(async () => {
   base = process.env.E2E_BASE_URL ?? JSON.parse(readFileSync(resolve('.e2e/server.json'), 'utf8')).base;
@@ -152,6 +228,10 @@ for (const item of consumers) {
       else await page.locator('.spa-dialog-overlay').last().click({ position: { x: 5, y: 5 } });
       await expect(dialog).toHaveCount(0);
       await expect(page.locator(item.returnTo)).toBeFocused();
+      if (item === context) {
+        await expect(page.locator('#message-search-dialog')).toBeVisible();
+        await page.keyboard.press('Escape');
+      }
       await expect(page.locator('.spa-dialog-overlay')).toHaveCount(0);
     }
   });
@@ -161,42 +241,54 @@ test('Members + confirm 取消只关子层，AgentAvatarMenu → AgentMemory 保
   await login(page);
   await page.locator('#members-button').click();
   const members = page.locator('#members-modal');
-  await expect(members).toHaveAttribute('data-modal-shell', 'radix');
+  await expect(members).toHaveAttribute('data-lenso-slot', 'modal-popup');
   const remove = page.getByRole('button', { name: `移除 ${peerName}` });
   await remove.click();
+  await expect(page.locator('#confirm-dialog')).toHaveAttribute('data-alert-shell', 'lenso');
   await page.locator('#confirm-dialog-cancel').click();
   await expect(members).toBeVisible();
   await expect(remove).toBeFocused();
-  await members.locator('.memory-avatar-trigger').first().click({ button: 'right' });
-  await expect(page.locator('#memory-avatar-menu')).toBeVisible();
-  await page.keyboard.press('Escape');
-  await expect(members).toBeVisible();
-  await members.locator('.memory-avatar-trigger').first().click({ button: 'right' });
+  const avatar = members.locator('.memory-avatar-trigger').first();
+  for (const mode of ['escape', 'outside', 'keyboard']) {
+    await avatar.focus();
+    if (mode === 'keyboard') await page.keyboard.press('Shift+F10');
+    else await avatar.click({ button: 'right' });
+    const menu = page.locator('#members-modal #memory-avatar-menu');
+    await expect(menu).toHaveAttribute('data-lenso-slot', 'context-menu-layout');
+    if (mode === 'outside') await members.locator('h2').click();
+    else await page.keyboard.press('Escape');
+    await expect(menu).toHaveCount(0);
+    await expect(members).toBeVisible();
+    await expect(avatar).toBeFocused();
+  }
+  await avatar.click({ button: 'right' });
   await page.locator('#memory-avatar-open').click();
   // 现有业务主动关闭 Members 后打开 AgentMemory，本次不改这个时序。
   await expect(members).toHaveCount(0);
-  await expect(page.locator('#agent-memory-dialog')).toBeVisible();
+  await expect(page.locator('#agent-memory-dialog')).toHaveAttribute('data-agent-memory-shell', 'lenso');
   await page.keyboard.press('Escape');
   await expect(page.locator('#agent-memory-dialog')).toHaveCount(0);
   await expect(page.locator('#members-button')).toBeFocused();
 });
 
-test('ContactRequests 保留 Radix：撤销链接取消与确认均保留父层及状态', async ({ page }) => {
+test('ContactRequests 使用 Lenso：撤销链接取消与确认均保留父层及状态', async ({ page }) => {
   await login(page);
   await page.locator('#contact-requests').click();
   const dialog = page.locator('#contact-modal');
-  await expect(dialog).toHaveAttribute('data-modal-shell', 'radix');
+  await expect(dialog).toHaveAttribute('data-lenso-slot', 'modal-popup');
   await page.locator('#contact-tab-more').click();
   await page.locator('#contact-link-create').click();
   await expect(page.locator('#contact-link-status')).toContainText('链接已生成');
   const revoke = page.locator('#contact-link-list .contact-link-item').first()
     .getByRole('button', { name: /撤销好友链接/ });
   await revoke.click();
+  await expect(page.locator('#confirm-dialog')).toHaveAttribute('data-alert-shell', 'lenso');
   await page.locator('#confirm-dialog-cancel').click();
   await expect(dialog).toBeVisible();
   await expect(revoke).toBeFocused();
   await expect(page.locator('#contact-link-status')).toContainText('链接已生成');
   await revoke.click();
+  await expect(page.locator('#confirm-dialog')).toHaveAttribute('data-alert-shell', 'lenso');
   await page.locator('#confirm-dialog-ok').click();
   await expect(page.locator('#confirm-dialog')).toHaveCount(0);
   await expect(dialog).toBeVisible();
@@ -206,21 +298,21 @@ test('ContactRequests 保留 Radix：撤销链接取消与确认均保留父层�
   await expect(page.locator('#contact-requests')).toBeFocused();
 });
 
-test('MessageSearch 双实例与 TaskTrace 保持 Radix，关闭子层不关闭搜索', async ({ page }) => {
+test('MessageSearch 双实例与 TaskTrace 使用 Lenso，关闭子层不关闭搜索', async ({ page }) => {
   await login(page);
   await page.locator('#message-search-button').click();
-  await expect(page.locator('#message-search-dialog')).toHaveAttribute('data-modal-shell', 'radix');
+  await expect(page.locator('#message-search-dialog')).toHaveAttribute('data-lenso-slot', 'modal-popup');
   await page.locator('#message-search-input').fill('N2a overlay');
   await page.locator('#message-search-form button[type=submit]').click();
   await page.locator('.message-search-result').first().click();
-  await expect(page.locator('#message-context-dialog')).toHaveAttribute('data-modal-shell', 'radix');
+  await expect(page.locator('#message-context-dialog')).toHaveAttribute('data-lenso-slot', 'modal-popup');
   await page.locator('#message-context-close').click();
   await expect(page.locator('#message-context-dialog')).toHaveCount(0);
   await expect(page.locator('#message-search-dialog')).toBeVisible();
   await page.getByRole('checkbox', { name: '只看任务' }).check();
   await page.locator('#message-search-form button[type=submit]').click();
   await page.locator('.task-search-result').first().click();
-  await expect(page.locator('#task-trace-drawer')).toHaveAttribute('data-modal-shell', 'radix');
+  await expect(page.locator('#task-trace-drawer')).toHaveAttribute('data-task-trace-shell', 'lenso');
   await page.keyboard.press('Escape');
   await expect(page.locator('#task-trace-drawer')).toHaveCount(0);
   // Task 分支既有行为是先关闭搜索再打开 Trace。
@@ -229,6 +321,51 @@ test('MessageSearch 双实例与 TaskTrace 保持 Radix，关闭子层不关闭�
 
 for (const width of [1280, 390]) {
   for (const colorScheme of ['light', 'dark'] as const) {
+    test(`${width} ${colorScheme}：Members 菜单/confirm、Contact confirm、搜索上下文嵌套`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 844 });
+      await page.emulateMedia({ colorScheme });
+      await login(page);
+      await page.locator('#members-button').click();
+      const members = page.locator('#members-modal');
+      const remove = page.getByRole('button', { name: `移除 ${peerName}` });
+      await remove.click();
+      await expect(page.locator('#confirm-dialog')).toHaveAttribute('data-alert-shell', 'lenso');
+      await page.keyboard.press('Escape');
+      await expect(members).toBeVisible();
+      await expect(remove).toBeFocused();
+      const avatar = members.locator('.memory-avatar-trigger').first();
+      await avatar.click({ button: 'right' });
+      await expect(page.locator('#members-modal #memory-avatar-menu')).toHaveAttribute('data-lenso-slot', 'context-menu-layout');
+      await page.keyboard.press('Escape');
+      await expect(avatar).toBeFocused();
+      await page.keyboard.press('Escape');
+      await context.open(page);
+      const child = await contract(page, context);
+      for (let i = 0; i < 6; i++) {
+        await page.keyboard.press(i < 3 ? 'Tab' : 'Shift+Tab');
+        expect(await child.evaluate((node) => node.contains(document.activeElement))).toBe(true);
+      }
+      await page.keyboard.press('Escape');
+      await expect(page.locator('#message-search-dialog')).toBeVisible();
+      await expect(page.locator('.message-search-result')).toBeFocused();
+      await page.keyboard.press('Escape');
+      await page.goto(`${base}/`);
+      await expect(page.locator('#contact-requests')).toHaveAttribute('data-lenso-slot', 'button');
+      await page.locator('#contact-requests').click();
+      await page.locator('#contact-tab-more').click();
+      await page.locator('#contact-link-create').click();
+      await expect(page.locator('#contact-link-status')).toContainText('链接已生成');
+      const revoke = page.locator('#contact-link-list').getByRole('button', { name: /撤销好友链接/ }).first();
+      await revoke.click();
+      await expect(page.locator('#confirm-dialog')).toHaveAttribute('data-alert-shell', 'lenso');
+      await page.keyboard.press('Escape');
+      await expect(page.locator('#contact-modal')).toBeVisible();
+      await expect(revoke).toBeFocused();
+      await expect(page.locator('#contact-link-status')).toContainText('链接已生成');
+      await revoke.click();
+      await page.locator('#confirm-dialog-ok').click();
+      await expect(page.locator('#contact-link-status')).toContainText('已撤销好友链接');
+    });
     test(`${width} ${colorScheme}：几何、焦点围栏、scroll lock 与卸载`, async ({ page }) => {
       test.setTimeout(90_000);
       await page.setViewportSize({ width, height: 844 });
@@ -236,14 +373,14 @@ for (const width of [1280, 390]) {
       for (const item of consumers) {
         await login(page, item.room?.() ?? group);
         // 移动端聊天页不挂载侧栏；从实际首页入口打开账号/建群弹窗。
-        if (['GroupCreateDialog', 'MeRenameDialog', 'NewAgentDialog'].includes(item.name)) {
+        if (['GroupCreateDialog', 'MeRenameDialog', 'NewAgentDialog', 'ContactRequestsDialog'].includes(item.name)) {
           await page.goto(`${base}/`);
           await expect(page.locator('#new-group')).toHaveAttribute('data-lenso-slot', 'button');
         }
         const scrollBefore = await page.evaluate(() => [document.body, document.documentElement].map((node) => node.style.cssText));
         await item.open(page);
         const dialog = await contract(page, item);
-        await expect.poll(async () => Math.round((await dialog.boundingBox())?.width ?? 0)).toBe(width === 390 ? 390 : 440);
+        await expect.poll(async () => Math.round((await dialog.boundingBox())?.width ?? 0)).toBe(width === 390 ? 390 : item.name === 'ContactRequestsDialog' ? 760 : ['MembersDialog', 'MessageSearchDialog', 'MessageContextDialog'].includes(item.name) ? 680 : 440);
         const box = (await dialog.boundingBox())!;
         if (width === 390) expect(box).toMatchObject({ x: 0, y: 0, height: 844 });
         else expect(Math.abs(box.x + box.width / 2 - 640)).toBeLessThan(1);
@@ -257,6 +394,7 @@ for (const width of [1280, 390]) {
         expect(await page.evaluate(() => [document.body, document.documentElement].some((node) => getComputedStyle(node).overflowY === 'hidden'))).toBe(true);
         await page.keyboard.press('Escape');
         await expect(dialog).toHaveCount(0);
+        if (item === context) await page.keyboard.press('Escape');
         await expect.poll(() => page.evaluate(() => [document.body, document.documentElement].map((node) => node.style.cssText))).toEqual(scrollBefore);
       }
       await login(page);
@@ -266,7 +404,7 @@ for (const width of [1280, 390]) {
       await page.locator('#message-search-form button[type=submit]').click();
       await page.locator('.task-search-result').first().click();
       const trace = page.locator('#task-trace-drawer');
-      await expect(trace).toHaveAttribute('data-modal-shell', 'radix');
+      await expect(trace).toHaveAttribute('data-task-trace-shell', 'lenso');
       await expect.poll(async () => Math.round((await trace.boundingBox())?.width ?? 0)).toBe(width === 390 ? 390 : 560);
       // Radix 保留既有入场动画；宽度不随动画变化，需等待完整几何而非只等宽度。
       await expect.poll(async () => {
@@ -285,7 +423,7 @@ for (const item of consumers) {
     let release!: () => void;
     const gate = new Promise<void>((done) => { release = done; });
     let intercepted = 0;
-    await page.route('**/assets/index-*.js', async (route) => {
+    await page.route(`**/${lensoChunk}`, async (route) => {
       intercepted++;
       await gate;
       await route.continue();
@@ -333,8 +471,10 @@ for (const item of consumers) {
         expect(await editable.evaluate((node) => [(node as HTMLInputElement).selectionStart, (node as HTMLInputElement).selectionEnd])).toEqual([1, 4]);
       }
       if (item.name === 'ReportDialog') await expect(page.locator('#report-category')).toHaveValue('spam');
+      await nestedFallback(page, item);
       await dialog.locator('.spa-dialog-close').click();
       await expect(dialog).toHaveCount(0);
+      if (item === context) await page.keyboard.press('Escape');
       await item.open(page);
       await contract(page, item);
       await page.keyboard.press('Escape');
@@ -348,7 +488,7 @@ for (const item of consumers) {
     let aborted = 0;
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));
-    await page.route('**/assets/index-*.js', async (route) => { aborted++; await route.abort('failed'); });
+    await page.route(`**/${lensoChunk}`, async (route) => { aborted++; await route.abort('failed'); });
     await login(page, item.room?.() ?? group, false);
     for (let i = 0; i < 2; i++) {
       await item.open(page);
@@ -359,11 +499,51 @@ for (const item of consumers) {
         await page.locator('#report-note').fill('fallback 可编辑');
         await expect(page.locator('#report-note')).toHaveValue('fallback 可编辑');
       }
+      await nestedFallback(page, item);
       await page.keyboard.press('Escape');
       await expect(dialog).toHaveCount(0);
     }
     expect(aborted).toBeGreaterThan(0);
     expect(errors).toEqual([]);
+  });
+}
+
+for (const delayed of [true, false]) {
+  test(`MessageSearch → TaskTrace：${delayed ? '慢加载保持 fallback、重开升级' : '阻断后同库 fallback'}`, async ({ page }) => {
+    let release!: () => void;
+    const gate = new Promise<void>((done) => { release = done; });
+    let intercepted = 0;
+    await page.route(`**/${lensoChunk}`, async (route) => {
+      intercepted++;
+      if (delayed) { await gate; await route.continue(); }
+      else await route.abort('failed');
+    });
+    try {
+      await login(page, group, false);
+      await search.open(page);
+      await expect(page.locator('#message-search-dialog')).toHaveAttribute('data-modal-shell', 'fallback');
+      await page.getByRole('checkbox', { name: '只看任务' }).check();
+      const openTask = async () => {
+        await page.locator('#message-search-input').fill('N2a overlay');
+        await page.locator('#message-search-form button[type=submit]').click();
+        await page.locator('.task-search-result').first().click();
+      };
+      await openTask();
+      const trace = page.locator('#task-trace-drawer');
+      await expect(trace).toHaveAttribute('data-modal-shell', 'radix');
+      if (delayed) {
+        release();
+        await expect(page.locator('#message-search-button')).toHaveAttribute('data-lenso-slot', 'button');
+        await expect(trace).toHaveAttribute('data-modal-shell', 'radix');
+      }
+      await page.keyboard.press('Escape');
+      await expect(trace).toHaveCount(0);
+      await search.open(page);
+      await page.getByRole('checkbox', { name: '只看任务' }).check();
+      await openTask();
+      await expect(trace).toHaveAttribute(delayed ? 'data-task-trace-shell' : 'data-modal-shell', delayed ? 'lenso' : 'radix');
+      expect(intercepted).toBeGreaterThan(0);
+    } finally { release(); }
   });
 }
 

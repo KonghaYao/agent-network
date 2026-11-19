@@ -28,6 +28,12 @@
   color: var(--wx-text);
 }
 
+.spa-dialog-content.members-card[data-lenso-slot='modal-popup'],
+.spa-dialog-content.message-search-card[data-lenso-slot='modal-popup'] {
+  width: min(680px, calc(100vw - 32px));
+  overflow: hidden;
+}
+
 .spa-dialog-content.contact-modal-card[data-lenso-slot='modal-popup'] {
   width: min(760px, calc(100vw - 32px));
 }
@@ -35,6 +41,8 @@
 @media (max-width: 759px) {
   .spa-dialog-content[data-modal-shell='fallback'],
   .spa-dialog-content[data-lenso-slot='modal-popup'],
+  .spa-dialog-content.members-card[data-lenso-slot='modal-popup'],
+  .spa-dialog-content.message-search-card[data-lenso-slot='modal-popup'],
   .spa-dialog-content.contact-modal-card[data-lenso-slot='modal-popup'] {
     inset: 0;
     width: 100%;

@@ -59,7 +59,7 @@ test('真实 SDK：native popover、body、焦点与 Radix 内嵌', async ({ pag
   await page.keyboard.press('Escape');
   await expect(page.locator('#menu')).toBeHidden();
   // 已确认的跨库缺陷：container 不能隔离原生 Escape 与 Radix dismiss 层。
-  // 产品头像菜单因此继续用 Radix，此实验防止未来把不兼容分支硬换进去。
+  // 产品头像菜单随 Members 同库迁移；此实验保留对跨库不兼容边界的断言。
   await expect(page.locator('#parent')).toBeHidden();
 
   await page.goto('http://context.test/?standalone');

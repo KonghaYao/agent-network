@@ -331,8 +331,6 @@ export function MembersDialog({
 
   return (
     <Modal
-      // TODO(N2b/N2c): confirm、AgentMemory 与 ContextMenu 迁移后恢复默认 Lenso。
-      shell="radix"
       open={open}
       onOpenChange={onOpenChange}
       title="群成员"

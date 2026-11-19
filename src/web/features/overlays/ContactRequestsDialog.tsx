@@ -22,7 +22,7 @@ const TABS: { value: ContactTab; label: string; id: string; panel: string }[] = 
  *
  * 打开后默认进入搜索页，与 legacy 一致；好友申请页只处理 pending，
  * 链接明文只保存在 `ContactLinksPanel` 的内存状态。关闭后焦点回到
- * `#contact-requests` 由调用方负责，Radix 负责弹窗内的焦点陷阱。
+ * `#contact-requests` 由调用方负责，共享 Modal 负责弹窗内的焦点陷阱。
  */
 export function ContactRequestsDialog({
   open,
@@ -65,8 +65,6 @@ export function ContactRequestsDialog({
 
   return (
     <Modal
-      // TODO(N2b/N2c): confirm 迁移后恢复默认 Lenso，避免父子浮层跨库。
-      shell="radix"
       open={open}
       onOpenChange={onOpenChange}
       title="添加好友"
