@@ -19,9 +19,13 @@ import '../../src/web/features/overlays/alert-dialog.css';
 import '../../src/web/app/lenso-popover.css';
 import '../../src/web/features/overlays/modal.css';
 import { TASK_DOCK_STYLE } from '../../src/web/chat-task-dock-styles';
+import { TASK_TRACE_STYLE } from '../../src/web/chat-task-trace-styles';
 const legacy = document.createElement('style');
 legacy.textContent = TASK_DOCK_STYLE;
 document.head.append(legacy);
+const traceStyle = document.createElement('style');
+traceStyle.textContent = TASK_TRACE_STYLE;
+document.head.append(traceStyle);
 import { createRoot } from 'react-dom/client';
 import { Button, Surface, Card, Badge, List, ListItem, LENSO_BADGE_FILL } from '../../src/web/app/lenso-controls';
 import { useLenso, useBackendLease } from '../../src/web/app/lenso-runtime';
@@ -46,6 +50,10 @@ function Probe() {
     <div id="room-announcement-popover" data-popover-backend="lenso"/>
     <div id="edit" className="spa-dialog-content modal-card" role="dialog" data-modal-shell="fallback"/>
     <div id="confirm" className="spa-dialog-content" role="alertdialog" data-lenso-slot="alert-dialog-popup"/>
+    <div style={{ pointerEvents: 'none' }}>
+      <div id="trace-fallback" className="spa-dialog-content task-trace-card" role="dialog" data-modal-shell="fallback"/>
+      <div id="trace-drawer" className="task-trace-drawer" data-task-trace-shell="lenso" role="dialog"/>
+    </div>
   </>;
 }
 createRoot(document.getElementById('root')).render(<Probe/>);
@@ -103,6 +111,11 @@ for (const interaction of ['none', 'button', 'list', 'lease']) {
     if (interaction === 'none') {
       await expect(page.locator('#list')).toHaveAttribute('data-lenso-slot', 'list-root');
       await expect(page.locator('#item')).toHaveAttribute('data-lenso-slot', 'list-item');
+      // Trace 的 Radix fallback 是整高抽屉，不能吃到通用 dialog 的 20px。
+      await expect(page.locator('#trace-fallback')).toHaveCSS('border-radius', '0px');
+      // Lenso Drawer 路径只用左侧圆角，不受 dialog 规则影响。
+      await expect(page.locator('#trace-drawer')).toHaveCSS('border-top-left-radius', '16px');
+      await expect(page.locator('#trace-drawer')).toHaveCSS('border-top-right-radius', '0px');
     }
     for (const selector of ['#surface', '#card', '#badge', '#task-dock [data-task-surface]']) {
       await expect(page.locator(selector)).toHaveCSS('border-top-width', '0px');
@@ -115,6 +128,8 @@ for (const interaction of ['none', 'button', 'list', 'lease']) {
     await expect(page.locator('#room-announcement-popover')).toHaveCSS('width', '320px');
     await expect(page.locator('#confirm')).toHaveCSS('width', '420px');
     await expect(page.locator('#edit')).toHaveCSS('width', '440px');
+    await expect(page.locator('#edit')).toHaveCSS('border-radius', '20px');
+    await expect(page.locator('#confirm')).toHaveCSS('border-radius', '12px');
     await page.locator('#row').focus();
     await page.keyboard.press('Tab');
     await page.keyboard.press('Shift+Tab');

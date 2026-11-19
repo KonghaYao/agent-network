@@ -31,10 +31,7 @@
   /* S1 细节 role：只供适配器与弹层消费，不覆盖品牌 palette。 */
   --app-type-detail: 13px;
   --app-type-detail-leading: 19px;
-  --app-type-caption: 12px;
-  --app-type-caption-leading: 16px;
   --app-space-detail-gap: 8px;
-  --app-space-detail-inset: 16px;
   --app-control-normal: 36px;
   --app-control-icon: 32px;
   --app-control-row-min: 44px;

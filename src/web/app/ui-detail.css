@@ -89,6 +89,10 @@ button[data-button-role]:focus-visible {
   border-radius: var(--app-shape-dialog);
   box-shadow: var(--app-elevation-detail);
 }
+/* 整高的 Trace 抽屉不是 dialog 卡片：同特异性靠后恢复自身 0 圆角。 */
+.spa-dialog-content.task-trace-card[role='dialog'] {
+  border-radius: 0;
+}
 .spa-dialog-content.spa-dialog-content[role='alertdialog'],
 #task-complete-dialog.task-complete-dialog {
   --app-dialog-width: var(--app-dialog-confirm-width);
