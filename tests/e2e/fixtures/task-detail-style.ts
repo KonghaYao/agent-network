@@ -16,7 +16,7 @@ export async function expectTaskDetailStyle(page: Page, width: number, colorSche
       };
     };
     const selectors = ['[data-task-toolbar] .task-dock-title', '.task-dock-toggle', '.task-dock-preview',
-      '.task-dock-meta', '[data-task-surface="panel"]', '.task-dock-item', '.task-preview-popover',
+      '.task-preview-meta', '[data-task-surface="panel"]', '.task-dock-item', '.task-preview-popover',
       '.task-preview-sender', '.task-preview-time', '.task-preview-ask', '.task-preview-all',
       '.task-bar-preview', '[data-task-surface="summary"]', '.task-preview-head', '.task-preview-scroll',
       '.task-preview-actions', '#composer', '#messages', '#jump-latest'];
@@ -27,7 +27,7 @@ export async function expectTaskDetailStyle(page: Page, width: number, colorSche
     expect(at(selector).font).toBe('14px');
     expect(at(selector).line).toBe('20px');
   }
-  for (const selector of ['.task-dock-meta', '.task-preview-time']) {
+  for (const selector of ['.task-preview-meta', '.task-preview-time']) {
     expect(at(selector).font).toBe('12px');
     expect(at(selector).line).toBe('16px');
   }

@@ -20,8 +20,12 @@ export const TASK_TRACE_STYLE = `
   .task-bar-icon { grid-column: 1; grid-row: 1; display: inline-flex; width: 18px; height: 18px;
     align-items: center; justify-content: center; color: var(--lenso-tint-text);
     font-size: 12px; line-height: 16px; font-weight: 700; }
-  .task-bar-avatars { grid-column: 2; grid-row: 1; display: inline-flex; align-items: center; }
-  .task-bar-more { display: inline-flex; align-items: center; margin-left: 4px; }
+  .task-bar-avatars { grid-column: 2; grid-row: 1; display: inline-flex; align-items: center;
+    min-width: 0; max-width: 100%; height: 20px; overflow: hidden; }
+  .task-bar-avatars [data-lenso-slot='avatar-group'] { display: flex; align-items: center; overflow: hidden; }
+  .task-bar-avatars [data-lenso-slot='avatar'] { flex: 0 0 20px; width: 20px !important;
+    height: 20px !important; border-radius: 50% !important; }
+  .task-bar-more { display: inline-flex; flex: 0 0 auto; align-items: center; margin-left: 4px; }
   .task-bar-more [data-lenso-slot^='badge'] { width: auto !important; height: 18px !important;
     padding: 0 4px !important; border: 0; border-radius: 999px !important;
     font-size: 11px !important; line-height: 14px !important; letter-spacing: .02em;

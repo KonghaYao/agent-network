@@ -21,8 +21,8 @@ const TASK_AVATAR_GROUP = { '--avatar-group-overlap': '6px' } as CSSProperties;
 
 function taskAvatarStyle(name: string): CSSProperties {
   return {
-    width: 24,
-    height: 24,
+    width: 20,
+    height: 20,
     boxSizing: 'border-box',
     borderRadius: '50%',
     background: avatarColor(name),

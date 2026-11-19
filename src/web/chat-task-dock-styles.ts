@@ -70,8 +70,6 @@ export const TASK_DOCK_STYLE = `
   .task-dock-preview { display: -webkit-box; -webkit-line-clamp: 2;
     -webkit-box-orient: vertical; overflow: hidden; width: 100%; min-width: 0;
     font-size: 14px; line-height: 20px; font-weight: 500; overflow-wrap: anywhere; }
-  .task-dock-meta { display: block; min-width: 0; color: var(--wx-muted);
-    font-size: 12px; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .task-dock-item-actions { display: flex; width: 100%; flex-wrap: wrap;
     align-items: center; justify-content: flex-end; gap: 8px; padding: 0 0 8px; }
   .task-dock-item-actions > .task-status-badge { margin-right: auto; }
@@ -103,7 +101,7 @@ export const TASK_DOCK_STYLE = `
     z-index: var(--app-z-dialog-overlay); box-sizing: border-box; width: 400px;
     max-width: calc(100vw - 24px);
     max-height: min(60vh, max(160px, calc(var(--available-height, 60vh) - 64px))) !important;
-    padding: 0 !important; overflow: hidden;
+    padding: 0 !important; overflow: hidden !important;
     border: 0; border-radius: 12px !important; background: var(--wx-panel) !important; color: var(--wx-text) !important;
     box-shadow: var(--wx-shadow) !important; font-size: 13px !important; line-height: 19px !important; }
   .task-preview-head { display: flex; flex: 0 0 auto; align-items: baseline;

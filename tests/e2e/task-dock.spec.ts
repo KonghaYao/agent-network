@@ -2,7 +2,7 @@ import { AxeBuilder } from '@axe-core/playwright';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { expectNoHorizontalOverflow, LONG_TASK_URL } from './fixtures/task-layout';
+import { expectNoHorizontalOverflow, expectTaskAvatarsContained, expectTaskPreviewContained, LONG_TASK_URL } from './fixtures/task-layout';
 import { semanticColor } from './fixtures/semantic-colors';
 import { expectTaskDetailStyle } from './fixtures/task-detail-style';
 import { taskTimeLabel } from '../../src/web/features/tasks/task-format';
@@ -315,8 +315,9 @@ test.describe('浮动 Task dock', () => {
         await expect(bar.getByText('3 消息', { exact: true })).toHaveCount(1);
         await expandDock(page);
         const dockItem = itemLocator(page, rootId);
-        await expect(dockItem.locator('.task-dock-meta')).toHaveText(/^3 条消息 · 2 个 Agent · (刚刚|\d+ 分钟前)$/u);
-        await expect(dockItem.locator('.task-dock-meta')).toHaveCount(1);
+        await expect(dockItem.locator('.task-dock-meta')).toHaveCount(0);
+        await expect(dockItem).not.toContainText('3 条消息 ·');
+        await expect(dockItem.locator('.task-dock-item-trigger')).toHaveText('统一 Task 细节');
         await dockItem.locator('.task-dock-item-trigger').click();
         const preview = page.locator(`#task-preview-${rootId}`);
         await expect(preview.locator('.task-preview-meta')).toHaveText('3 条消息 · 2 个 Agent 参与');
@@ -328,6 +329,8 @@ test.describe('浮动 Task dock', () => {
         await expect(preview.locator('.task-preview-sender')).toHaveText('统一 Task 细节');
         await expect(preview.locator('.task-preview-recent-text').first()).toHaveCSS('-webkit-line-clamp', '2');
         await expect(preview.locator('.task-preview-recent-sender').last()).toHaveCSS('white-space', 'nowrap');
+        await expectTaskAvatarsContained(bar);
+        await expectTaskPreviewContained(preview);
         await expectTaskDetailStyle(page, width, colorScheme);
         await page.screenshot({ path: `/tmp/task-detail-data-${width}-${colorScheme}.png` });
       });
@@ -559,7 +562,7 @@ test.describe('浮动 Task dock', () => {
 
     const oldItem = itemLocator(page, oldRoot);
     await expect(oldItem).toContainText('待办');
-    await expect(oldItem.locator('.task-dock-meta')).toHaveText(/^5 条消息 · 1 个 Agent · /u);
+    await expect(oldItem.locator('.task-dock-meta')).toHaveCount(0);
 
     // 再次点击收起：计数常驻，列表隐藏；点击重新展开。
     await page.locator('#task-dock-toggle').click();
@@ -1005,11 +1008,11 @@ test.describe('浮动 Task dock', () => {
     await expect(page.locator('#task-dock-count')).toHaveText('21');
     await page.locator('#task-trace-close').click();
 
-    // 重新加载第二页即可看到新回复计数。
+    // 重新加载第二页；计数只在预览头部出现，触发器仍保留可访问名称。
     await page.locator('#task-dock-load-more').click();
-    await expect(itemLocator(page, targetRoot)).toContainText('2 条消息', {
-      timeout: 10_000,
-    });
+    await expect(itemLocator(page, targetRoot).locator('.task-dock-item-trigger')).toHaveAttribute(
+      'aria-label', /2 条消息/u, { timeout: 10_000 },
+    );
 
     // 其他成员完成 Task：task.updated 驱动列表与已打开的 Trace 刷新。
     await itemLocator(page, targetRoot).locator('.task-dock-item-trigger').click();
@@ -1483,7 +1486,7 @@ test.describe('浮动 Task dock', () => {
     await expect(page.locator('#task-dock')).not.toContainText('迟到的 A Task 不得回填');
   });
 
-  test('多 Agent 参与：摘要 24px AvatarGroup 与 +N，列表只保留单行数据', async ({ page }) => {
+  test('多 Agent 参与：摘要 20px AvatarGroup 与 +N，列表只保留标题与动作', async ({ page }) => {
     const base = await baseUrl();
     const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
     const owner = await registerHuman(base, `Multi Owner ${suffix}`);
@@ -1516,13 +1519,15 @@ test.describe('浮动 Task dock', () => {
       ),
       rowHeight: Math.round(element.getBoundingClientRect().height),
     }));
-    expect(barLayout.heights).toEqual([24, 24, 24]);
+    expect(barLayout.heights).toEqual([20, 20, 20]);
+    await expectTaskAvatarsContained(bar);
     expect(barLayout.rowHeight).toBeGreaterThanOrEqual(44);
 
     await expandDock(page);
     const item = itemLocator(page, rootId);
     await expect(item.locator('.task-dock-avatars')).toHaveCount(0);
-    await expect(item.locator('.task-dock-meta')).toHaveText(/^5 条消息 · 4 个 Agent · /u);
+    await expect(item.locator('.task-dock-meta')).toHaveCount(0);
+    await expect(item).not.toContainText('5 条消息 ·');
   });
 });
 

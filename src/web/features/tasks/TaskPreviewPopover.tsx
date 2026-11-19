@@ -164,10 +164,9 @@ export function TaskPreviewPopover({
           onClick={handleTriggerClick}
         >
           <span className="task-dock-preview">{preview}</span>
-          <span className="task-dock-meta">
-            {item.message_count} 条消息 · {item.participant_count} 个 Agent · {taskTimeLabel(item.latest_activity_at)}
-          </span>
         </Button>}
+          // 对齐面板外缘，避免按列表内边距定位时露出底层消息头像的彩色窄边。
+          anchor={triggerRef.current?.closest<HTMLElement>('.task-dock-body') ?? null}
           id={`task-preview-${item.root_message_id}`}
           className="task-preview-popover"
           side="top"
