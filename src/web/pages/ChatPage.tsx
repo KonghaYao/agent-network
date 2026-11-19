@@ -506,14 +506,21 @@ export function ChatPage({ roomId }: ChatPageProps) {
   }, [desktop]);
 
   // 视口离开内联右栏断点时，将正在查看的文档移交给原有弹窗。
+  // 文件栏已隐藏时不得移交：那只是残留的 panePreviewFile，不能凭空弹出 modal。
   useEffect(() => {
-    if (desktop || !panePreviewFile) return;
+    if (desktop || !filesVisible || !panePreviewFile) return;
     setPreviewFile(panePreviewFile);
     setPanePreviewFile(null);
-  }, [desktop, panePreviewFile]);
+  }, [desktop, filesVisible, panePreviewFile]);
+
+  // 文件栏不可见时内联预览不应继续存在，覆盖关闭、监控切换与跨断点等所有路径。
+  useEffect(() => {
+    if (!filesVisible) setPanePreviewFile(null);
+  }, [filesVisible]);
 
   const toggleFiles = useCallback(() => {
     if (!ready) return;
+    setPanePreviewFile(null);
     if (desktop) {
       setMonitorDesktopOpen(false);
       writePreference(MONITOR_OPEN_KEY, false);
@@ -529,6 +536,8 @@ export function ChatPage({ roomId }: ChatPageProps) {
 
   const toggleMonitor = useCallback(() => {
     if (!ready) return;
+    // 桌面监控与文件共用右栏；移动/平板切换 overlay 也会隐藏文件栏。
+    setPanePreviewFile(null);
     if (desktop) {
       setFilesDesktopOpen(false);
       writePreference(FILES_OPEN_KEY, false);

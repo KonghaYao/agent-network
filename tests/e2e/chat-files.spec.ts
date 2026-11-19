@@ -674,6 +674,51 @@ test.describe('SPA Chat file cards', () => {
     });
   }
 
+  test('hiding files clears the inline preview and never leaks it into the modal', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    const file = await seedRoomFile(base, humanToken, directRoomId, {
+      name: `toggle-preview-${Date.now()}.md`,
+      mimeType: 'text/markdown',
+      body: Buffer.from('# 切换预览\n\n预览正文'),
+    });
+    await page.goto(`${base}/c/${directRoomId}`);
+    await expect(page.locator('#files-pane')).toBeVisible();
+    const item = page.locator(`#files-list .file-item[data-file-id="${file.fileId}"]`);
+    await expect(item).toBeVisible({ timeout: 15_000 });
+    const openPreview = async () => {
+      await item.locator('.file-row').click();
+      await expect(page.locator('#files-pane #file-preview-pane')).toBeVisible();
+    };
+
+    // 文件 toggle 关闭再打开：必须回到列表，不保留内联预览。
+    await openPreview();
+    await page.locator('#files-toggle').click();
+    await expect(page.locator('#file-preview-pane')).toHaveCount(0);
+    await page.locator('#files-toggle').click();
+    await expect(page.locator('#files-list')).toBeVisible();
+    await expect(page.locator('#file-preview-pane')).toHaveCount(0);
+
+    // 隐藏文件栏后缩窄到 390：残留预览不得弹出 modal。
+    await openPreview();
+    await page.locator('#files-toggle').click();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.locator('#file-preview[role="dialog"]')).toHaveCount(0);
+
+    // 监控 toggle 关闭文件栏同样清除预览。
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.locator('#files-toggle').click();
+    await expect(item).toBeVisible();
+    await openPreview();
+    await page.locator('#monitor-toggle').click();
+    await expect(page.locator('#monitor-pane')).toBeVisible();
+    await expect(page.locator('#file-preview-pane')).toHaveCount(0);
+    await page.locator('#monitor-toggle').click();
+    await expect(page.locator('#monitor-pane')).toHaveCount(0);
+    await page.locator('#files-toggle').click();
+    await expect(page.locator('#files-list')).toBeVisible();
+    await expect(page.locator('#file-preview-pane')).toHaveCount(0);
+  });
+
   test('HTML preview truncates at the existing 256 KB Range limit', async ({ page }) => {
     const html = '<h1>截断预览</h1>' + '<p>预览正文</p>\n'.repeat(30_000) + 'HTML-END-SENTINEL';
     const file = await seedRoomFile(base, humanToken, directRoomId, {
