@@ -1,5 +1,4 @@
 import type {
-  ButtonRootProps,
   NumberFieldProps,
   SegmentedControlProps,
 } from '@lenso/ui';
@@ -115,36 +114,8 @@ function createLazySlot<Props>(
   return LazySlot;
 }
 
-type LegacyButtonProps = Omit<ButtonRootProps, 'onClick' | 'ref'> &
-  Pick<ComponentPropsWithRef<'button'>, 'className' | 'onClick' | 'ref'>;
-
-/** legacy class 名到 Lenso variant 的唯一映射点，避免调用点各自猜语义。 */
-function buttonVariant(className: string | undefined, variant: ButtonRootProps['variant']) {
-  if (variant) return variant;
-  const tokens = new Set(className?.split(/\s+/u));
-  if (tokens.has('primary') || tokens.has('danger')) return 'prominent';
-  if (tokens.has('ghost')) return 'borderless';
-  if (tokens.has('secondary') || tokens.has('default')) return 'bordered';
-  return undefined;
-}
-
-export function Button({ className, variant, ...props }: LegacyButtonProps) {
-  const lenso = useLenso();
-  const scope = useLensoBackendScope();
-  // 浮层打开期间锁定 fallback 时，触发器也必须保持原生节点，
-  // 否则模块到达会替换焦点所在的按钮并打断当前交互。
-  if (!lenso || scope === 'fallback') {
-    return createElement('button', { ...props, className });
-  }
-  const tokens = new Set(className?.split(/\s+/u));
-  return createElement(lenso.Button, {
-    ...props,
-    className,
-    variant: buttonVariant(className, variant),
-    destructive: props.destructive ?? tokens.has('danger'),
-    'data-lenso-slot': props['data-lenso-slot'] ?? 'button',
-  } as ButtonRootProps);
-}
+export { Button } from './lenso-button';
+export { List, ListItem } from './lenso-list';
 
 export interface SelectOption {
   value: string;

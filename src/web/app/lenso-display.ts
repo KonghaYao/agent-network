@@ -165,8 +165,6 @@ export function nativePrimitiveProps(
  * 后续不再升级，避免模块到达或关闭后的延迟重挂把正在交互的子树和
  * 焦点整体换掉。
  */
-const STRUCTURAL_PRIMITIVES = new Set<DisplayPrimitiveName>(['Toolbar']);
-
 function useStructuralLenso(): LensoModule | null {
   const lenso = useLenso();
   const locked = useFallbackLeaseLock();
@@ -202,20 +200,9 @@ function primitiveElement(
   );
 }
 
-function PlainPrimitive(props: LazyPrimitiveProps): ReactElement {
-  return primitiveElement(useLenso(), props);
-}
-
-function StructuralPrimitive(props: LazyPrimitiveProps): ReactElement {
-  return primitiveElement(useStructuralLenso(), props);
-}
-
-/** 通用懒加载原语：Lenso 未就绪时渲染同语义原生节点，就绪后换成对应组件。 */
+/** 通用懒加载原语：布局外壳在交互期间锁定 fallback。 */
 export function LazyPrimitive(props: LazyPrimitiveProps): ReactElement {
-  return createElement(
-    STRUCTURAL_PRIMITIVES.has(props.name) ? StructuralPrimitive : PlainPrimitive,
-    props,
-  );
+  return primitiveElement(useStructuralLenso(), props);
 }
 
 function displayPrimitive(
@@ -224,16 +211,10 @@ function displayPrimitive(
   fallbackDefaults?: Record<string, unknown>,
   defaultChildren?: (lenso: LensoModule) => ReactNode,
 ) {
-  const slot = primitiveSlot(name);
+  const defaults = { name, fallbackTag, slot: primitiveSlot(name), fallbackDefaults, defaultChildren };
+  const useModule = name === 'Toolbar' || name === 'Surface' || name === 'Card' ? useStructuralLenso : useLenso;
   return function Primitive(props: PrimitiveProps): ReactElement {
-    return createElement(LazyPrimitive, {
-      ...props,
-      name,
-      fallbackTag,
-      slot,
-      fallbackDefaults,
-      defaultChildren,
-    });
+    return primitiveElement(useModule(), { ...props, ...defaults });
   };
 }
 
@@ -302,6 +283,7 @@ export const LENSO_BADGE_FILL = {
   minHeight: 0,
   padding: 0,
   border: 0,
+  boxShadow: 'none',
   borderRadius: 'inherit',
   background: 'transparent',
   color: 'inherit',

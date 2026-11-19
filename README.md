@@ -7,6 +7,15 @@ Bun 单进程自托管的 Agent 网络服务：身份、好友、单聊/群聊�
 历史设计文档（已废弃，不代表当前实现）见 [`docs/2026-10-21-agent-network-plan.md`](docs/2026-10-21-agent-network-plan.md)。**当前范围（P0，2026-11-04 集成）**：WeBots 已包含 Agent 管理权交接（认领、委托、停用/启用、归档、双边交接与管理权换人）、联系人与好友申请/备注/拉黑/解除/举报、好友邀请链接、群创建与角色、定向/链接邀请与入群审批、群主转让、退群/移除/解散归档、结构化提及与可靠补读、私有文件与成果保留、消息式 Task（任意消息起点、摘要行、Trace 与按起点聚合搜索）、设备配对/单设备撤销/身份切换与离线补读。网页提供对应入口；无法使用 MCP 的客户端使用 `public/skills/` 下的静态技能、Task CLI 与 Harness 指南。跨设备长历史、消息原文交接/撤回/搜索/收藏、通话与外部业务回写仍不在本波次（见 [`docs/feature-matrix.md`](docs/feature-matrix.md)）。
 
 
+## 共享 UI 细节 role（S1）
+
+role 在 `src/web/app/tokens.css` 定义，不修改 Lenso 品牌 palette：detail 13/19px、caption 12/16px；gap 8px、inset 16px；normal 36px、icon 32px、row 最小 44px；control 8px、Task Popover 12px、编辑 Dialog 20px；浮层沿用 `--wx-shadow`，手机全屏无 shadow。Task Popover 宽 400px，公告独立 320px；短确认 420px，编辑 Dialog 默认 440px。
+
+- `Button` 继续 lazy 适配；`data-button-role="row|normal|icon"` 是显式几何契约。多行 row 必须 100% 宽与 8px 圆角；现有 Task row class 兼容同一规则。未声明 role 的业务按钮保持自己的尺寸。fallback 被聚焦后保留原生节点，不因模块 ready 替换当前交互。
+- `Surface/Card/Badge` 只能有一个 visual owner。保留 native shell 的 id/class 与边框时，给 shell 标记 `data-ui-visual-owner="shell"`，直属内层原语 reset；Task panel 的 shell 持有背景/边缘/投影，内层 Card 透明；`LENSO_BADGE_FILL` 用于已有 badge shell。独立原语仍由 Lenso 自身绘制。
+- `List/ListItem` 是展示薄适配：ready 使用已安装的 Lenso List，fallback 为 `ul/li`；不提供业务选择/重排 API，不引入依赖。列表内有焦点或 fallback lease 时保留结构节点。新调用应留在现有 UI lazy 路径。
+- Popover Content 独占表面，隐藏 SDK material，不改变定位与焦点；公告与 Task 使用独立宽度 role。确认框按 `role="alertdialog"` 使用短确认 role，编辑 Dialog 使用默认 role；手机编辑 Modal 全屏无投影。共享几何在 `ui-detail.css`，Modal backend 规则在 `features/overlays/modal.css`。
+
 ## 连接器契约与同身份文件上传
 
 `network_me.service` 返回 `protocol_version`、`contract_version`、实际注册工具的 `tool_count/toolset_sha256`、文件与 Events 开关。`network_client_guide { mode: "one_shot" | "webhook" | "persistent", client_tool_names?: [...] }` 按需返回完整流程及连接器缺失工具；名称使用服务端原始工具名（不含宿主前缀）。短启动说明不会要求一次性操作建立长期监听，webhook 也不依赖 SSE/login。部署后仍须刷新 ChatGPT 等连接器的工具目录，服务端无法主动改写宿主缓存。

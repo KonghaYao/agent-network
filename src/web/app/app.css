@@ -1,3 +1,5 @@
+@import './ui-detail.css';
+
 /*
  * React 页面专属样式。
  *
@@ -119,135 +121,6 @@
   bottom: auto;
 }
 
-.spa-dialog-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: var(--app-z-dialog-overlay);
-  background: var(--lenso-scrim);
-  animation: spa-fade-in 120ms ease-out;
-}
-
-.spa-dialog-content {
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  z-index: var(--app-z-dialog);
-  transform: translate(-50%, -50%);
-  width: min(440px, calc(100vw - 32px));
-  max-height: min(82dvh, 680px);
-  overflow-y: auto;
-  animation: spa-pop-in 140ms ease-out;
-}
-
-.spa-dialog-content.members-card {
-  width: min(680px, calc(100vw - 32px));
-  /* 双栏与底部动作固定在卡片内，只有 `.members-scroll` 滚动。 */
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.spa-dialog-close {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--wx-muted);
-  font-size: 20px;
-  line-height: 1;
-}
-
-.spa-dialog-close:hover {
-  background: var(--wx-hover);
-}
-
-.spa-dialog-button {
-  padding: 8px 14px;
-  border-radius: 4px;
-  border: 1px solid var(--wx-line);
-  background: var(--wx-panel);
-  color: var(--wx-text);
-}
-
-.spa-dialog-button.primary:not([data-lenso-slot]),
-.spa-dialog-content button.primary:not([data-lenso-slot]) {
-  background: var(--app-prominent-fill);
-  border-color: var(--app-prominent-fill);
-  color: var(--lenso-label-on-tint);
-}
-
-.spa-dialog-content button[data-lenso-slot='button']:not(.primary):not(.danger):not([data-destructive]) {
-  color: var(--wx-text) !important;
-}
-
-.contact-segments button[data-lenso-slot='button'] {
-  color: var(--wx-text) !important;
-}
-
-.spa-dialog-button.primary:not([data-lenso-slot]):hover,
-.spa-dialog-content button.primary:not([data-lenso-slot]):hover {
-  background: var(--lenso-control-tint-hover-fill);
-  border-color: var(--lenso-control-tint-hover-fill);
-}
-
-.spa-dialog-button.danger:not([data-lenso-slot]) {
-  background: var(--wx-danger);
-  border-color: var(--wx-danger);
-  color: var(--lenso-label-on-destructive);
-}
-
-.spa-dialog-button.danger:not([data-lenso-slot]):hover {
-  background: var(--lenso-control-status-error-hover-fill);
-  border-color: var(--lenso-control-status-error-hover-fill);
-}
-
-.spa-dialog-content button.primary.danger:not([data-lenso-slot]) {
-  background: var(--wx-danger);
-  border-color: var(--wx-danger);
-  color: var(--lenso-label-on-destructive);
-}
-
-.spa-dialog-content button.primary.danger:not([data-lenso-slot]):hover {
-  background: var(--lenso-control-status-error-hover-fill);
-  border-color: var(--lenso-control-status-error-hover-fill);
-}
-
-.spa-popover {
-  z-index: var(--app-z-popover);
-  width: min(320px, calc(100vw - 24px));
-  padding: 12px;
-  border: 1px solid var(--wx-line);
-  border-radius: 8px;
-  background: var(--wx-panel);
-  color: var(--wx-text);
-  box-shadow: var(--wx-shadow);
-}
-
-.spa-popover-text {
-  margin: 0 0 10px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  line-height: 1.6;
-}
-
-@keyframes spa-fade-in {
-  from {
-    opacity: 0;
-  }
-}
-
-@keyframes spa-pop-in {
-  from {
-    opacity: 0;
-    transform: translate(-50%, -48%) scale(0.98);
-  }
-}
-
 /* ---- 表单 / 选择器 -------------------------------------------------------- */
 
 .field {
@@ -259,10 +132,6 @@
 }
 
 .field > span {
-  color: var(--app-muted);
-}
-
-.spa-dialog-content .list-hint {
   color: var(--app-muted);
 }
 
@@ -591,25 +460,6 @@
 }
 
 @media (max-width: 759px) {
-  .spa-dialog-content {
-    width: calc(100vw - 24px);
-    max-height: 86dvh;
-    border-radius: 12px;
-  }
-
-  /* 群成员弹窗在移动端是全屏工作区，不是抽屉；两栏堆叠，底部动作固定。 */
-  .spa-dialog-content.members-card {
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100dvh;
-    max-height: 100dvh;
-    transform: none;
-    border-radius: 0;
-    padding: calc(12px + env(safe-area-inset-top)) 14px
-      calc(12px + env(safe-area-inset-bottom));
-  }
-
   .spa-dialog-content.members-card .members-columns {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -738,19 +588,6 @@ body .memory-drawer {
 
 /* ---- 4B-5b：好友申请 / 设备配对 / 已归档浮层 ----------------------------- */
 
-/* legacy `.contact-modal-card` / `.handoff-card` 的宽度会被 Radix 基础宽度覆盖。 */
-.spa-dialog-content.contact-modal-card {
-  width: min(760px, calc(100vw - 32px));
-}
-
-.spa-dialog-content.handoff-card {
-  width: min(720px, calc(100vw - 32px));
-}
-
-.spa-dialog-content.archive-dialog {
-  width: min(360px, calc(100vw - 32px));
-}
-
 .contact-request-summary {
   display: flex;
   align-items: center;
@@ -799,21 +636,6 @@ body .memory-drawer {
 }
 
 @media (max-width: 759px) {
-  /* 移动端沿用 legacy 全屏弹窗，避免 2 列内容和键盘一起挤压。 */
-  .spa-dialog-content.contact-modal-card,
-  .spa-dialog-content.handoff-card {
-    inset: 0;
-    top: 0;
-    left: 0;
-    width: 100vw;
-    height: 100dvh;
-    max-height: 100dvh;
-    border-radius: 0;
-    transform: none;
-    padding: calc(16px + env(safe-area-inset-top)) 16px
-      calc(16px + env(safe-area-inset-bottom));
-  }
-
   #handoff-modal .handoff-columns {
     grid-template-columns: minmax(0, 1fr);
     overflow-y: auto;
@@ -1013,10 +835,6 @@ body .memory-drawer {
   color: var(--wx-danger-text);
 }
 
-.spa-dialog-content.agent-reissue-card {
-  width: min(620px, calc(100vw - 32px));
-}
-
 .room-menu-reissue-text {
   width: 100%;
   font:
@@ -1030,30 +848,6 @@ body .memory-drawer {
   min-height: 150px !important;
   max-height: 180px !important;
   font: inherit !important;
-}
-
-.spa-dialog-content.message-search-card {
-  width: min(680px, calc(100vw - 32px));
-  /* 标题/表单固定，只有结果列表滚动；否则长结果会把底部动作推出可视区。 */
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  /* 显式实心表面：结果行透明时也不能让底层聊天文本透出。 */
-  background-color: var(--wx-panel, var(--lenso-background-secondary));
-  color: var(--wx-text, var(--lenso-label-primary));
-  isolation: isolate;
-}
-
-.spa-dialog-content.message-search-card > h2,
-.spa-dialog-content.message-search-card .message-search-form,
-.spa-dialog-content.message-search-card #message-search-status,
-.spa-dialog-content.message-search-card > .list-retry,
-.spa-dialog-content.message-search-card > .modal-actions {
-  flex: 0 0 auto;
-}
-
-.spa-dialog-content.message-search-card > .modal-actions {
-  margin-top: 8px;
 }
 
 .message-search-form {
@@ -1149,10 +943,6 @@ body .memory-drawer {
   overflow-wrap: anywhere;
 }
 
-.spa-dialog-content.forward-card {
-  width: min(560px, calc(100vw - 32px));
-}
-
 .forward-preview {
   max-height: 160px;
   margin: 0 0 10px;
@@ -1176,35 +966,6 @@ body .memory-drawer {
 .forward-rooms button[aria-pressed='true'] {
   border-color: var(--wx-green);
   background: color-mix(in srgb, var(--wx-green) 12%, transparent);
-}
-
-.spa-dialog-content.task-trace-card {
-  top: 0;
-  right: 0;
-  left: auto;
-  width: min(560px, 100vw);
-  height: 100dvh;
-  max-height: 100dvh;
-  transform: none;
-  border-radius: 0;
-}
-
-@media (max-width: 759px) {
-  .spa-dialog-content.agent-reissue-card,
-  .spa-dialog-content.message-search-card,
-  .spa-dialog-content.forward-card,
-  .spa-dialog-content.task-trace-card {
-    inset: 0;
-    top: 0;
-    left: 0;
-    width: 100vw;
-    height: 100dvh;
-    max-height: 100dvh;
-    border-radius: 0;
-    transform: none;
-    padding: calc(16px + env(safe-area-inset-top)) 16px
-      calc(16px + env(safe-area-inset-bottom));
-  }
 }
 
 #message-search-button,

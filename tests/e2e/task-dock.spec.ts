@@ -389,7 +389,7 @@ test.describe('浮动 Task dock', () => {
 
   for (const width of [390, 1280]) {
     for (const colorScheme of ['light', 'dark'] as const) {
-      test(`Task dock 不透明且不遮挡 composer/toggle ${width}/${colorScheme}`, async ({ page }, testInfo) => {
+      test(`Task dock 单一实色表面且不遮挡 composer/toggle ${width}/${colorScheme}`, async ({ page }, testInfo) => {
         const base = await baseUrl();
         const fixture = await setupTaskRoom(base, `opaque-${width}-${colorScheme}`, { roots: 0 });
         const rootId = await createTask(base, fixture.owner.token, fixture.roomId, LONG_TASK_URL);
@@ -413,6 +413,8 @@ test.describe('浮动 Task dock', () => {
             const css = getComputedStyle(node);
             return {
               background: css.backgroundColor,
+              borderWidth: css.borderTopWidth,
+              boxShadow: css.boxShadow,
               zIndex: css.zIndex,
               rect: { left: box.left, top: box.top, right: box.right, bottom: box.bottom, width: box.width, height: box.height },
             };
@@ -473,8 +475,12 @@ test.describe('浮动 Task dock', () => {
           Math.min(a.right, b.right) > Math.max(a.left, b.left) &&
           Math.min(a.bottom, b.bottom) > Math.max(a.top, b.top);
 
+        // 单一 visual owner：native shell 画实色与边缘，内层 Card 只排内容。
         expect(alpha(geometry.panel.background)).toBe(1);
-        expect(alpha(geometry.card.background)).toBe(1);
+        expect(geometry.panel.boxShadow).not.toBe('none');
+        expect(alpha(geometry.card.background)).toBe(0);
+        expect(geometry.card.borderWidth).toBe('0px');
+        expect(geometry.card.boxShadow).toBe('none');
         expect(alpha(geometry.jumpLatest.background)).toBe(1);
         expect(Number(geometry.panel.zIndex)).toBeGreaterThan(
           Number(geometry.messages.zIndex) || 0,

@@ -1,29 +1,31 @@
-/* SDK 负责定位；公告浮层保留既有微信尺寸与实色面板。 */
-#room-announcement-popover[data-popover-backend='lenso'] {
+/* Content 是唯一 visual owner；定位仍由 SDK/Radix 决定。 */
+#room-announcement-popover[data-popover-backend] {
   box-sizing: border-box;
+  width: min(var(--app-announcement-popover-width), calc(100vw - 24px));
   padding: 12px !important;
   border: 1px solid var(--wx-line) !important;
-  border-radius: 8px !important;
+  border-radius: var(--app-shape-control) !important;
   background: var(--wx-panel) !important;
   color: var(--wx-text) !important;
-  box-shadow: var(--wx-shadow) !important;
-  transform: none !important;
-  translate: none !important;
-  opacity: 1 !important;
-  transition: none !important;
-  animation: none !important;
-}
-
-#room-announcement-popover[data-popover-backend='lenso'] {
-  width: min(320px, calc(100vw - 24px));
+  box-shadow: var(--app-elevation-detail) !important;
   max-height: min(var(--available-height), calc(100dvh - 24px));
   overflow-y: auto !important;
   font-size: inherit !important;
   line-height: normal !important;
 }
 
-/* Task 的尺寸和表面由 chat-task-dock-styles 唯一维护；仅取消 SDK 动画位移。 */
-.task-preview-popover[data-popover-backend='lenso'] {
+/* 比 legacy 双 class 更明确的适配器边界，消除 SDK/legacy 的圆角竞争。 */
+.task-preview-popover.task-preview-popover[data-popover-backend] {
+  width: var(--app-task-popover-width);
+  border: 0 !important;
+  border-radius: var(--app-shape-task-popover) !important;
+  background: var(--wx-panel) !important;
+  box-shadow: var(--app-elevation-detail) !important;
+  font-size: var(--app-type-detail) !important;
+  line-height: var(--app-type-detail-leading) !important;
+}
+
+:is(#room-announcement-popover, .task-preview-popover)[data-popover-backend='lenso'] {
   transform: none !important;
   translate: none !important;
   opacity: 1 !important;
@@ -31,7 +33,13 @@
   animation: none !important;
 }
 
-/* 不让 SDK 的玻璃背景覆盖既有暗色面板。 */
-:is(#room-announcement-popover, .task-preview-popover)[data-popover-backend='lenso'] > [data-lenso-slot='popover-material'] {
+@media (max-width: 759px) {
+  .task-preview-popover.task-preview-popover[data-popover-backend] {
+    width: var(--app-task-popover-mobile-width);
+  }
+}
+
+/* 应用已绘制实色面板，不再叠加 SDK 的玻璃边缘。 */
+:is(#room-announcement-popover, .task-preview-popover)[data-popover-backend] > [data-lenso-slot='popover-material'] {
   display: none;
 }

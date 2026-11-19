@@ -41,6 +41,7 @@ const ADAPTERS = [
   ['Link', 'a', 'link'],
   ['ScrollShadow', 'div', 'scroll-shadow'],
   ['ScrollEdge', 'div', 'scroll-edge'],
+  ['List', 'ul', 'list'],
 ] as const;
 
 const STUB_SOURCE = `
@@ -51,6 +52,7 @@ const make = (name) => function Stub(props) {
 ${ADAPTERS.filter(([name]) => name !== 'ProgressBar' && name !== 'ProgressCircle')
   .map(([name]) => `export const ${name} = make('${name}');`)
   .join('\n')}
+List.Item = make('ListItem');
 export const ProgressBar = Object.assign(make('ProgressBar'), {
   Track: make('ProgressBar.Track'),
   Fill: make('ProgressBar.Fill'),
@@ -76,6 +78,7 @@ for (const [name, expectedTag, expectedSlot] of cases) {
   const root = createRoot(host);
   let refNode = null;
   const props = {
+    children: name === 'List' ? createElement(controls.ListItem, { 'data-list-probe': '' }, '列表项') : undefined,
     className: 'probe-class',
     style: { display: 'block' },
     'data-probe': name,
@@ -92,6 +95,7 @@ for (const [name, expectedTag, expectedSlot] of cases) {
     fallbackClass: fallback?.classList.contains('probe-class'),
     fallbackStyle: fallback?.style.display,
     fallbackRef: refNode === fallback,
+    fallbackItem: fallback?.querySelector('[data-list-probe]')?.tagName,
     root,
     host,
   });
@@ -100,6 +104,7 @@ await new Promise((done) => setTimeout(done, 50));
 for (const item of results) {
   let refNode = null;
   flushSync(() => item.root.render(createElement(controls[item.name], {
+    children: item.name === 'List' ? createElement(controls.ListItem, { 'data-list-probe': '' }, '列表项') : undefined,
     className: 'probe-class',
     style: { display: 'block' },
     'data-probe': item.name,
@@ -112,6 +117,7 @@ for (const item of results) {
   item.loadedClass = loaded?.classList.contains('probe-class');
   item.loadedStyle = loaded?.style.display;
   item.loadedRef = refNode === loaded;
+  item.loadedItem = loaded?.querySelector('[data-list-probe]')?.getAttribute('data-stub');
   delete item.root;
   delete item.host;
 }
@@ -133,6 +139,8 @@ interface ProbeResult {
   loadedClass: boolean;
   loadedStyle: string;
   loadedRef: boolean;
+  fallbackItem?: string;
+  loadedItem?: string;
 }
 
 const dir = await mkdtemp(join(ROOT, 'node_modules', '.lenso-primitives-'));
@@ -194,6 +202,10 @@ try {
     check(`${loaded} className`, result.loadedClass);
     checkEqual(`${loaded} style`, result.loadedStyle, 'block');
     check(`${loaded} ref`, result.loadedRef);
+    if (result.name === 'List') {
+      checkEqual('ListItem fallback 标签', result.fallbackItem, 'LI');
+      checkEqual('ListItem ready 组件', result.loadedItem, 'ListItem');
+    }
   }
 } finally {
   await browser?.close();
