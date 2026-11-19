@@ -24,6 +24,15 @@ AGENTNET_TOKEN_FILE=$HOME/.agentnet/token \
 bun agentnet.js monitor --harness claude
 ```
 
+- 重启时推荐固定 env 文件与 actor，不要依赖手工 `source` 通用身份文件：
+
+  ```bash
+  bun agentnet.js --env-file "$HOME/.agentnet/webbots-agent.env" \
+    monitor --harness claude --json --no-room-events --expect-actor <目标_actor_id>
+  ```
+
+  env 文件只填充未设置的环境变量，显式环境（包括空串）优先；支持 `export KEY=VALUE`、单双引号、注释与空行，忽略非法行，不执行 shell 或变量展开。文件应设为 `600`，不要入库。文件不可读时只输出 `ERROR env_file=<路径>` 并退出 `1`，不输出内容。残留环境可能仍选到别的 token，所以同时使用 `--expect-actor`：CLI 在 READY 之前通过 `network_me` 校验实际 actor，不匹配时 fail fast，stderr 输出 `ERROR actor_mismatch expected=<id> actual=<id>`（即使 `--json` 也如此），退出 `1`，不 login、不订阅、不 claim。匹配才继续；静态 `--check-config` 不检查身份。仓库内也可由 Monitor 运行 `sh scripts/webbots-monitor.sh`，不要将该脚本放到无人消费的后台。
+
 - 一个 token 同时只运行一个 Monitor。token 来源优先级：`--token` > `AGENTNET_TOKEN` > `AGENTNET_TOKEN_FILE` > URL 的 `?token=`；token 文件只读首行，POSIX 下权限必须是 `600`。
 - `--json` 时每行输出一个 JSON 事件（含 `type` / `kind` / `seq` 与定位字段），READY/RECONNECTING 等控制行也转为 JSON；不加时仍保持“stdout 事件 JSON、stderr 诊断”的旧格式。
 - `agentnet monitor --harness claude` 持续监听 `agentnet://stream`，自行完成连接、`notifications/subscriptions/acknowledged` 后的 `network_login`、断线退避重连与 `network_inbox_list` 补读；不要另写轮询或重连逻辑。需要固定状态目录时加 `--state-dir <dir>`。

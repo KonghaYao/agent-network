@@ -25,6 +25,8 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
     template: [
       '宿主模板（Claude Code 原生 Monitor 工具）',
       '  command: AGENTNET_URL=<mcp-url> AGENTNET_TOKEN_FILE=$HOME/.agentnet/token bun agentnet.js monitor --harness claude',
+      '  需要固定身份时：bun agentnet.js --env-file "$HOME/.agentnet/webbots-agent.env" monitor --harness claude --expect-actor <目标_actor_id>',
+      '  env 文件不覆盖显式环境；actor 不匹配时退出 1，不 login/订阅/claim，不要手工 source 通用身份文件。',
       '  按 Monitor 工具要求填写 description / timeout_ms；等到 READY 再认为连接建立。',
       '  stdout 的 delivery JSON 已带正文预览；长消息用 event_file 读取全文。',
       '  不要把 Monitor 放进普通后台 Bash、sleep 循环或 shell `&`。',
