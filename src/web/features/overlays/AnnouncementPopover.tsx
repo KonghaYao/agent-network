@@ -1,5 +1,5 @@
 import { Tooltip } from '../../app/lenso-tooltip';
-import { Button } from '../../app/lenso-controls';
+import { Alert, Button } from '../../app/lenso-controls';
 import { useState } from 'react';
 import { Popover } from '../../app/lenso-popover';
 
@@ -39,7 +39,14 @@ export function AnnouncementPopover({
         </Tooltip>
       }
     >
-      <p className="spa-popover-text">{announcement}</p>
+      <div className="spa-popover-text">
+        <Alert id="room-announcement" className="room-announcement"
+          role="note" aria-live="polite" status="default"
+          style={{ width: 'auto', margin: 0, padding: 0, border: 0, background: 'transparent' }}
+        >
+          {announcement}
+        </Alert>
+      </div>
       <div className="row">
         {canEdit ? (
           <Button id="room-announcement-edit" type="button" className="primary" onClick={() => {
