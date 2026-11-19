@@ -67,7 +67,7 @@ export const MONITOR_STYLE = `
   .monitor-error p { flex: 1 1 auto; min-width: 0; margin: 0; font-size: 12px;
     line-height: 16px; color: var(--wx-unread); overflow-wrap: anywhere; }
   .monitor-error button { flex: 0 0 auto; min-height: 44px !important;
-    min-width: 44px; padding: 0 12px; border-radius: 8px;
+    min-width: 44px; padding: 0 12px; border-radius: 8px !important;
     font-size: 13px; line-height: 20px; }
 
   .monitor-hint { flex: 0 0 auto; min-width: 0; margin: 4px 12px 0;

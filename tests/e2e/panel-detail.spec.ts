@@ -180,6 +180,94 @@ const CONTEXT_ROWS = [
   },
 ];
 
+const EXPERIENCE_ROWS = [
+  {
+    experience_id: 'exp-deploy-check',
+    summary: '经历：部署前先运行 typecheck',
+    origin_kind: 'agent',
+    created_at: '2026-10-03T11:20:00.000Z',
+  },
+  {
+    experience_id: 'exp-missing-fields',
+    origin_kind: '',
+    created_at: null,
+  },
+];
+
+interface MemoryRowMetrics {
+  display: string;
+  flexDirection: string;
+  padding: string;
+  width: number;
+  height: number;
+  bottom: number;
+  scrollHeight: number;
+  clientHeight: number;
+  scrollWidth: number;
+  clientWidth: number;
+  borderBottom: string;
+  titleFont: string;
+  titleLeading: string;
+  titleHeight: number;
+  titleBottom: number;
+  titleVisible: boolean;
+  metaTop: number;
+  metaBottom: number;
+  metaFont: string;
+  metaLeading: string;
+  metaText: string;
+}
+
+/** 行必须容纳完整标题与 meta：Lenso Button 的固定高度不能把标题压成 0。 */
+async function memoryRowMetrics(page: Page, listId: string): Promise<MemoryRowMetrics> {
+  return page.locator(`#${listId} .memory-row`).first().evaluate((element) => {
+    const style = getComputedStyle(element);
+    const box = element.getBoundingClientRect();
+    const title = element.querySelector<HTMLElement>('.memory-row-title')!;
+    const meta = element.querySelector<HTMLElement>('.memory-row-meta')!;
+    const titleBox = title.getBoundingClientRect();
+    const metaBox = meta.getBoundingClientRect();
+    return {
+      display: style.display,
+      flexDirection: style.flexDirection,
+      padding: style.padding,
+      width: box.width,
+      height: box.height,
+      bottom: box.bottom,
+      scrollHeight: element.scrollHeight,
+      clientHeight: element.clientHeight,
+      scrollWidth: element.scrollWidth,
+      clientWidth: element.clientWidth,
+      borderBottom: style.borderBottomWidth,
+      titleFont: getComputedStyle(title).fontSize,
+      titleLeading: getComputedStyle(title).lineHeight,
+      titleHeight: titleBox.height,
+      titleBottom: titleBox.bottom,
+      titleVisible: titleBox.height > 0 && getComputedStyle(title).visibility === 'visible',
+      metaTop: metaBox.top,
+      metaBottom: metaBox.bottom,
+      metaFont: getComputedStyle(meta).fontSize,
+      metaLeading: getComputedStyle(meta).lineHeight,
+      metaText: meta.textContent ?? '',
+    };
+  });
+}
+
+function expectRowFits(row: MemoryRowMetrics): void {
+  expect(row.display).toBe('flex');
+  expect(row.flexDirection).toBe('column');
+  expect(row.padding).toBe('7px 14px');
+  expect(row.height).toBeGreaterThanOrEqual(43.5);
+  expect(row.scrollHeight).toBeLessThanOrEqual(row.clientHeight);
+  expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth + 1);
+  expect(row.titleHeight).toBeGreaterThanOrEqual(20);
+  expect(row.titleVisible).toBe(true);
+  expect(row.metaTop).toBeGreaterThanOrEqual(row.titleBottom - 1);
+  expect(row.metaBottom).toBeLessThanOrEqual(row.bottom + 0.5);
+  expect(row.metaFont).toBe('12px');
+  expect(row.metaLeading).toBe('16px');
+}
+
 /** 只替换 Memory 只读响应；network_me 仍由真实服务返回当前 Agent。 */
 async function stubMemory(page: Page, calls: MemoryCall[]): Promise<void> {
   await page.route('**/mcp', async (route) => {
@@ -247,6 +335,25 @@ async function stubMemory(page: Page, calls: MemoryCall[]): Promise<void> {
           result: {
             structuredContent: {
               items: CONTEXT_ROWS,
+              next_cursor: null,
+              has_more: false,
+            },
+          },
+        }),
+      });
+      return;
+    }
+    if (name === 'network_memory_experience_list') {
+      if (body?.params?.arguments) calls.push({ name, args: body.params.arguments });
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: body?.id ?? null,
+          result: {
+            structuredContent: {
+              items: EXPERIENCE_ROWS,
               next_cursor: null,
               has_more: false,
             },
@@ -554,6 +661,7 @@ test.describe('S5 面板细节', () => {
         clientWidth: text.clientWidth,
         retryWidth: box.width,
         retryHeight: box.height,
+        retryRadius: getComputedStyle(retry).borderRadius,
         paneOverflow: document.getElementById('monitor-pane')!.scrollWidth -
           document.getElementById('monitor-pane')!.clientWidth,
       };
@@ -563,6 +671,7 @@ test.describe('S5 面板细节', () => {
     expect(errorMetrics.scrollWidth).toBeLessThanOrEqual(errorMetrics.clientWidth + 1);
     expect(errorMetrics.retryWidth).toBeGreaterThanOrEqual(43.5);
     expect(errorMetrics.retryHeight).toBeGreaterThanOrEqual(43.5);
+    expect(errorMetrics.retryRadius).toBe('8px');
     expect(errorMetrics.paneOverflow).toBeLessThanOrEqual(1);
     await page.unroute('**/mcp');
 
@@ -621,6 +730,7 @@ test.describe('S5 面板细节', () => {
     await stubMemory(page, calls);
     await login(page, base, agentToken);
     await expect(page.locator('#memory-open')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
     await page.locator('#memory-open').click();
 
     const drawer = page.locator('#memory-drawer');
@@ -739,34 +849,22 @@ test.describe('S5 面板细节', () => {
     const rows = page.locator('#memory-context-list .memory-row');
     await expect(rows).toHaveCount(2, { timeout: 15_000 });
 
-    const rowMetrics = await rows.first().evaluate((element) => {
-      const style = getComputedStyle(element);
-      const box = element.getBoundingClientRect();
-      const title = element.querySelector<HTMLElement>('.memory-row-title')!;
-      const meta = element.querySelector<HTMLElement>('.memory-row-meta')!;
-      return {
-        height: box.height,
-        width: box.width,
-        borderBottom: style.borderBottomWidth,
-        titleFont: getComputedStyle(title).fontSize,
-        titleLeading: getComputedStyle(title).lineHeight,
-        titleBottom: title.getBoundingClientRect().bottom,
-        metaTop: meta.getBoundingClientRect().top,
-        metaFont: getComputedStyle(meta).fontSize,
-        metaLeading: getComputedStyle(meta).lineHeight,
-        metaText: meta.textContent ?? '',
-      };
-    });
-    expect(rowMetrics.height).toBeGreaterThanOrEqual(43.5);
+    const rowMetrics = await memoryRowMetrics(page, 'memory-context-list');
+    expectRowFits(rowMetrics);
     expect(rowMetrics.width).toBeGreaterThan(300);
-    expect(rowMetrics.metaTop).toBeGreaterThanOrEqual(rowMetrics.titleBottom - 1);
     expect(rowMetrics.borderBottom).toBe('0px');
     expect(rowMetrics.titleFont).toBe('14px');
     expect(rowMetrics.titleLeading).toBe('22px');
-    expect(rowMetrics.metaFont).toBe('12px');
-    expect(rowMetrics.metaLeading).toBe('16px');
     expect(rowMetrics.metaText).toContain('创建 —');
     await expect(rows.nth(1).locator('.memory-row-meta')).not.toContainText('创建 —');
+
+    // 经历行与上下文共用样式，同样不能被 Lenso Button 压扁。
+    await page.locator('[data-memory-tab="experience"]').click();
+    const experienceRows = page.locator('#memory-experience-list .memory-row');
+    await expect(experienceRows).toHaveCount(2, { timeout: 15_000 });
+    const experienceMetrics = await memoryRowMetrics(page, 'memory-experience-list');
+    expectRowFits(experienceMetrics);
+    await expect(experienceRows.nth(1).locator('.memory-row-meta')).toContainText('来源未知');
 
     const separators = await page.locator('#memory-context-list .memory-list-item').evaluateAll((elements) =>
       elements.map((element) => getComputedStyle(element).borderTopWidth),
@@ -807,9 +905,9 @@ test.describe('S5 面板细节', () => {
     expect(mobileFilter.fontSize).toBe('16px');
     await page.locator('[data-memory-tab="context"]').click();
     await expect(page.locator('#memory-context-list .memory-row')).toHaveCount(2, { timeout: 15_000 });
+    expectRowFits(await memoryRowMetrics(page, 'memory-context-list'));
     const mobile = await drawer.evaluate((element) => {
       const card = element.querySelector<HTMLElement>('.memory-card')!;
-      const row = element.querySelector<HTMLElement>('.memory-row')!;
       const box = element.getBoundingClientRect();
       const style = getComputedStyle(card);
       return {
@@ -818,7 +916,6 @@ test.describe('S5 面板细节', () => {
         right: box.right,
         cardShadow: style.boxShadow,
         cardBorderLeft: style.borderLeftWidth,
-        rowHeight: row.getBoundingClientRect().height,
         overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
         cardOverflow: card.scrollWidth - card.clientWidth,
       };
@@ -829,9 +926,15 @@ test.describe('S5 面板细节', () => {
     expect(mobile.right).toBeLessThanOrEqual(390.5);
     expect(mobile.cardShadow).toBe('none');
     expect(mobile.cardBorderLeft).toBe('0px');
-    expect(mobile.rowHeight).toBeGreaterThanOrEqual(43.5);
     expect(mobile.overflow).toBeLessThanOrEqual(1);
     expect(mobile.cardOverflow).toBeLessThanOrEqual(1);
+
+    await page.locator('[data-memory-tab="experience"]').click();
+    await expect(page.locator('#memory-experience-list .memory-row')).toHaveCount(2, { timeout: 15_000 });
+    expectRowFits(await memoryRowMetrics(page, 'memory-experience-list'));
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
+    ).toBeLessThanOrEqual(1);
 
     await page.locator('#memory-close').click();
     await expect(drawer).toBeHidden();

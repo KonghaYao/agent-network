@@ -147,10 +147,14 @@ export const MEMORY_STYLE = `
   .memory-list > [data-lenso-slot^='surface'] { padding: 0 !important; border: 0 !important;
     border-radius: 0 !important; background: transparent !important; box-shadow: none !important; }
   .memory-list-item + .memory-list-item { border-top: 1px solid var(--wx-line); }
-  .memory-row { display: flex; flex-direction: column; gap: 4px; box-sizing: border-box;
-    width: 100% !important; min-height: 44px !important; padding: 10px 8px; border: 0;
+  /* Lenso Button 默认 inline-flex + 固定高度会压扁行内容；这里恢复纵向
+     自适应布局，标题保持完整高度，meta 跟随内容增长。 */
+  .memory-row { display: flex !important; flex-direction: column !important;
+    align-items: stretch !important; justify-content: flex-start !important;
+    gap: 4px; box-sizing: border-box; width: 100% !important; height: auto !important;
+    min-height: 44px !important; padding: 7px 14px !important; border: 0;
     border-radius: 8px; background: transparent; color: inherit;
-    text-align: left; cursor: pointer; }
+    text-align: left; white-space: normal !important; cursor: pointer; }
   .memory-row:hover, .memory-row:focus-visible { background: var(--wx-hover); }
   .memory-row[aria-current="true"] { background: var(--wx-hover);
     outline: 1px solid var(--wx-link); }
@@ -158,8 +162,9 @@ export const MEMORY_STYLE = `
   .memory-row.memory-row-static { cursor: default; }
   .memory-row-top { display: flex; align-items: center; gap: 8px; min-width: 0;
     flex-wrap: wrap; }
-  .memory-row-title { flex: 1 1 auto; min-width: 0; font-size: 14px; line-height: 22px;
-    font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .memory-row-title { flex: 0 0 auto; min-width: 0; min-height: 22px; height: auto;
+    font-size: 14px; line-height: 22px; font-weight: 600; overflow: visible;
+    overflow-wrap: anywhere; white-space: normal; }
   .memory-row-meta { display: flex; flex-wrap: wrap; gap: 4px 8px; color: var(--wx-muted);
     font-size: 12px; line-height: 16px; overflow-wrap: anywhere;
     font-variant-numeric: tabular-nums; }
