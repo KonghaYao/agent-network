@@ -1,6 +1,20 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { filePreviewKind, isHtmlPreview } from '../../src/web/lib/files-ui';
+
+test('HTML preview requires an explicit MIME and preserves other classifications', () => {
+  expect(isHtmlPreview({ file_id: 'html', mime_type: ' Text/HTML; charset=utf-8 ' })).toBe(true);
+  expect(filePreviewKind({ file_id: 'html', mime_type: 'text/html', preview_kind: 'other' })).toBe('html');
+  for (const mime_type of [undefined, '', 'application/octet-stream', 'text/plain']) {
+    expect(isHtmlPreview({ file_id: 'html', name: 'page.html', mime_type })).toBe(false);
+    expect(filePreviewKind({ file_id: 'html', name: 'page.html', mime_type, preview_kind: 'html' })).not.toBe('html');
+  }
+  expect(filePreviewKind({ file_id: 'svg', mime_type: 'image/svg+xml' })).toBe('other');
+  expect(filePreviewKind({ file_id: 'md', name: 'note.md', mime_type: 'text/plain' })).toBe('markdown');
+  expect(filePreviewKind({ file_id: 'png', name: 'photo.png', mime_type: 'application/octet-stream' })).toBe('image');
+  expect(filePreviewKind({ file_id: 'pdf', mime_type: 'application/pdf' })).toBe('pdf');
+});
 
 async function baseUrl(): Promise<string> {
   if (process.env.E2E_BASE_URL) return process.env.E2E_BASE_URL;
@@ -500,15 +514,19 @@ test.describe('SPA Chat file cards', () => {
         /\/f\/f_[A-Za-z0-9_-]{22}\?download=1&t=/u,
       );
     }
-    for (const spec of [
-      { name: '伪装.svg', fileId: svg.fileId },
-      { name: '伪装.html', fileId: html.fileId },
-    ]) {
-      const card = message.locator('.msg-file').filter({ hasText: spec.name });
-      await expect(card).toBeVisible();
-      expect(await card.locator('img, iframe, video, audio, pre, object, embed').count()).toBe(0);
-      await expect(card.locator('.msg-file-preview')).toHaveCount(0);
-    }
+    const svgCard = message.locator(`.msg-file[data-file-id="${svg.fileId}"]`);
+    await expect(svgCard).toBeVisible();
+    await expect(svgCard.locator('img, iframe, video, audio, pre, object, embed')).toHaveCount(0);
+    await expect(svgCard.locator('.msg-file-preview')).toHaveCount(0);
+
+    const htmlCard = message.locator(`.msg-file[data-file-id="${html.fileId}"]`);
+    await expect(htmlCard.locator('.msg-file-preview')).toBeVisible();
+    await expect(htmlCard.locator('img, iframe')).toHaveCount(0);
+    await htmlCard.locator('.msg-file-preview').click();
+    await expect(page.locator('#file-preview-body iframe[sandbox=""]')).toHaveAttribute(
+      'srcdoc', /<html><body>unsafe<\/body><\/html>/u,
+    );
+    await page.locator('#file-preview-close').click();
     for (const spec of [
       { name: '兼容图片.jpg', fileId: jpg.fileId },
       { name: '八位流图片.png', fileId: octet.fileId },
@@ -521,6 +539,126 @@ test.describe('SPA Chat file cards', () => {
     }
     const external = page.locator('#messages .msg').filter({ hasText: externalMarker });
     await expect(external.locator('.msg-file')).toHaveCount(0);
+  });
+
+  for (const mobileDark of [false, true]) {
+    test(`HTML sandbox blocks scripts and requests, toggles source and restores focus (${mobileDark ? '390 dark' : 'desktop'})`, async ({ page }) => {
+      await page.setViewportSize(mobileDark ? { width: 390, height: 844 } : { width: 1280, height: 800 });
+      await page.emulateMedia({ colorScheme: mobileDark ? 'dark' : 'light' });
+      const errors: string[] = [];
+      page.on('pageerror', (error) => errors.push(error.message));
+      const html = [
+        '<!doctype html><html><head><style>',
+        'body { margin: 0; background: rgb(12, 34, 56); color: white; }',
+        'main { min-height: 2400px; background-image: url("/mcp?html-preview-css"); }',
+        '</style></head><body><main>安全 HTML 预览</main>',
+        '<script>parent.__xss=1; fetch("/mcp?html-preview-script");</script>',
+        '<img src="/mcp?html-preview-img" onerror="parent.__xss=2">',
+        '<iframe src="/mcp?html-preview-frame"></iframe>',
+        '</body></html>',
+      ].join('');
+      const file = await seedRoomFile(base, humanToken, directRoomId, {
+        name: `sandbox-${mobileDark}.html`, mimeType: 'text/html', body: Buffer.from(html),
+      });
+      await sendFileMessage(base, humanToken, directRoomId, `[HTML sandbox](${file.publicUrl})`);
+      await page.goto(`${base}/c/${directRoomId}`);
+      const card = page.locator(`.msg-file[data-file-id="${file.fileId}"]`);
+      await card.scrollIntoViewIfNeeded();
+      const opener = card.locator('.msg-file-preview');
+      await expect(opener).toBeVisible();
+      const childRequests: string[] = [];
+      // request 事件也会报告被 CSP 阻止的资源；route 只记录实际进入网络层的访问。
+      await page.route('**/mcp?html-preview-*', async (route) => {
+        childRequests.push(route.request().url());
+        await route.abort();
+      });
+      const reads: string[] = [];
+      page.on('request', (request) => {
+        if (new URL(request.url()).pathname === `/f/${file.fileId}`) reads.push(request.headers()['range'] ?? '');
+      });
+      await opener.click();
+      const iframe = page.locator('#file-preview-body iframe');
+      await expect(iframe).toHaveAttribute('sandbox', '');
+      await expect(iframe).toHaveAttribute('referrerpolicy', 'no-referrer');
+      await expect(iframe).toHaveAttribute('title', `sandbox-${mobileDark}.html`);
+      await expect(iframe).toHaveAttribute('srcdoc', new RegExp('parent.__xss=1'));
+      await expect(iframe).not.toHaveAttribute('src');
+      const frame = page.frameLocator('#file-preview-body iframe');
+      await expect(frame.locator('main')).toHaveText('安全 HTML 预览');
+      await expect(frame.locator('body')).toHaveCSS('background-color', 'rgb(12, 34, 56)');
+      await frame.locator('body').evaluate(() => window.scrollTo(0, 400));
+      await expect.poll(() => frame.locator('body').evaluate(() => window.scrollY)).toBeGreaterThan(0);
+      expect(await page.evaluate(() => Reflect.get(window, '__xss'))).toBeUndefined();
+      expect(await iframe.evaluate((node) => (node as HTMLIFrameElement).contentDocument)).toBeNull();
+      const geometry = await iframe.boundingBox();
+      expect(geometry!.width).toBeLessThanOrEqual(mobileDark ? 390 : 900);
+      expect(geometry!.height).toBeGreaterThan(400);
+      await expect(page.locator('#file-preview-close')).toBeVisible();
+      await expect(page.locator('#file-preview-download')).toBeVisible();
+      await page.getByRole('button', { name: '查看原文', exact: true }).click();
+      await expect(iframe).toHaveCount(0);
+      await expect(page.locator('#file-preview-body > pre')).toHaveText(html);
+      await page.getByRole('button', { name: '渲染', exact: true }).click();
+      await expect(frame.locator('main')).toHaveText('安全 HTML 预览');
+      expect(childRequests).toEqual([]);
+      expect(reads).toEqual(['bytes=0-262143']);
+      expect(errors).toEqual([]);
+      await page.keyboard.press('Escape');
+      await expect(page.locator('#file-preview')).toHaveCount(0);
+      await expect(opener).toBeFocused();
+      await opener.click();
+      await expect(frame.locator('main')).toHaveText('安全 HTML 预览');
+      await page.locator('#file-preview-close').click();
+      await expect(opener).toBeFocused();
+    });
+  }
+
+  test('HTML preview truncates at the existing 256 KB Range limit', async ({ page }) => {
+    const html = '<h1>截断预览</h1>' + '<p>预览正文</p>\n'.repeat(30_000) + 'HTML-END-SENTINEL';
+    const file = await seedRoomFile(base, humanToken, directRoomId, {
+      name: 'large.html', mimeType: 'text/html', body: Buffer.from(html),
+    });
+    await sendFileMessage(base, humanToken, directRoomId, `[截断 HTML](${file.publicUrl})`);
+    await page.goto(`${base}/c/${directRoomId}`);
+    const card = page.locator(`.msg-file[data-file-id="${file.fileId}"]`);
+    await card.scrollIntoViewIfNeeded();
+    await card.locator('.msg-file-preview').click();
+    await expect(page.locator('#file-preview-body')).toContainText('预览已截断，仅显示前 256 KB');
+    await expect(page.frameLocator('#file-preview-body iframe').locator('h1')).toHaveText('截断预览');
+    await page.getByRole('button', { name: '查看原文', exact: true }).click();
+    const source = page.locator('#file-preview-body > pre');
+    await expect(source).not.toContainText('HTML-END-SENTINEL');
+    const rendered = await source.textContent();
+    expect(rendered).toBe(Buffer.from(html).subarray(0, 262_144).toString('utf8'));
+    await page.locator('#file-preview-close').click();
+
+    // 兼容忽略 Range 的文件响应：仍按字节截断，而非按 Unicode 字符数。
+    await page.route(`**/f/${file.fileId}*`, (route) => route.fulfill({
+      status: 200, contentType: 'text/html', body: html,
+    }));
+    await card.locator('.msg-file-preview').click();
+    await expect(page.locator('#file-preview-body')).toContainText('预览已截断，仅显示前 256 KB');
+    await page.getByRole('button', { name: '查看原文', exact: true }).click();
+    await expect(source).toHaveText(Buffer.from(html).subarray(0, 262_144).toString('utf8'));
+    await page.locator('#file-preview-close').click();
+  });
+
+  test('HTML read failures never create a preview frame', async ({ page }) => {
+    const file = await seedRoomFile(base, humanToken, directRoomId, {
+      name: 'unavailable.html', mimeType: 'text/html', body: Buffer.from('<h1>HTML</h1>'),
+    });
+    await sendFileMessage(base, humanToken, directRoomId, `[读取失败](${file.publicUrl})`);
+    await page.goto(`${base}/c/${directRoomId}`);
+    const card = page.locator(`.msg-file[data-file-id="${file.fileId}"]`);
+    await card.scrollIntoViewIfNeeded();
+    await expect(card.locator('.msg-file-preview')).toBeVisible();
+    await page.route(`**/f/${file.fileId}*`, (route) => route.fulfill({ status: 404, body: 'missing' }));
+    await card.locator('.msg-file-preview').click();
+    await expect(page.locator('#file-preview-body')).toContainText('读取文本预览失败：HTTP 404');
+    await expect(page.locator('#file-preview-body iframe')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '查看原文', exact: true })).toHaveCount(0);
+    await expect(page.locator('#file-preview-download')).toBeVisible();
+    await page.locator('#file-preview-close').click();
   });
 
   test('removes a broken thumbnail, keeps the card and retries', async ({ page }) => {

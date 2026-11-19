@@ -7,19 +7,22 @@ import {
   fileMetaText,
   filePreviewKind,
   fileSafeUrl,
+  previewRange,
   textPreviewLimit,
   type RoomFileItem,
 } from '../../lib/files-ui';
 import { MarkdownIsland } from '../chat/MarkdownIsland';
 
 const EMPTY_FILE_PREVIEW = '（空文件）';
+// sandbox 禁用主动能力，CSP 另行阻止 HTML/CSS 的被动网络请求，保留内联样式。
+const HTML_PREVIEW_CSP = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">`;
 
 /**
  * 文件预览弹窗。
  *
  * 文件栏与消息文件卡片共用同一实现：图片/PDF/音视频按 `preview_url` 内联，
- * Markdown 与文本只读取前 256 KB；所有地址仍由 `fileSafeUrl` 限定为同源
- * `/f/`，不内联 SVG/HTML。
+ * Markdown、HTML 与文本只读取前 256 KB；所有地址仍由 `fileSafeUrl` 限定为同源
+ * `/f/`，HTML 仅在无权限 sandbox 中渲染，不内联 SVG。
  */
 export function FilePreviewDialog({
   item,
@@ -32,7 +35,10 @@ export function FilePreviewDialog({
   const [textError, setTextError] = useState('');
   const [imageError, setImageError] = useState(false);
   const [showMarkdownSource, setShowMarkdownSource] = useState(false);
+  const [showHtmlSource, setShowHtmlSource] = useState(false);
+  const [textTruncated, setTextTruncated] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
   const kind = item ? filePreviewKind(item) : 'other';
   const previewUrl = item ? fileSafeUrl(item.preview_url || item.download_url || item.public_url) : null;
   const download = item ? fileDownloadUrl(item) : null;
@@ -42,15 +48,17 @@ export function FilePreviewDialog({
     setTextError('');
     setImageError(false);
     setShowMarkdownSource(false);
+    setShowHtmlSource(false);
+    setTextTruncated(false);
     abortRef.current?.abort();
     abortRef.current = null;
-    if (!item || (kind !== 'text' && kind !== 'markdown') || !previewUrl) return;
+    if (!item || !['text', 'markdown', 'html'].includes(kind) || !previewUrl) return;
     const controller = new AbortController();
     abortRef.current = controller;
     void (async () => {
       try {
         const response = await fetch(previewUrl, {
-          headers: { Range: 'bytes=0-262143' },
+          headers: { Range: previewRange() },
           credentials: 'omit',
           redirect: 'error',
           referrerPolicy: 'no-referrer',
@@ -59,7 +67,17 @@ export function FilePreviewDialog({
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const body = await response.text();
         if (controller.signal.aborted) return;
-        setText(body.length > 0 ? body.slice(0, textPreviewLimit()) : EMPTY_FILE_PREVIEW);
+        const bodyBytes = new TextEncoder().encode(body);
+        const total = Number(response.headers.get('content-range')?.split('/')[1]);
+        setTextTruncated(
+          Number(item.size) > textPreviewLimit() ||
+          total > textPreviewLimit() ||
+          bodyBytes.byteLength > textPreviewLimit(),
+        );
+        const previewText = kind === 'html'
+          ? new TextDecoder().decode(bodyBytes.subarray(0, textPreviewLimit()))
+          : body.slice(0, textPreviewLimit());
+        setText(body.length > 0 ? previewText : EMPTY_FILE_PREVIEW);
       } catch (failure) {
         if (controller.signal.aborted) return;
         setTextError(`读取文本预览失败：${(failure as Error).message || String(failure)}`);
@@ -89,6 +107,14 @@ export function FilePreviewDialog({
           className="spa-file-preview"
           aria-describedby={undefined}
           id="file-preview"
+          onOpenAutoFocus={() => {
+            openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+          }}
+          onCloseAutoFocus={(event) => {
+            if (!openerRef.current?.isConnected) return;
+            event.preventDefault();
+            openerRef.current.focus();
+          }}
         >
           <div className="file-preview-card">
             <header className="file-preview-head">
@@ -129,6 +155,39 @@ export function FilePreviewDialog({
                 ) : (
                   <p className="file-preview-note">预览链接无效，请下载后查看。</p>
                 )
+              ) : kind === 'html' ? (
+                <>
+                  {textTruncated ? (
+                    <p className="file-preview-note">文件较大，预览已截断，仅显示前 256 KB。</p>
+                  ) : null}
+                  {text !== null && !textError ? (
+                    <>
+                      <div className="file-preview-md-toolbar">
+                        <Button
+                          type="button"
+                          aria-pressed={showHtmlSource}
+                          onClick={() => setShowHtmlSource((value) => !value)}
+                        >
+                          {showHtmlSource ? '渲染' : '查看原文'}
+                        </Button>
+                      </div>
+                      {showHtmlSource ? (
+                        <pre>{text}</pre>
+                      ) : (
+                        <iframe
+                          sandbox=""
+                          srcDoc={HTML_PREVIEW_CSP + text}
+                          referrerPolicy="no-referrer"
+                          title={item.name || 'HTML 预览'}
+                        />
+                      )}
+                    </>
+                  ) : (
+                    <p className="file-preview-note">
+                      {textError || (previewUrl ? '正在读取 HTML…' : '预览链接无效，请下载后查看。')}
+                    </p>
+                  )}
+                </>
               ) : kind === 'markdown' ? (
                 <div className="file-preview-markdown">
                   {markdownOversize ? (
