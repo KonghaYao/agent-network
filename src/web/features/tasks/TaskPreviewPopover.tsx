@@ -1,18 +1,9 @@
-import { Tooltip } from '../../app/lenso-tooltip';
-import {
-  Avatar,
-  AvatarGroup,
-  Badge,
-  Button,
-  Surface,
-  LENSO_BADGE_FILL,
-} from '../../app/lenso-controls';
+import { Button, Separator } from '../../app/lenso-controls';
 import { Popover } from '../../app/lenso-popover';
 import {
   useCallback,
   useEffect,
   useRef,
-  type CSSProperties,
   type KeyboardEvent,
   type MouseEvent,
   type PointerEvent,
@@ -21,27 +12,11 @@ import {
 import { LIMITS } from '../../../contracts/limits';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { useMediaQuery } from '../../hooks/useMediaQuery';
-import { avatarColor, firstChar } from '../../lib/rooms';
 import { taskTimeLabel } from './task-format';
 import type { TaskListItemView } from './types';
 
 const HOVER_OPEN_DELAY = 260;
 const HOVER_CLOSE_DELAY = 180;
-const TASK_AVATAR_GROUP = { '--avatar-group-overlap': '6px' } as CSSProperties;
-
-function taskAvatarStyle(name: string): CSSProperties {
-  return {
-    width: 20,
-    height: 20,
-    boxSizing: 'border-box',
-    borderRadius: '50%',
-    background: avatarColor(name),
-    color: '#fff',
-    fontSize: 9,
-    fontWeight: 500,
-    boxShadow: '0 0 0 2px var(--wx-panel)',
-  };
-}
 
 /**
  * Task 行的摘要预览。
@@ -169,8 +144,6 @@ export function TaskPreviewPopover({
     }
   };
 
-  const participants = item.participants.slice(0, LIMITS.taskListParticipantsMax);
-  const more = Math.max(0, item.participant_count - participants.length);
   const recent = item.recent_messages.slice(0, LIMITS.taskListRecentMessagesMax);
   const preview = item.preview || '（无正文）';
 
@@ -192,27 +165,7 @@ export function TaskPreviewPopover({
         >
           <span className="task-dock-preview">{preview}</span>
           <span className="task-dock-meta">
-            <span className="task-dock-avatars" aria-hidden="true">
-              <AvatarGroup overlap="ring" style={TASK_AVATAR_GROUP}>
-                {participants.map((participant) => (
-                  <Tooltip as={Avatar}
-                    key={participant.actor_id}
-                    hint={participant.name}
-                    style={taskAvatarStyle(participant.name)}
-                  >
-                    {firstChar(participant.name)}
-                  </Tooltip>
-                ))}
-              </AvatarGroup>
-              {more > 0 ? (
-                <span className="task-bar-more">
-                  <Badge placement="" style={LENSO_BADGE_FILL}>+{more}</Badge>
-                </span>
-              ) : null}
-            </span>
-            <span>{item.participant_count} Agent</span>
-            <span>{item.message_count} 消息</span>
-            <span>最近 {taskTimeLabel(item.latest_activity_at)}</span>
+            {item.message_count} 条消息 · {item.participant_count} 个 Agent · {taskTimeLabel(item.latest_activity_at)}
           </span>
         </Button>}
           id={`task-preview-${item.root_message_id}`}
@@ -236,17 +189,17 @@ export function TaskPreviewPopover({
           onPointerEnter={clearCloseTimer}
           onPointerLeave={scheduleClose}
         >
-          <Surface style={{ minWidth: 0, padding: 0, background: 'transparent' }}>
           <div className="task-preview-head">
-            <span className="task-preview-sender">
-              {item.root_sender_name || (item.root_sender_kind === 'agent' ? 'Agent' : '成员')}
-            </span>
+            <span className="task-preview-sender" title={preview}>{preview}</span>
             <span className="task-preview-time">{taskTimeLabel(item.root_created_at)}</span>
           </div>
-          <p className="task-preview-text">{preview}</p>
           <p className="task-preview-meta">
             {item.message_count} 条消息 · {item.participant_count} 个 Agent 参与
           </p>
+          <Separator data-task-divider="" />
+          <div className="task-preview-scroll">
+          <p className="task-preview-text">{preview}</p>
+          <Separator data-task-divider="" />
           <div className="task-preview-recents">
             <p className="task-preview-section">最近回复</p>
             {recent.length === 0 ? (
@@ -288,6 +241,8 @@ export function TaskPreviewPopover({
               </ul>
             )}
           </div>
+          </div>
+          <Separator data-task-divider="" />
           <div className="task-preview-actions">
             {canAsk ? (
               <Button
@@ -306,7 +261,7 @@ export function TaskPreviewPopover({
             ) : null}
             <Button
               type="button"
-              variant="bordered"
+              variant="prominent"
               size="sm"
               className="task-preview-all"
               onClick={() => {
@@ -318,7 +273,6 @@ export function TaskPreviewPopover({
               查看全部 {item.message_count} 条消息
             </Button>
           </div>
-          </Surface>
     </Popover>
   );
 }

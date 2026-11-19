@@ -1,200 +1,177 @@
-/**
- * 房间浮动 Task dock、行预览与完成确认的样式。
- *
- * 全部取自聊天区 CSS 变量，暗色模式自动跟随；dock 绝对定位在 composer
- * 容器上方，不占文档流、不推移消息或输入框。z-index 低于 Dialog，高于
- * 消息流；`jump-latest` 保持原位并盖在面板之上，始终可点击。
- */
+/** Task 浮层只用实色表面；定位不参与消息和 composer 的文档流。 */
 export const TASK_DOCK_STYLE = `
   .task-dock-slot { position: absolute; left: 16px; right: 16px;
-    bottom: calc(100% + 8px); z-index: var(--app-z-float); display: block;
+    bottom: calc(100% + 8px); z-index: var(--app-z-float);
     min-width: 0; max-width: 420px; }
-  /* 无输入区（只读归档）时补上底部安全区。 */
   .composer-area:not(:has(.composer)) .task-dock-slot {
     bottom: calc(100% + 8px + env(safe-area-inset-bottom)); }
-  /* 入口保持在锚点，面板绝对定位在入口上方：展开不改变入口盒子。 */
-  .task-dock { position: relative; box-sizing: border-box; display: block;
-    width: 100%; min-width: 0; }
-  .task-dock-head { display: flex; align-items: center; width: fit-content;
-    max-width: 100%; box-sizing: border-box; border: 1px solid var(--wx-line);
-    border-radius: var(--app-radius-surface); background: var(--lenso-background-secondary);
-    box-shadow: var(--lenso-overlay-shadow); overflow: hidden; }
-  .task-dock-toggle { flex: 1 1 auto; display: flex; align-items: center; gap: 8px;
-    min-height: 44px; min-width: 0; padding: 6px 10px; border: 0; border-radius: 0;
-    background: transparent; color: var(--wx-text); text-align: left; cursor: pointer; }
-  .task-dock-toggle:hover { background: var(--wx-hover); }
-  .task-dock-toggle:focus-visible { outline: 2px solid var(--wx-link); outline-offset: -2px; }
-  /* Lenso Button 根样式会改成水平居中；dock 入口保持左对齐与 44px 行高。 */
-  .task-dock .task-dock-toggle { display: flex; justify-content: flex-start;
-    min-height: 44px; text-align: left; }
-  .task-dock-title { flex: 0 0 auto; font-size: 13px; font-weight: 600; }
-  .task-dock-count { flex: 0 0 auto; display: inline-flex; align-items: center;
-    justify-content: center; min-width: 20px; height: 20px; padding: 0 6px;
-    box-sizing: border-box; border-radius: 10px; background: var(--wx-search);
-    color: var(--wx-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-  .task-dock-count--unknown { color: var(--wx-muted); letter-spacing: 1px; }
-  .task-dock-caret { margin-left: auto; color: var(--wx-muted); font-size: 11px;
-    line-height: 1; transition: transform .15s ease; }
+  .task-dock { position: relative; width: 100%; min-width: 0; }
+  /* Lenso 的 StyleX 以 important 输出材质/控件 token，仅在 Task 范围覆盖。 */
+  #task-dock [data-task-surface='entry'] { width: fit-content; max-width: 100%; padding: 0 !important;
+    border: 0; border-radius: 6px !important; background: transparent !important; box-shadow: none !important; }
+  .task-dock-head { width: fit-content; max-width: 100%; }
+  #task-dock .task-dock-toggle { display: flex; align-items: center;
+    justify-content: flex-start; gap: 8px !important; box-sizing: border-box;
+    height: 28px; min-height: 28px; min-width: 0; padding: 0 8px !important;
+    border: 0; border-radius: 6px !important; background: transparent !important;
+    color: var(--wx-muted) !important; font-size: 11px !important; line-height: 14px !important;
+    text-align: left; cursor: pointer; box-shadow: none; }
+  #task-dock-toggle .task-dock-title { font-size: 11px; line-height: 14px; letter-spacing: .02em; }
+  .task-dock-title { flex: 0 0 auto; font-size: 14px; line-height: 20px; font-weight: 600; }
+  .task-dock-count { display: inline-flex; flex: 0 0 auto; align-items: center; }
+  #task-dock :is(.task-dock-count, [data-task-count]) [data-lenso-slot^='badge'],
+  #task-dock [data-task-count] { height: 18px; min-width: 18px; padding: 0 4px;
+    border: 0; border-radius: 999px; font-size: 11px !important; line-height: 14px !important;
+    letter-spacing: .02em; font-variant-numeric: tabular-nums;
+    background: var(--lenso-control-tint-subtle-fill) !important; box-shadow: none !important; }
+  #task-dock .task-dock-count [data-lenso-slot^='badge'], #task-dock [data-task-count] {
+    width: auto !important; height: 18px !important; padding: 0 4px !important;
+    border-radius: 999px !important; }
+  .task-dock-count--unknown { color: var(--wx-muted); }
+  .task-dock-caret { display: inline-flex; align-items: center; justify-content: center;
+    width: 14px; height: 14px; font-size: 11px; line-height: 14px;
+    transition: transform .15s ease; }
   .task-dock.is-collapsed .task-dock-caret { transform: rotate(-90deg); }
-  /* 面板必须是 alpha=1 的主表面：与同色消息气泡靠边框和阴影分层，
-     不能使用 Lenso glass 材质，否则消息会从面板下透出。 */
-  .task-dock-body { position: absolute; left: 0; right: 0;
-    bottom: calc(100% + 8px); z-index: var(--app-z-float); box-sizing: border-box;
-    display: flex; flex-direction: column; width: 100%; max-height: min(50dvh, 460px);
-    border: 1px solid var(--lenso-separator); border-radius: var(--app-radius-surface);
-    background: var(--lenso-background-primary);
-    box-shadow: 0 18px 48px rgb(0 0 0 / 20%), 0 2px 8px rgb(0 0 0 / 10%);
-    isolation: isolate; overflow: hidden; }
-  /* 面板展开时「回到最新」会落在面板与入口之间；Lenso bordered Button
-     的 fill-tertiary 会透出消息，实色覆盖必须压过库样式。 */
+  .task-dock-body { position: absolute; left: 0; right: 0; bottom: calc(100% + 8px);
+    z-index: var(--app-z-float); display: flex; flex-direction: column;
+    box-sizing: border-box; width: 100%; max-height: min(50dvh, 460px);
+    border: 0; border-radius: 16px; background: var(--wx-panel);
+    box-shadow: var(--wx-shadow); isolation: isolate; overflow: hidden; }
+  #task-dock [data-task-surface='panel'] { display: flex; flex-direction: column;
+    flex: 1 1 auto; min-height: 0; min-width: 0; padding: 0 !important; border: 0;
+    gap: 0 !important; border-radius: inherit !important; background: var(--wx-panel) !important;
+    box-shadow: none !important; overflow: hidden; }
+  #task-dock [data-task-toolbar] { display: flex; flex: 0 0 auto; align-items: center;
+    justify-content: flex-start; gap: 8px !important; min-height: 32px; padding: 16px !important;
+    border: 0; background: transparent !important; box-shadow: none !important; }
+  [data-task-divider][data-task-divider] { flex: 0 0 auto; width: 100%; height: 1px; min-height: 1px;
+    margin: 0; padding: 0; border: 0; background: var(--wx-line); }
+  /* 只在「回到最新」可见时抬高面板，两个浮层不相互遮挡。 */
   .chat-body:has(#task-dock[data-state='expanded']) #jump-latest {
     background: var(--wx-panel) !important; }
-  /* 桌面端「回到最新」浮在输入框上方 70px；面板仅在它可见时抬高，
-     避免两个浮层互相遮挡，同时保持无该按钮时面板贴近入口。 */
   @media (min-width: 760px) {
     .chat-body:has(#jump-latest:not([hidden])) .task-dock-body {
-      bottom: calc(100% + 51px); }
+      bottom: calc(100% + 68px); }
   }
   .task-dock-body[hidden] { display: none; }
-  .task-dock-list { flex: 1 1 auto; min-width: 0; min-height: 0; margin: 0;
-    padding: 4px 8px 8px; overflow-x: hidden; overflow-y: auto;
-    overscroll-behavior: contain; list-style: none; }
-  .task-dock-list .task-dock-item { margin-bottom: 6px; border: 1px solid var(--lenso-separator);
-    border-radius: var(--app-radius-xl); }
-  .task-dock-status { margin: 0; padding: 12px;
-    color: var(--wx-muted); font-size: 12px; text-align: center; }
-  .task-dock-empty { display: flex; flex-direction: column; align-items: center;
-    gap: 4px; margin: 0; padding: 12px; color: var(--wx-muted);
-    font-size: 12px; text-align: center; }
-  .task-dock-empty-close { min-width: 88px; min-height: 44px; padding: 0 14px;
-    border: 1px solid var(--wx-line); border-radius: 999px; background: var(--wx-panel);
-    color: var(--wx-link); font-size: 12px; cursor: pointer; }
-  .task-dock-empty-close:hover { background: var(--wx-hover); }
-  .task-dock-empty-close:focus-visible { outline: 2px solid var(--wx-link);
-    outline-offset: 2px; }
-  .task-dock-error { display: flex; flex-wrap: wrap; align-items: center;
-    justify-content: center; gap: 8px; padding: 10px 12px; color: var(--wx-unread);
-    font-size: 12px; line-height: 1.5; text-align: center; }
-  .task-dock-error button, .task-dock-foot-status button { min-height: 44px;
-    padding: 0 12px; font-size: 12px; }
-  .task-dock-item { display: flex; align-items: stretch; gap: 2px; min-width: 0;
-    border-top: 1px solid var(--wx-line); }
-  .task-dock-item:first-child { border-top: 0; }
-  .task-dock-item-trigger { flex: 1 1 auto; min-width: 0; display: flex;
-    flex-direction: column; align-items: stretch; gap: 4px; min-height: 56px;
-    padding: 8px 10px; border: 0; border-radius: 0; background: transparent;
-    color: var(--wx-text); text-align: left; cursor: pointer; }
-  .task-dock-item-trigger:hover { background: var(--wx-hover); }
-  .task-dock-item-trigger:focus-visible { outline: 2px solid var(--wx-link);
-    outline-offset: -2px; }
-  /* 触发按钮内部是两行信息，不能被 Lenso 的水平居中布局改写。 */
-  .task-dock-list .task-dock-item-trigger { display: flex; flex-direction: column;
-    flex: 1 1 180px; min-width: 0; height: auto; white-space: normal;
-    align-items: stretch; justify-content: flex-start; width: auto; text-align: left; }
-  .task-dock-list .task-dock-item-trigger > span { width: 100%; min-width: 0; }
-  .task-dock-item-actions { margin-left: auto; flex-wrap: wrap; }
+  #task-dock [data-task-list] { display: flex; flex-direction: column; gap: 8px !important;
+    flex: 1 1 auto; min-width: 0; min-height: 0; margin: 0; padding: 16px !important;
+    overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; list-style: none; }
+  #task-dock .task-dock-item { display: flex; flex-direction: column;
+    align-items: stretch; gap: 8px; min-width: 0; margin: 0; padding: 0;
+    border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+  #task-dock .task-dock-item-trigger {
+    display: flex; flex-direction: column; flex: 1 1 auto; align-items: stretch !important;
+    justify-content: flex-start; gap: 8px !important; box-sizing: border-box;
+    width: 100% !important; min-width: 0; height: auto; min-height: 44px; padding: 0 !important;
+    border: 0; border-radius: 8px !important; background: transparent !important; color: var(--wx-text);
+    font-size: 13px !important; line-height: 19px !important; text-align: left; white-space: normal;
+    cursor: pointer; box-shadow: none !important; }
   .task-dock-preview { display: -webkit-box; -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical; overflow: hidden; font-size: 12.5px;
-    line-height: 1.45; overflow-wrap: anywhere; }
-  .task-dock-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
-    color: var(--wx-muted); font-size: 11px; line-height: 1.3; }
-  .task-dock-avatars { display: inline-flex; align-items: center; padding-left: 4px; }
-  .task-dock-item-actions { flex: 0 0 auto; display: flex; align-items: center;
-    gap: 4px; padding: 6px 6px 6px 0; }
-  .task-dock-ask, .task-dock-complete { min-width: 44px; min-height: 44px;
-    padding: 0 8px; border: 1px solid var(--wx-line); border-radius: 6px;
-    background: var(--wx-panel); color: var(--wx-text); font-size: 12px;
-    white-space: nowrap; cursor: pointer; }
-  .task-dock-ask:hover, .task-dock-complete:hover:not(:disabled) {
-    background: var(--wx-hover); }
-  .task-dock-ask:focus-visible, .task-dock-complete:focus-visible {
-    outline: 2px solid var(--wx-link); outline-offset: 2px; }
-  .task-dock-complete { min-width: 52px; padding: 0 10px; color: var(--wx-link); }
-  .task-dock-complete:disabled { color: var(--wx-muted); cursor: not-allowed;
-    opacity: .72; }
-  .task-dock-more { align-self: center; min-height: 44px; min-width: 112px;
-    margin: 2px auto 8px; padding: 0 14px; border: 1px solid var(--wx-line);
-    border-radius: 999px; background: var(--wx-panel); color: var(--wx-link);
-    font-size: 12px; cursor: pointer; }
-  .task-dock-more:hover:not(:disabled) { background: var(--wx-hover); }
-  .task-dock-more:disabled { color: var(--wx-muted); cursor: progress; }
-  .task-dock-foot-status { display: flex; flex-wrap: wrap; align-items: center;
-    justify-content: center; gap: 8px; margin: 0; padding: 8px 12px 10px;
-    color: var(--wx-muted); font-size: 11px; line-height: 1.45; text-align: center; }
+    -webkit-box-orient: vertical; overflow: hidden; width: 100%; min-width: 0;
+    font-size: 14px; line-height: 20px; font-weight: 500; overflow-wrap: anywhere; }
+  .task-dock-meta { display: block; min-width: 0; color: var(--wx-muted);
+    font-size: 12px; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .task-dock-item-actions { display: flex; width: 100%; flex-wrap: wrap;
+    align-items: center; justify-content: flex-end; gap: 8px; padding: 0 0 8px; }
+  .task-dock-item-actions > .task-status-badge { margin-right: auto; }
+  #task-dock :is(.task-dock-ask, .task-dock-complete, .task-dock-more,
+    .task-dock-empty-close, .task-dock-error button, .task-dock-foot-status button),
+  .task-preview-popover :is(.task-preview-ask, .task-preview-all),
+  #task-complete-dialog .spa-dialog-button {
+    box-sizing: border-box; height: 36px; min-height: 36px; padding: 0 12px !important;
+    border: 1px solid var(--wx-line); border-radius: 8px !important; background: var(--wx-panel) !important;
+    color: var(--wx-text) !important; font-size: 13px !important; line-height: 19px !important; gap: 8px !important;
+    box-shadow: none !important; cursor: pointer; }
+  #task-dock .task-dock-item-actions :is(.task-dock-ask, .task-dock-complete) { height: 32px; min-height: 32px; }
+  #task-dock .task-dock-complete { color: var(--lenso-label-on-tint) !important;
+    border: 0; background: var(--app-prominent-fill) !important; }
+  #task-dock button:disabled { color: var(--wx-muted); cursor: not-allowed; }
+  #task-dock .task-dock-more { flex: 0 0 auto; align-self: center; margin: 8px 16px 16px; }
+  .task-dock-status, .task-dock-empty, .task-dock-error, .task-dock-foot-status {
+    margin: 0; padding: 16px; color: var(--wx-muted); font-size: 12px;
+    line-height: 16px; text-align: center; }
+  .task-dock-empty, .task-dock-error, .task-dock-foot-status { display: flex;
+    flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; }
+  .task-dock-empty { flex-direction: column; }
+  .task-dock-error { color: var(--wx-unread); }
+  #task-dock button:focus-visible, .task-preview-popover button:focus-visible {
+    outline: 2px solid var(--wx-link); outline-offset: -2px; }
 
-  /* 预览浮层由 Portal 挂到 body，自带颜色与限高。 */
-  .task-preview-popover { z-index: var(--app-z-dialog-overlay); box-sizing: border-box;
-    width: min(380px, calc(100vw - 24px)); max-height: min(58dvh, 420px);
-    overflow-y: auto; padding: 12px; border: 1px solid var(--wx-line);
-    border-radius: 10px; background: var(--wx-panel); color: var(--wx-text);
-    box-shadow: var(--wx-shadow); font-size: 12px; }
-  .task-preview-head { display: flex; align-items: baseline; justify-content: space-between;
-    gap: 10px; }
-  .task-preview-sender { min-width: 0; font-size: 13px; font-weight: 600;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .task-preview-time { flex: 0 0 auto; color: var(--wx-muted); font-size: 11px; }
-  .task-preview-text { margin: 8px 0 0; font-size: 13px; line-height: 1.55;
+  /* 头尾不滚动，只有正文/最近回复滚动；无额外 Surface 嵌套。 */
+  .task-preview-popover.task-preview-popover { display: flex; flex-direction: column;
+    z-index: var(--app-z-dialog-overlay); box-sizing: border-box; width: 400px;
+    max-width: calc(100vw - 24px);
+    max-height: min(60vh, max(160px, calc(var(--available-height, 60vh) - 64px))) !important;
+    padding: 0 !important; overflow: hidden;
+    border: 0; border-radius: 12px !important; background: var(--wx-panel) !important; color: var(--wx-text) !important;
+    box-shadow: var(--wx-shadow) !important; font-size: 13px !important; line-height: 19px !important; }
+  .task-preview-head { display: flex; flex: 0 0 auto; align-items: baseline;
+    justify-content: space-between; gap: 8px; padding: 16px 16px 0; }
+  .task-preview-sender { flex: 1 1 auto; min-width: 0; font-size: 14px;
+    line-height: 20px; font-weight: 600; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .task-preview-time, .task-preview-recent-time { flex: 0 0 auto;
+    color: var(--wx-muted); font-size: 12px; line-height: 16px; white-space: nowrap; }
+  .task-preview-meta { flex: 0 0 auto; margin: 4px 0 0; padding: 0 16px 16px;
+    color: var(--wx-muted); font-size: 12px; line-height: 16px; }
+  .task-preview-scroll { flex: 1 1 auto; min-height: 0; min-width: 0; padding: 16px;
+    overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
+  .task-preview-text { margin: 0 0 16px; font-size: 13px; line-height: 19px;
     white-space: pre-wrap; overflow-wrap: anywhere; }
-  .task-preview-meta { margin: 6px 0 0; color: var(--wx-muted); font-size: 11px; }
-  .task-preview-recents { margin-top: 10px; padding-top: 8px;
-    border-top: 1px solid var(--wx-line); }
-  .task-preview-section { margin: 0 0 4px; color: var(--wx-muted); font-size: 11px; }
-  .task-preview-recent-list { list-style: none; margin: 0; padding: 0;
-    display: flex; flex-direction: column; gap: 2px; }
-  .task-preview-recent { display: flex; flex-direction: column; gap: 3px;
-    box-sizing: border-box; width: 100%; min-height: 44px; padding: 7px 8px;
-    border: 0; border-radius: 6px; background: transparent; color: var(--wx-text);
-    text-align: left; cursor: pointer; }
-  .task-preview-recent:hover, .task-preview-recent:focus-visible {
-    background: var(--wx-hover); }
+  .task-preview-recents { padding-top: 16px; }
+  .task-preview-section { margin: 0 0 8px; color: var(--wx-muted);
+    font-size: 11px; line-height: 14px; letter-spacing: .02em; }
+  .task-preview-recent-list { display: flex; flex-direction: column; gap: 12px;
+    list-style: none; margin: 0; padding: 0; }
+  .task-preview-popover .task-preview-recent { display: flex; flex-direction: column;
+    align-items: stretch !important; justify-content: flex-start; gap: 4px !important; box-sizing: border-box;
+    width: 100% !important; height: auto; min-height: 44px; padding: 0 !important; border: 0; border-radius: 8px !important;
+    background: transparent !important; color: var(--wx-text); font-size: 13px !important; line-height: 19px !important;
+    text-align: left; white-space: normal; box-shadow: none; cursor: pointer; }
   .task-preview-recent.is-recalled { color: var(--wx-muted); }
-  .task-preview-recent-list .task-preview-recent { display: flex; flex-direction: column;
-    justify-content: flex-start; width: 100%; text-align: left; }
-  .task-preview-recent-head { display: flex; align-items: baseline; gap: 8px; }
-  .task-preview-recent-sender { min-width: 0; font-size: 12px; font-weight: 600;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .task-preview-recent-time { margin-left: auto; flex: 0 0 auto;
-    color: var(--wx-muted); font-size: 10px; }
+  .task-preview-recent-head { display: flex; width: 100%; align-items: baseline; gap: 8px; min-width: 0; }
+  .task-preview-recent-sender { flex: 1 1 auto; min-width: 0; font-size: 12px;
+    line-height: 16px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .task-preview-recent-text { display: -webkit-box; -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical; overflow: hidden; font-size: 12px;
-    line-height: 1.45; overflow-wrap: anywhere; }
-  .task-preview-empty { margin: 4px 0 0; color: var(--wx-muted); font-size: 12px; }
-  .task-preview-actions { display: flex; flex-wrap: wrap; justify-content: flex-end;
-    gap: 8px; margin-top: 10px; }
-  .task-preview-ask, .task-preview-all { min-height: 44px; padding: 0 12px;
-    border: 1px solid var(--wx-line); border-radius: 6px; background: var(--wx-panel);
-    color: var(--wx-link); font-size: 12px; cursor: pointer; }
-  .task-preview-ask { color: var(--wx-text); }
-  .task-preview-ask:hover, .task-preview-all:hover { background: var(--wx-hover); }
-  .task-preview-ask:focus-visible, .task-preview-all:focus-visible {
-    outline: 2px solid var(--wx-link); outline-offset: 2px; }
-
-  .task-complete-dialog { width: min(380px, 100%); box-sizing: border-box; }
-  .task-complete-message { margin: 0 0 12px; line-height: 1.65;
-    overflow-wrap: anywhere; }
-  .task-complete-error { margin: 0 0 12px; color: var(--wx-unread); font-size: 12px;
-    line-height: 1.5; overflow-wrap: anywhere; }
-
+    -webkit-box-orient: vertical; overflow: hidden; width: 100%; min-width: 0;
+    font-size: 13px; line-height: 19px; overflow-wrap: anywhere; }
+  .task-preview-empty { margin: 0; color: var(--wx-muted); font-size: 12px; line-height: 16px; }
+  .task-preview-actions { display: flex; flex: 0 0 auto; align-items: center;
+    justify-content: flex-end; gap: 8px; padding: 16px; }
+  .task-preview-popover .task-preview-all, #task-complete-dialog .primary {
+    height: 40px; min-height: 40px; border: 0; background: var(--wx-green);
+    color: #fff; }
+  #task-complete-dialog { width: min(400px, calc(100vw - 24px)); box-sizing: border-box;
+    max-height: 80dvh; padding: 16px; border: 0; border-radius: 12px;
+    background: var(--wx-panel); box-shadow: var(--wx-shadow); overflow-x: hidden; overflow-y: auto; }
+  #task-complete-title { margin: 0 0 12px; font-size: 14px; line-height: 20px; }
+  .task-complete-message { margin: 0 0 16px; font-size: 13px; line-height: 19px; overflow-wrap: anywhere; }
+  .task-complete-error { margin: 0 0 16px; color: var(--wx-unread);
+    font-size: 12px; line-height: 16px; overflow-wrap: anywhere; }
+  #task-complete-dialog .modal-actions { flex-wrap: wrap; gap: 8px; margin-top: 16px; }
   .task-dock :is(button, span, p), .task-preview-popover :is(button, span, p),
-  .task-complete-dialog :is(p, h2, pre, code) {
-    min-width: 0; max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
-  .task-preview-popover { overflow-x: hidden; border-radius: var(--app-radius-surface);
-    border-color: var(--lenso-separator); box-shadow: var(--lenso-overlay-shadow); }
-  .task-preview-popover .task-preview-recent { height: auto; white-space: normal; align-items: stretch; }
-  .task-preview-recent-head { flex-wrap: wrap; }
-  .task-preview-recent-text, .task-dock-preview { width: 100%; white-space: normal; }
+  .task-complete-dialog :is(p, h2, pre, code) { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
   .task-preview-popover :is(pre, code), .task-complete-dialog :is(pre, code) { white-space: pre-wrap; }
-  .task-complete-dialog { max-height: 80dvh; overflow-x: hidden; overflow-y: auto; }
-  .task-complete-dialog .modal-actions { flex-wrap: wrap; gap: 8px; }
-  .task-complete-dialog button { min-height: 44px; }
 
-  /* 「回到底部」保持原位，靠 chat-styles 的更高 z-index 盖在浮动面板之上。 */
   @media (max-width: 759px) {
-    .task-dock-slot { left: 8px; right: 8px; bottom: calc(100% + 6px);
-      max-width: none; }
+    .task-dock-slot { left: 8px; right: 8px; }
+    /* 44px 命中区包住 28px chip，保留 chip 本身的统一尺寸。 */
+    #task-dock [data-task-surface='entry'] { padding: 8px 0 !important; }
+    #task-dock .task-dock-toggle::after { content: ''; position: absolute;
+      inset: -8px 0; min-width: 44px; }
+    #task-dock [data-task-list], #task-dock [data-task-toolbar] { padding: 12px !important; }
     .chat-body:has(#jump-latest:not([hidden])) .task-dock-body {
-      bottom: calc(100% + 44px); }
-    .task-preview-popover { width: calc(100vw - 20px);
-      max-height: min(52dvh, 360px); }
+      bottom: calc(100% + 60px); }
+    .task-preview-popover.task-preview-popover { width: min(92vw, 390px); }
+    .task-preview-head { padding: 12px 12px 0; }
+    .task-preview-meta { padding: 0 12px 12px; }
+    .task-preview-scroll, .task-preview-actions { padding: 12px; }
+    #task-dock .task-dock-item-actions :is(.task-dock-ask, .task-dock-complete),
+    #task-dock :is(.task-dock-ask, .task-dock-complete, .task-dock-more,
+      .task-dock-empty-close, .task-dock-error button, .task-dock-foot-status button),
+    .task-preview-popover :is(.task-preview-ask, .task-preview-all),
+    #task-complete-dialog .spa-dialog-button { height: 44px; min-height: 44px; }
+    #task-complete-dialog { padding: 12px; }
   }
 `;

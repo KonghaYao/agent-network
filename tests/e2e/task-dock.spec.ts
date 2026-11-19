@@ -4,6 +4,8 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { expectNoHorizontalOverflow, LONG_TASK_URL } from './fixtures/task-layout';
 import { semanticColor } from './fixtures/semantic-colors';
+import { expectTaskDetailStyle } from './fixtures/task-detail-style';
+import { taskTimeLabel } from '../../src/web/features/tasks/task-format';
 
 /**
  * 浮动 Task dock：默认收起、展开/收起、布局稳定、预览、完成、分页与实时刷新。
@@ -281,8 +283,54 @@ async function expandDock(page: Page) {
 }
 
 test.describe('浮动 Task dock', () => {
+  test('Task 时间：24 小时内相对，跨日仍相对，较早日期保留月日和时分', () => {
+    const now = new Date(2026, 10, 18, 0, 10).getTime();
+    const original = Date.now;
+    Date.now = () => now;
+    try {
+      expect(taskTimeLabel(String(now - 3 * 60_000))).toBe('3 分钟前');
+      expect(taskTimeLabel(String(now - 60 * 60_000))).toBe('1 小时前');
+      expect(taskTimeLabel(String(new Date(2026, 10, 16, 16, 10).getTime()))).toBe('11月16日 16:10');
+      expect(taskTimeLabel(String(now))).toBe('刚刚');
+      expect(taskTimeLabel('invalid')).toBe('');
+    } finally {
+      Date.now = original;
+    }
+  });
   for (const width of [390, 1280]) {
     for (const colorScheme of ['light', 'dark'] as const) {
+      test(`Task 数据文案去重 ${width}/${colorScheme}`, async ({ page }) => {
+        const base = await baseUrl();
+        const fixture = await setupTaskRoom(base, `detail-${width}-${colorScheme}`, { roots: 0 });
+        const second = await createAgent(base, fixture.owner.token, '第二个协作 Agent 名称很长但只占一行');
+        const roomId = await createGroup(base, fixture.owner.token, 'Task 数据规范', [fixture.agent.actor_id, second.actor_id]);
+        const rootId = await createTask(base, fixture.owner.token, roomId, '统一 Task 细节');
+        await sendMessage(base, fixture.agent.token, roomId, '第一条回复', { taskRootId: rootId });
+        await sendMessage(base, second.token, roomId, '第二条回复', { taskRootId: rootId });
+        await page.setViewportSize({ width, height: 844 });
+        await page.emulateMedia({ colorScheme });
+        await openRoom(page, base, fixture.owner.token, roomId);
+        const bar = page.locator(`.task-bar[data-task-root="${rootId}"]`);
+        await expect(bar.locator('.task-bar-count')).toHaveText('3 消息');
+        await expect(bar.getByText('3 消息', { exact: true })).toHaveCount(1);
+        await expandDock(page);
+        const dockItem = itemLocator(page, rootId);
+        await expect(dockItem.locator('.task-dock-meta')).toHaveText(/^3 条消息 · 2 个 Agent · (刚刚|\d+ 分钟前)$/u);
+        await expect(dockItem.locator('.task-dock-meta')).toHaveCount(1);
+        await dockItem.locator('.task-dock-item-trigger').click();
+        const preview = page.locator(`#task-preview-${rootId}`);
+        await expect(preview.locator('.task-preview-meta')).toHaveText('3 条消息 · 2 个 Agent 参与');
+        await expect(preview.getByText('3 条消息 · 2 个 Agent 参与', { exact: true })).toHaveCount(1);
+        await expect(preview.locator('.task-preview-section')).toHaveText('最近回复');
+        await expect(preview.locator('.task-preview-all')).toHaveText('查看全部 3 条消息');
+        await expect(preview.locator('.task-preview-time')).toHaveText(/^(刚刚|\d+ 分钟前)$/u);
+        await expect(preview.locator('.task-preview-recent-time')).toHaveText([/^(刚刚|\d+ 分钟前)$/u, /^(刚刚|\d+ 分钟前)$/u]);
+        await expect(preview.locator('.task-preview-sender')).toHaveText('统一 Task 细节');
+        await expect(preview.locator('.task-preview-recent-text').first()).toHaveCSS('-webkit-line-clamp', '2');
+        await expect(preview.locator('.task-preview-recent-sender').last()).toHaveCSS('white-space', 'nowrap');
+        await expectTaskDetailStyle(page, width, colorScheme);
+        await page.screenshot({ path: `/tmp/task-detail-data-${width}-${colorScheme}.png` });
+      });
       test(`Lenso Task 长内容 ${width}/${colorScheme}：摘要、列表、预览、追踪与完成无横向滚动`, async ({ page }, testInfo) => {
         const base = await baseUrl();
         const fixture = await setupTaskRoom(base, `layout-${width}-${colorScheme}`, { roots: 0 });
@@ -293,7 +341,13 @@ test.describe('浮动 Task dock', () => {
         await openRoom(page, base, fixture.owner.token, fixture.roomId);
         const toggle = page.locator('#task-dock-toggle');
         await expect(toggle).toHaveAttribute('data-lenso-slot', 'button');
-        expect((await toggle.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+        await expect(toggle).toHaveCSS('height', '28px');
+        if (width === 390) {
+          expect(await toggle.evaluate((node) => {
+            const css = getComputedStyle(node, '::after');
+            return node.getBoundingClientRect().height - parseFloat(css.top) - parseFloat(css.bottom);
+          })).toBeGreaterThanOrEqual(44);
+        }
         await expect(page.locator('#task-dock-count [data-lenso-slot="badge"]')).toHaveText('1');
         const bar = page.locator(`.task-bar[data-task-root="${rootId}"]`);
         await expectNoHorizontalOverflow(bar);
@@ -306,13 +360,14 @@ test.describe('浮动 Task dock', () => {
         await expect(panel.locator('[data-lenso-slot="card"]').first()).toBeVisible();
         await expect(panel.locator('[data-lenso-slot="toolbar"]')).toBeVisible();
         const item = itemLocator(page, rootId);
-        await expect(item.locator('[data-lenso-slot="card"]')).toBeVisible();
-        await expect(item.locator('[data-task-status="open"] [data-lenso-slot="badge"]')).toHaveText('Task');
+        await expect(item.locator('[data-task-status="open"] [data-lenso-slot="badge"]')).toHaveText('进行中');
         await expectNoHorizontalOverflow(panel);
         await page.screenshot({ path: testInfo.outputPath(`task-${width}-${colorScheme}.png`) });
         await item.locator('.task-dock-item-trigger').click();
         const preview = page.locator(`#task-preview-${rootId}`);
         await expect(preview).toContainText('github.com');
+        await expectTaskDetailStyle(page, width, colorScheme);
+        await page.screenshot({ path: `/tmp/task-detail-after-${width}-${colorScheme}.png` });
         await expectNoHorizontalOverflow(preview);
         await page.keyboard.press('Escape');
         await item.locator('.task-dock-complete').click();
@@ -371,7 +426,7 @@ test.describe('浮动 Task dock', () => {
             preview.rect.left + preview.rect.width / 2,
             preview.rect.top + preview.rect.height / 2,
           );
-          const item = document.querySelector<HTMLElement>('.task-dock-item [data-lenso-slot="card"]');
+          const item = document.querySelector<HTMLElement>('.task-dock-item');
           const trigger = item?.querySelector<HTMLElement>('.task-dock-item-trigger')?.getBoundingClientRect();
           const actions = item?.querySelector<HTMLElement>('.task-dock-item-actions')?.getBoundingClientRect();
           const itemBox = item?.getBoundingClientRect();
@@ -436,7 +491,7 @@ test.describe('浮动 Task dock', () => {
         expect(geometry.triggerActions?.separated).toBe(true);
         expect(geometry.triggerActions?.actionsInside).toBe(true);
         expect(geometry.triggerActions?.triggerWidth).toBeGreaterThanOrEqual(120);
-        expect(geometry.triggerActions?.buttonHeights.every((height) => height >= 44)).toBe(true);
+        expect(geometry.triggerActions?.buttonHeights.every((height) => height >= (width < 760 ? 44 : 32))).toBe(true);
         await expectNoHorizontalOverflow(page.locator('#task-dock-panel'));
         await page.screenshot({ path: testInfo.outputPath(`dock-opaque-${width}-${colorScheme}.png`) });
 
@@ -504,8 +559,7 @@ test.describe('浮动 Task dock', () => {
 
     const oldItem = itemLocator(page, oldRoot);
     await expect(oldItem).toContainText('待办');
-    await expect(oldItem).toContainText('1 Agent');
-    await expect(oldItem).toContainText('5 消息');
+    await expect(oldItem.locator('.task-dock-meta')).toHaveText(/^5 条消息 · 1 个 Agent · /u);
 
     // 再次点击收起：计数常驻，列表隐藏；点击重新展开。
     await page.locator('#task-dock-toggle').click();
@@ -953,7 +1007,7 @@ test.describe('浮动 Task dock', () => {
 
     // 重新加载第二页即可看到新回复计数。
     await page.locator('#task-dock-load-more').click();
-    await expect(itemLocator(page, targetRoot)).toContainText('2 消息', {
+    await expect(itemLocator(page, targetRoot)).toContainText('2 条消息', {
       timeout: 10_000,
     });
 
@@ -1429,7 +1483,7 @@ test.describe('浮动 Task dock', () => {
     await expect(page.locator('#task-dock')).not.toContainText('迟到的 A Task 不得回填');
   });
 
-  test('多 Agent 参与用 AvatarGroup 展示 20px 头像与 +N', async ({ page }) => {
+  test('多 Agent 参与：摘要 24px AvatarGroup 与 +N，列表只保留单行数据', async ({ page }) => {
     const base = await baseUrl();
     const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
     const owner = await registerHuman(base, `Multi Owner ${suffix}`);
@@ -1462,14 +1516,13 @@ test.describe('浮动 Task dock', () => {
       ),
       rowHeight: Math.round(element.getBoundingClientRect().height),
     }));
-    expect(barLayout.heights).toEqual([20, 20, 20]);
+    expect(barLayout.heights).toEqual([24, 24, 24]);
     expect(barLayout.rowHeight).toBeGreaterThanOrEqual(44);
 
     await expandDock(page);
     const item = itemLocator(page, rootId);
-    await expect(item.locator('.task-dock-avatars [data-lenso-slot="avatar-group"]')).toHaveCount(1);
-    await expect(item.locator('.task-dock-avatars [data-lenso-slot="avatar"]')).toHaveCount(3);
-    await expect(item.locator('.task-dock-avatars .task-bar-more')).toHaveText('+1');
+    await expect(item.locator('.task-dock-avatars')).toHaveCount(0);
+    await expect(item.locator('.task-dock-meta')).toHaveText(/^5 条消息 · 4 个 Agent · /u);
   });
 });
 
@@ -1754,8 +1807,17 @@ test.describe('mobile Task dock', () => {
     await expect(page.locator('#task-dock-panel')).toBeHidden();
     const collapsedDock = await page.locator('#task-dock').boundingBox();
     expect(collapsedDock?.width ?? 0).toBeLessThanOrEqual(390);
-    const toggleBox = await page.locator('#task-dock-toggle').boundingBox();
-    expect(toggleBox?.height ?? 0).toBeGreaterThanOrEqual(44);
+    const toggle = page.locator('#task-dock-toggle');
+    await expect(toggle).toHaveCSS('height', '28px');
+    expect(await toggle.evaluate((node) => {
+      const css = getComputedStyle(node, '::after');
+      return node.getBoundingClientRect().height - parseFloat(css.top) - parseFloat(css.bottom);
+    })).toBeGreaterThanOrEqual(44);
+    // 验证 chip 外沿仍可点按，而非只检查伪元素声明。
+    const box = (await toggle.boundingBox())!;
+    await page.touchscreen.tap(box.x + box.width / 2, box.y - 6);
+    await expect(page.locator('#task-dock-panel')).toBeVisible();
+    await toggle.tap();
 
     await expandDock(page);
     const dockBox = await page.locator('#task-dock').boundingBox();

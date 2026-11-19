@@ -1,4 +1,4 @@
-import { Button } from '../../app/lenso-controls';
+import { Button, Toolbar } from '../../app/lenso-controls';
 import {
   LensoBackendProvider,
   useBackendLease,
@@ -19,11 +19,7 @@ import {
   type RefObject,
 } from 'react';
 
-function timeLabel(value: string): string {
-  const timestamp = Number(value);
-  if (!Number.isFinite(timestamp)) return '';
-  return new Date(timestamp).toLocaleString();
-}
+import { taskTimeLabel } from './task-format';
 
 /** Lenso 升级会替换触发按钮节点；记录稳定选择器供关闭时找回同一入口。 */
 function restoreSelector(element: HTMLElement): string | null {
@@ -103,7 +99,7 @@ function TraceContent({
           </span>
         ))}
       </div>
-      <div className="task-trace-toolbar">
+      <Toolbar data-task-trace-toolbar="" aria-label="Task 操作">
         <Button
           id="task-trace-refresh"
           className="link-btn"
@@ -118,7 +114,7 @@ function TraceContent({
         <span id="task-trace-status" role="status" aria-live="polite">
           {trace.status}
         </span>
-      </div>
+      </Toolbar>
       <Button
         id="task-trace-older"
         className="task-trace-page"
@@ -152,7 +148,7 @@ function TraceContent({
             >
               <span className="task-trace-item-head">
                 <span className="task-trace-sender">{item.sender_name || item.sender_id}</span>
-                <span className="task-trace-time">{timeLabel(item.created_at)}</span>
+                <span className="task-trace-time">{taskTimeLabel(item.created_at)}</span>
                 <span className={`task-trace-role task-trace-role-${item.role}`}>
                   {item.role === 'root' ? '起点' : item.role === 'reference' ? '引用' : '处理'}
                 </span>
