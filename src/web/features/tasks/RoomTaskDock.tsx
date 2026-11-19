@@ -1,7 +1,8 @@
 import { Tooltip } from '../../app/lenso-tooltip';
 import {
-  Badge, Button, Card, EmptyState, LENSO_BADGE_FILL, ProgressBar, Surface, Toolbar,
+  Badge, Button, Card, EmptyState, LENSO_BADGE_FILL, ProgressBar, Separator, Surface, Toolbar,
 } from '../../app/lenso-controls';
+import { InlineCandidateList } from '../../app/lenso-candidate-list';
 import {
   useEffect,
   useRef,
@@ -264,7 +265,7 @@ export function RoomTaskDock({
         data-state={expanded ? 'expanded' : 'collapsed'}
         onKeyDown={onSectionKeyDown}
       >
-        <Surface style={{ width: 'fit-content', maxWidth: '100%', padding: 0, borderRadius: 'var(--app-radius-surface)' }}>
+        <Surface data-task-surface="entry">
         <div className="task-dock-head">
           <Tooltip as={Button}
             ref={toggleRef}
@@ -304,11 +305,12 @@ export function RoomTaskDock({
           hidden={!expanded}
           aria-busy={tasks.loading || tasks.loadingMore ? 'true' : undefined}
         >
-          <Card style={{ display: 'flex', flexDirection: 'column', flex: '1 1 auto', minHeight: 0, minWidth: 0, padding: 0, background: 'var(--lenso-background-primary)', overflow: 'hidden' }}>
-          <Toolbar aria-label="未完成 Task" style={{ display: 'flex', flex: '0 0 auto', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', gap: 8, background: 'transparent' }}>
+          <Card data-task-surface="panel">
+          <Toolbar aria-label="未完成 Task" data-task-toolbar="">
             <span className="task-dock-title">Task</span>
-            <Badge placement="" style={LENSO_BADGE_FILL}>{countLabel}</Badge>
+            <Badge placement="" data-task-count="" style={LENSO_BADGE_FILL}>{countLabel}</Badge>
           </Toolbar>
+          <Separator data-task-divider="" />
           {tasks.loading || tasks.loadingMore ? (
             <ProgressBar
               aria-label="正在加载 Task"
@@ -349,7 +351,7 @@ export function RoomTaskDock({
             </EmptyState>
           ) : null}
           {tasks.items.length > 0 ? (
-            <ul className="task-dock-list" aria-label="未完成 Task 列表">
+            <InlineCandidateList className="task-dock-list" data-task-list="" aria-label="未完成 Task 列表">
               {tasks.items.map((item) => (
                 <TaskListItem
                   key={item.root_message_id}
@@ -374,7 +376,7 @@ export function RoomTaskDock({
                   onComplete={openComplete}
                 />
               ))}
-            </ul>
+            </InlineCandidateList>
           ) : null}
           {tasks.loadMoreError ? (
             <p id="task-dock-load-more-error" className="task-dock-foot-status" role="alert">

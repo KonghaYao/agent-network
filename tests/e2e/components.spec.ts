@@ -43,6 +43,11 @@ test.describe.serial('SPA 组件库与状态管理', () => {
     await page.locator('#task-dock-toggle').click();
     const status = page.locator('#task-dock-panel [data-task-status="open"]');
     await expect(status).toHaveCSS('color', await semanticColor(page, '--lenso-status-info-text', 'color'));
+    await expect(page.locator('.task-dock-meta')).toHaveCount(0);
+    await expect(page.locator('.task-dock-preview')).toHaveCSS('-webkit-line-clamp', '2');
+    await expect(page.locator('.task-dock-complete')).toHaveCSS('height', '44px');
+    await expect(page.locator('.task-dock-complete')).toHaveCSS('border-radius', '8px');
+    await expect(page.locator('.task-dock-item [data-lenso-slot="card"]')).toHaveCount(0);
     await expectNoHorizontalOverflow(page.locator('#task-dock-panel'));
     await page.locator('.task-dock-complete').click();
     await expectNoHorizontalOverflow(page.locator('#task-complete-dialog'));

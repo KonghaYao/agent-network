@@ -1,4 +1,4 @@
-import { Button } from '../../app/lenso-controls';
+import { Button, Separator } from '../../app/lenso-controls';
 import * as AlertDialogPrimitive from '../overlays/AlertDialog';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 
@@ -115,6 +115,7 @@ export function TaskCompleteDialog({
               {error}
             </p>
           ) : null}
+          <Separator data-task-divider="" />
           <div className="row modal-actions">
             <AlertDialogPrimitive.Cancel asChild>
               <Button
