@@ -1,5 +1,5 @@
 import { Tooltip } from '../../app/lenso-tooltip';
-import { Button } from '../../app/lenso-controls';
+import { Alert, Button } from '../../app/lenso-controls';
 import { useState } from 'react';
 import { Popover } from '../../app/lenso-popover';
 
@@ -10,15 +10,23 @@ import { Popover } from '../../app/lenso-popover';
  * 仍然可见，不依赖手写的 flip/clamp 计算。
  */
 export function AnnouncementPopover({
+  roomId,
   announcement,
   canEdit,
   onEdit,
 }: {
+  roomId: string;
   announcement: string;
   canEdit: boolean;
   onEdit: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [openRoomId, setOpenRoomId] = useState(roomId);
+  // 浏览器后退复用同一 ChatPage 实例，浮层不能把上一个房间的展开状态带给新房间。
+  if (openRoomId !== roomId) {
+    setOpenRoomId(roomId);
+    setOpen(false);
+  }
   return (
     <Popover open={open} onOpenChange={setOpen}
       id="room-announcement-popover"
@@ -39,7 +47,14 @@ export function AnnouncementPopover({
         </Tooltip>
       }
     >
-      <p className="spa-popover-text">{announcement}</p>
+      <div className="spa-popover-text">
+        <Alert id="room-announcement" className="room-announcement"
+          role="note" aria-live="polite" status="default"
+          style={{ width: 'auto', margin: 0, padding: 0, border: 0, background: 'transparent' }}
+        >
+          {announcement}
+        </Alert>
+      </div>
       <div className="row">
         {canEdit ? (
           <Button id="room-announcement-edit" type="button" className="primary" onClick={() => {

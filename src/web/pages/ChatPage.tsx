@@ -645,6 +645,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                     {identity && mobile ? <AccountMenu me={identity} /> : null}
                     {room.announcement ? (
                       <AnnouncementPopover
+                        roomId={room.room_id}
                         announcement={room.announcement}
                         canEdit={
                           !room.read_only && room.capabilities?.manage_announcement === true
@@ -696,18 +697,6 @@ export function ChatPage({ roomId }: ChatPageProps) {
                   </div>
                 ) : null}
               </header>
-              {room?.announcement ? (
-                <Alert
-                  id="room-announcement"
-                  className="room-announcement"
-                  role="note"
-                  aria-live="polite"
-                  status="default"
-                  style={{ width: 'auto', margin: '8px 16px 0', padding: '8px 12px', borderRadius: 6 }}
-                >
-                  {room.announcement}
-                </Alert>
-              ) : null}
               {room?.read_only ? (
                 <Alert
                   id="room-archive-banner"

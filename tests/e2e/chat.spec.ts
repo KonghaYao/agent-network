@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import { semanticColor } from './fixtures/semantic-colors';
-import { expectNoHorizontalOverflow, LONG_TASK_URL } from './fixtures/task-layout';
+import { expectNoHorizontalOverflow, expectTaskAvatarsContained, LONG_TASK_URL } from './fixtures/task-layout';
 
 async function baseUrl(): Promise<string> {
   if (process.env.E2E_BASE_URL) return process.env.E2E_BASE_URL;
@@ -452,6 +452,7 @@ test.describe('SPA Chat', () => {
         await expectNoHorizontalOverflow(message.locator('.bubble'));
         const bar = message.locator('.task-bar');
         await expectNoHorizontalOverflow(bar);
+        await expectTaskAvatarsContained(bar);
         expect((await bar.boundingBox())!.height).toBeGreaterThanOrEqual(44);
         await bar.click();
         await expectNoHorizontalOverflow(page.locator('#task-trace-drawer'));

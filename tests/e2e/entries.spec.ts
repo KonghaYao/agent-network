@@ -1073,6 +1073,12 @@ test.describe('SPA 剩余入口', () => {
     await root.getByRole('button', { name: '消息操作' }).click();
     await page.locator('#message-action-task').click();
     await expect(root.locator('.task-bar')).toBeVisible();
+    await page.locator('#task-dock-toggle').click();
+    await expect(page.locator('.task-dock-meta')).toHaveCount(0);
+    await expect(page.locator('.task-dock-preview')).toHaveCSS('-webkit-line-clamp', '2');
+    await expect(page.locator('.task-dock-complete')).toHaveCSS('height', '32px');
+    await expect(page.locator('.task-dock-complete')).toHaveCSS('border-radius', '8px');
+    await page.locator('#task-dock-toggle').click();
 
     await page.locator('#message-search-button').click();
     await expect(page.locator('#message-search-dialog')).toBeVisible();

@@ -27,7 +27,7 @@ function taskAvatarStyle(name: string): CSSProperties {
     borderRadius: '50%',
     background: avatarColor(name),
     color: '#fff',
-    fontSize: 9,
+    fontSize: 11,
     fontWeight: 500,
     boxShadow: '0 0 0 2px var(--wx-panel)',
   };
@@ -92,7 +92,7 @@ export function TaskSummaryBar({
     (item.delivery_states.cancelled ?? 0);
   return (
     <div className="msg-task-bar-slot">
-      <Surface style={{ minWidth: 0, maxWidth: '100%', padding: 0, borderRadius: 'var(--app-radius-surface)' }}>
+      <Surface data-task-surface="summary">
       <Button
         type="button"
         className="task-bar"

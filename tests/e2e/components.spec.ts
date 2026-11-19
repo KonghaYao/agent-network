@@ -43,6 +43,11 @@ test.describe.serial('SPA 组件库与状态管理', () => {
     await page.locator('#task-dock-toggle').click();
     const status = page.locator('#task-dock-panel [data-task-status="open"]');
     await expect(status).toHaveCSS('color', await semanticColor(page, '--lenso-status-info-text', 'color'));
+    await expect(page.locator('.task-dock-meta')).toHaveCount(0);
+    await expect(page.locator('.task-dock-preview')).toHaveCSS('-webkit-line-clamp', '2');
+    await expect(page.locator('.task-dock-complete')).toHaveCSS('height', '44px');
+    await expect(page.locator('.task-dock-complete')).toHaveCSS('border-radius', '8px');
+    await expect(page.locator('.task-dock-item [data-lenso-slot="card"]')).toHaveCount(0);
     await expectNoHorizontalOverflow(page.locator('#task-dock-panel'));
     await page.locator('.task-dock-complete').click();
     await expectNoHorizontalOverflow(page.locator('#task-complete-dialog'));
@@ -659,7 +664,7 @@ test.describe.serial('SPA 组件库与状态管理', () => {
     await expect(page.locator('#members-current')).toContainText(nameB);
     await expect(page.locator('#members-error')).toHaveCount(0);
 
-    // 公告：保存后头部 popover 可见。
+    // 公告：保存后默认收起，只通过头部按钮查看。
     await page.keyboard.press('Escape');
     await page.locator('#room-menu-toggle').click();
     await page.locator('#room-menu-announcement').click();
@@ -667,6 +672,10 @@ test.describe.serial('SPA 组件库与状态管理', () => {
     await page.fill('#announcement-input', '组件验收公告');
     await page.locator('#announcement-save').click();
     await expect(page.locator('#announcement-modal')).toBeHidden();
+    await expect(page.locator('#room-announcement')).toHaveCount(0);
+    await expect(page.locator('#room-announcement-popover')).toHaveCount(0);
+    await expect(page.locator('#room-announcement-info')).toHaveAttribute('aria-expanded', 'false');
+    await page.locator('#room-announcement-info').click();
     await expect(page.locator('#room-announcement')).toContainText('组件验收公告');
     await expect(page.locator('#room-announcement')).toHaveAttribute('role', 'note');
     await expect(page.locator('#room-announcement')).toHaveAttribute('aria-live', 'polite');
@@ -683,9 +692,11 @@ test.describe.serial('SPA 组件库与状态管理', () => {
     expect(await announcementDescription.evaluate((node) => getComputedStyle(node).color)).toBe(
       await semanticColor(page, '--wx-text', 'color'),
     );
-    await page.locator('#room-announcement-info').click();
     await expect(page.locator('#room-announcement-popover')).toContainText('组件验收公告');
     await page.keyboard.press('Escape');
+    await expect(page.locator('#room-announcement-popover')).toHaveCount(0);
+    await expect(page.locator('#room-announcement')).toHaveCount(0);
+    await expect(page.locator('#room-announcement-info')).toBeFocused();
 
     // 群改名。
     await page.locator('#room-menu-toggle').click();
