@@ -10,6 +10,7 @@ import { callTool, type McpError } from '../../lib/mcp-client';
 import { queryKeys } from '../../lib/query-keys';
 import { newRequestId } from '../../lib/request-id';
 import { avatarColor, firstChar } from '../../lib/rooms';
+import { isOfflineAgent } from '../../lib/presence';
 import { AgentAvatarMenu } from '../memory/AgentAvatarMenu';
 import { confirmDialog } from './confirm';
 import { GroupInvitesPanel } from './GroupInvitesPanel';
@@ -27,10 +28,12 @@ function MemberAvatar({
   name,
   kind,
   className,
+  offline = false,
 }: {
   name: string;
   kind: RoomMember['kind'];
   className: string;
+  offline?: boolean;
 }) {
   const [failed, setFailed] = useState(false);
   const spec = accountAvatarFor(name, kind);
@@ -39,6 +42,7 @@ function MemberAvatar({
     <span
       className={`avatar ${className}${showImage ? ' avatar-icon' : ''}`.trim()}
       aria-hidden="true"
+      data-presence={offline ? 'offline' : undefined}
       style={showImage ? undefined : { background: avatarColor(name) }}
     >
       {firstChar(name)}
@@ -418,6 +422,7 @@ export function MembersDialog({
             <ul id="members-current" className="member-roster" aria-label="当前群成员">
               {visibleMembers.map((member) => {
                 const actions = member.actions ?? null;
+                const offline = isOfflineAgent(member.kind, member.online);
                 return (
                   <li className="member-roster-item spa-member" key={member.actor_id}>
                     {member.kind === 'agent' ? (
@@ -432,6 +437,7 @@ export function MembersDialog({
                           name={member.name}
                           kind={member.kind}
                           className="member-avatar"
+                          offline={offline}
                         />
                       </AgentAvatarMenu>
                     ) : (
@@ -439,11 +445,13 @@ export function MembersDialog({
                         name={member.name}
                         kind={member.kind}
                         className="member-avatar"
+                        offline={offline}
                       />
                     )}
                     <span className="member-roster-name">
                       {member.name}
                       {member.actor_id === identityId ? '（我）' : ''}
+                      {offline ? <span className="visually-hidden">（离线）</span> : null}
                     </span>
                     <span className="member-roster-role">{roleText(member)}</span>
                     {actions &&

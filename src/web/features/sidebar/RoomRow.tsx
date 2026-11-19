@@ -3,6 +3,7 @@ import { Avatar, LENSO_AVATAR_FILL } from '../../app/lenso-controls';
 
 import { Link } from '../../app/router';
 import { groupColorFor, groupColorStyle } from '../../lib/group-colors';
+import { isOfflineAgent } from '../../lib/presence';
 import {
   avatarColor,
   firstChar,
@@ -36,7 +37,7 @@ export function RoomRow({
 }) {
   const preference = roomPreference(preferences, room.room_id);
   const unread = isUnread(room);
-  const offline = room.peer_kind === 'agent' && room.peer_online === false;
+  const offline = isOfflineAgent(room.peer_kind, room.peer_online);
   const preferenceLabel = [preference.pinned ? '置顶' : '', preference.muted ? '免打扰' : '']
     .filter(Boolean)
     .join(' · ');
@@ -56,7 +57,7 @@ export function RoomRow({
             {room.kind === 'group' ? (
               <GroupAvatar name={room.name} roomId={room.room_id} />
             ) : (
-              <RoomAvatar name={room.name} />
+              <RoomAvatar name={room.name} offline={offline} />
             )}
             {offline ? (
               <Tooltip as="span"
@@ -101,11 +102,12 @@ export function RoomRow({
   );
 }
 
-function RoomAvatar({ name }: { name: string }) {
+function RoomAvatar({ name, offline }: { name: string; offline: boolean }) {
   return (
     <span
       className="avatar"
       aria-hidden="true"
+      data-presence={offline ? 'offline' : undefined}
       style={{ background: avatarColor(name) }}
     >
       <Avatar style={LENSO_AVATAR_FILL}>{firstChar(name)}</Avatar>
