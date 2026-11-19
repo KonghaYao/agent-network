@@ -281,7 +281,8 @@ test.describe('SPA 右栏与剩余入口', () => {
     await expect(item).toBeVisible({ timeout: 15_000 });
 
     await item.getByRole('button', { name: '预览', exact: true }).click();
-    await expect(page.locator('#file-preview')).toBeVisible();
+    await expect(page.locator('#file-preview-pane')).toBeVisible();
+    await expect(page.locator('#file-preview, #file-preview-dialog, [role="dialog"]')).toHaveCount(0);
     const viewer = page.locator('#file-preview-body .file-preview-md-viewer');
     await expect(viewer.locator('h1')).toHaveText('标题一', { timeout: 15_000 });
     await expect(viewer.locator('h2')).toHaveText('标题二');

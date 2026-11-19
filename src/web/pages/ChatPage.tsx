@@ -44,7 +44,7 @@ import {
   type HistoryMessage,
 } from '../lib/chat';
 import { groupColorFor, groupColorStyle } from '../lib/group-colors';
-import type { RoomFileItem } from '../lib/files-ui';
+import { filePreviewKind, type RoomFileItem } from '../lib/files-ui';
 import { callTool, type McpError } from '../lib/mcp-client';
 import { queryKeys } from '../lib/query-keys';
 import { newRequestId } from '../lib/request-id';
@@ -154,6 +154,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [forwardItem, setForwardItem] = useState<HistoryMessage | null>(null);
   const [previewFile, setPreviewFile] = useState<RoomFileItem | null>(null);
+  const [panePreviewFile, setPanePreviewFile] = useState<RoomFileItem | null>(null);
   // 群成员弹窗从搜索右侧的常驻入口打开；关闭时必须显式回到该按钮。
   const membersButtonRef = useRef<HTMLButtonElement>(null);
   // 会话菜单项打开的弹窗（记忆、公告等）关闭后回到菜单入口。
@@ -438,6 +439,12 @@ export function ChatPage({ roomId }: ChatPageProps) {
   const loadingShell = !ready && chat.status !== 'error';
   const filesRequested = desktop ? filesDesktopOpen : overlayPane === 'files';
   const filesVisible = ready && filesRequested;
+  // 用户是否仍希望文件栏打开：断点只改变呈现方式，不改变这个意图。
+  // 桌面缩窄到平板/移动后 overlayPane 为空，但 filesDesktopOpen 仍保留打开状态；
+  // 主动关闭文件栏/toggle 监控时该值会同步为 false。
+  const filesIntentOpen = desktop
+    ? filesDesktopOpen
+    : overlayPane === 'files' || (overlayPane === null && filesDesktopOpen);
   // 房间读取失败时不再显示骨架，避免错误页被永久占位；就绪前仍按最终宽度占位。
   const filesShellVisible = filesRequested && chat.status !== 'error';
   const monitorVisible =
@@ -448,6 +455,8 @@ export function ChatPage({ roomId }: ChatPageProps) {
   useEffect(() => {
     setOverlayPane(null);
     setOverlay(null);
+    setPreviewFile(null);
+    setPanePreviewFile(null);
   }, [roomId]);
 
   useEffect(() => {
@@ -487,8 +496,38 @@ export function ChatPage({ roomId }: ChatPageProps) {
     else if (monitorVisible) document.getElementById('monitor-close')?.focus();
   }, [filesVisible, mobile, monitorVisible]);
 
+  const openFilePreview = useCallback((item: RoomFileItem) => {
+    const kind = filePreviewKind(item);
+    if (desktop && (kind === 'html' || kind === 'markdown')) {
+      setPreviewFile(null);
+      setPanePreviewFile(item);
+      setMonitorDesktopOpen(false);
+      writePreference(MONITOR_OPEN_KEY, false);
+      setFilesDesktopOpen(true);
+      writePreference(FILES_OPEN_KEY, true);
+    } else {
+      setPanePreviewFile(null);
+      setPreviewFile(item);
+    }
+  }, [desktop]);
+
+  // 视口离开内联右栏断点时，将正在查看的文档移交给原有弹窗。
+  // 不能直接看渲染后的 filesVisible：断点收窄会让它变为 false，但用户并没有关闭文件栏。
+  // 只有用户意图也关闭文件栏时才不移交，避免隐藏文件栏后的残留预览凭空弹出 modal。
+  useEffect(() => {
+    if (desktop || !filesIntentOpen || !panePreviewFile) return;
+    setPreviewFile(panePreviewFile);
+    setPanePreviewFile(null);
+  }, [desktop, filesIntentOpen, panePreviewFile]);
+
+  // 用户主动隐藏文件栏时内联预览不应继续存在；断点导致的不可见不算隐藏。
+  useEffect(() => {
+    if (!filesIntentOpen) setPanePreviewFile(null);
+  }, [filesIntentOpen]);
+
   const toggleFiles = useCallback(() => {
     if (!ready) return;
+    setPanePreviewFile(null);
     if (desktop) {
       setMonitorDesktopOpen(false);
       writePreference(MONITOR_OPEN_KEY, false);
@@ -504,6 +543,8 @@ export function ChatPage({ roomId }: ChatPageProps) {
 
   const toggleMonitor = useCallback(() => {
     if (!ready) return;
+    // 桌面监控与文件共用右栏；移动/平板切换 overlay 也会隐藏文件栏。
+    setPanePreviewFile(null);
     if (desktop) {
       setFilesDesktopOpen(false);
       writePreference(FILES_OPEN_KEY, false);
@@ -518,6 +559,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
   }, [desktop, ready]);
 
   const closeFiles = useCallback(() => {
+    setPanePreviewFile(null);
     if (desktop) {
       setFilesDesktopOpen(false);
       writePreference(FILES_OPEN_KEY, false);
@@ -778,7 +820,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                     onMarkRead={chat.markRead}
                     onToggleTask={(item) => void onToggleTask(item)}
                     onOpenTask={openTrace}
-                    onOpenFile={setPreviewFile}
+                    onOpenFile={openFilePreview}
                     onRecall={(item) => void onRecall(item)}
                     onForward={setForwardItem}
                   />
@@ -839,7 +881,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                       onCancelReply={() => setReply(null)}
                       onSend={onSend}
                       onStatus={onStatus}
-                      onOpenFile={setPreviewFile}
+                      onOpenFile={openFilePreview}
                       registerFileDrop={registerFileDrop}
                     />
                   ) : null}
@@ -855,6 +897,9 @@ export function ChatPage({ roomId }: ChatPageProps) {
                     readOnly={room?.read_only === true}
                     open={filesVisible}
                     onClose={closeFiles}
+                    preview={desktop ? panePreviewFile : null}
+                    onOpenPreview={openFilePreview}
+                    onBack={() => setPanePreviewFile(null)}
                     files={files}
                   />
                 ) : (

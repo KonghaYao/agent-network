@@ -329,9 +329,16 @@ test.describe('file preview scroll', () => {
     }));
     expect(preOverflow.scrollHeight).toBeLessThanOrEqual(preOverflow.clientHeight + 1);
     await expectPreviewBodyScrolls(page);
-
+    await expect(page.locator('#file-preview-pane')).toBeVisible();
+    await expect(page.locator('#file-preview, #file-preview-dialog, [role="dialog"]')).toHaveCount(0);
+    await page.locator('#file-preview-back').click();
+    await expect(page.locator('#files-list')).toBeVisible();
+    await expect(item).toHaveAttribute('data-selected', 'true');
+    await item.locator('.file-row').click();
+    await expect(viewer.locator('h1')).toHaveText('长文档滚动');
     await page.locator('#file-preview-close').click();
-    await expect(page.locator('#file-preview')).toBeHidden();
+    await expect(page.locator('#file-preview-pane')).toHaveCount(0);
+    await expect(page.locator('#files-list')).toBeVisible();
   });
 
   test('files pane scrolls long plain text in the body', async ({ page }) => {
@@ -390,9 +397,11 @@ test.describe('file preview scroll', () => {
     await expect(viewer).toContainText('第 120 节', { timeout: 15_000 });
     await expect(page.locator('#file-preview-title')).toHaveText(fileName);
     await expectPreviewBodyScrolls(page);
-
+    await expect(page.locator('#files-pane #file-preview-pane')).toBeVisible();
+    await expect(page.locator('#file-preview, #file-preview-dialog, [role="dialog"]')).toHaveCount(0);
     await page.keyboard.press('Escape');
-    await expect(page.locator('#file-preview')).toHaveCount(0, { timeout: 10_000 });
+    await expect(page.locator('#file-preview, #file-preview-pane')).toHaveCount(0, { timeout: 10_000 });
+    await expect(page.locator('#files-list')).toBeVisible();
   });
 
   test('image and PDF previews keep their fitted layout', async ({ page }) => {
@@ -472,6 +481,8 @@ test.describe('file preview scroll', () => {
       await expect(viewer.locator('h1')).toHaveText('移动端长文档', { timeout: 15_000 });
       await expect(viewer).toContainText('第 120 节', { timeout: 15_000 });
 
+      await expect(page.locator('#file-preview[role="dialog"]')).toBeVisible();
+      await expect(page.locator('#file-preview-pane')).toHaveCount(0);
       const body = page.locator('#file-preview-body');
       const geometry = await previewGeometry(page);
       expect(geometry.scrollHeight).toBeGreaterThan(geometry.clientHeight + 100);
