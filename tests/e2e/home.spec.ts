@@ -11,10 +11,20 @@ import { semanticColor } from './fixtures/semantic-colors';
 interface SidebarAccountGeometry {
   sidebar: { left: number; right: number; width: number; scrollWidth: number; clientWidth: number };
   brandColor: string;
-  account: { left: number; right: number; width: number; scrollWidth: number; clientWidth: number };
+  account: {
+    left: number;
+    right: number;
+    width: number;
+    height: number;
+    scrollWidth: number;
+    clientWidth: number;
+  };
+  avatar: { width: number; height: number };
+  nameToActions: number;
   actions: {
     left: number;
     right: number;
+    top: number;
     width: number;
     height: number;
     scrollWidth: number;
@@ -41,6 +51,7 @@ async function readSidebarAccountGeometry(page: Page): Promise<SidebarAccountGeo
       return {
         left: rect.left,
         right: rect.right,
+        top: rect.top,
         width: rect.width,
         height: rect.height,
         scrollWidth: element.scrollWidth,
@@ -61,11 +72,16 @@ async function readSidebarAccountGeometry(page: Page): Promise<SidebarAccountGeo
     );
     const brand = document.querySelector<HTMLElement>('.brand-row h1');
     if (!brand) throw new Error('缺少品牌字标');
+    const name = document.querySelector<HTMLElement>('#account-name');
+    if (!name) throw new Error('缺少账号名称');
+    const actions = read('.account-actions');
     return {
       sidebar: read('.sidebar'),
       brandColor: getComputedStyle(brand).color,
       account: read('.account'),
-      actions: read('.account-actions'),
+      avatar: read('.account-avatar'),
+      nameToActions: actions.top - name.getBoundingClientRect().bottom,
+      actions,
       buttons,
       actionRows: new Set(buttons.map((button) => Math.round(button.top))).size,
       docOverflow: document.documentElement.scrollWidth - window.innerWidth,
@@ -306,7 +322,12 @@ test.describe('SPA Home', () => {
 
   test('account block stays compact inside the sidebar at 240, 300 and 480', async ({ page }) => {
     await page.goto(`${base}/`);
-    for (const width of [240, 300, 480]) {
+    for (const { width, maxHeight } of [
+      // 69a4770 的三档用户块高度为 115/81/81px；收紧后写死目标上限。
+      { width: 240, maxHeight: 100 },
+      { width: 300, maxHeight: 62 },
+      { width: 480, maxHeight: 62 },
+    ]) {
       await page.evaluate((sidebarWidth) => {
         localStorage.setItem(
           'agent-network-ui-v1',
@@ -326,6 +347,14 @@ test.describe('SPA Home', () => {
 
       const geometry = await readSidebarAccountGeometry(page);
       expect(geometry.docOverflow, `sidebar ${width}`).toBeLessThanOrEqual(0);
+      expect(geometry.account.height, `用户块高度 @ ${width}`).toBeLessThanOrEqual(maxHeight);
+      // 名称行被 Lenso 的 36px min-height 撑高过，这里守住文本底到操作行顶的间距。
+      expect(geometry.nameToActions, `名字底到操作行顶 @ ${width}`).toBeGreaterThanOrEqual(0);
+      expect(geometry.nameToActions, `名字底到操作行顶 @ ${width}`).toBeLessThanOrEqual(4);
+      expect(geometry.avatar.width, `头像宽度 @ ${width}`).toBeGreaterThanOrEqual(32);
+      expect(geometry.avatar.width, `头像宽度 @ ${width}`).toBeLessThanOrEqual(36);
+      expect(geometry.avatar.height, `头像高度 @ ${width}`).toBeGreaterThanOrEqual(32);
+      expect(geometry.avatar.height, `头像高度 @ ${width}`).toBeLessThanOrEqual(36);
       expect(geometry.sidebar.scrollWidth, `sidebar ${width}`).toBeLessThanOrEqual(
         geometry.sidebar.clientWidth + 1,
       );
@@ -609,6 +638,24 @@ test.describe('SPA Home', () => {
       expect(geometry.actions.scrollWidth).toBeLessThanOrEqual(geometry.actions.clientWidth + 1);
       for (const button of geometry.buttons) {
         expect(button.height, button.id).toBeGreaterThanOrEqual(32);
+        expect(button.right, button.id).toBeLessThanOrEqual(geometry.sidebar.right + 0.5);
+      }
+    });
+  });
+
+  test.describe('mobile touch', () => {
+    test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+
+    test('account actions keep 44px touch targets', async ({ page }) => {
+      await page.goto(`${base}/`);
+      await expect(page.locator('.account')).toBeVisible();
+      const geometry = await readSidebarAccountGeometry(page);
+      expect(geometry.docOverflow).toBeLessThanOrEqual(0);
+      expect(geometry.nameToActions).toBeLessThanOrEqual(4);
+      expect(geometry.avatar.width).toBe(44);
+      expect(geometry.avatar.height).toBe(44);
+      for (const button of geometry.buttons) {
+        expect(button.height, button.id).toBeGreaterThanOrEqual(44);
         expect(button.right, button.id).toBeLessThanOrEqual(geometry.sidebar.right + 0.5);
       }
     });

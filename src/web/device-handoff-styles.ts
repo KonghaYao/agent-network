@@ -7,8 +7,8 @@
 
 /** 追加到应用页样式表；二维码保持白底，暗色模式下仍可扫描。 */
 export const DEVICE_HANDOFF_STYLE = `
-  .account { display: flex; align-items: center; gap: 10px; padding: 4px 4px 8px; }
-  .account-avatar { flex: 0 0 auto; width: 36px; height: 36px; border-radius: 50%;
+  .account { display: flex; align-items: center; gap: 10px; padding: 2px 4px 4px; }
+  .account-avatar { flex: 0 0 auto; width: 32px; height: 32px; border-radius: 50%;
     background: var(--lenso-tint); color: var(--lenso-label-on-tint); display: grid; place-items: center;
     font-size: 15px; font-weight: 500; }
   .account-main { flex: 1 1 auto; min-width: 0; }
@@ -17,8 +17,10 @@ export const DEVICE_HANDOFF_STYLE = `
     font-weight: 500; color: var(--wx-text, #333);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* Lenso Button 自带 34px 高度与内边距，并用提升特异性的原子类输出；
-     账号区保留 legacy 的 20/22px 尺寸，因此这里显式覆盖。 */
-  .account-name-row .account-edit { flex: 0 0 auto; width: 20px !important; height: 20px !important;
+     账号区保留 legacy 的 20/22px 尺寸，因此这里显式覆盖。min-height 也必须
+     一起压回 20px，否则 Lenso 的 36px 会把名称行撑高，制造行间空白。 */
+  #account .account-name-row .account-edit { flex: 0 0 auto; width: 20px !important;
+    height: 20px !important; min-height: 20px !important; line-height: 20px !important;
     padding: 0 !important; border: 0; border-radius: 4px; background: none;
     color: var(--lenso-label-secondary) !important;
     display: grid; place-items: center; cursor: pointer; }
@@ -28,7 +30,7 @@ export const DEVICE_HANDOFF_STYLE = `
     stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
   /* 操作行按内容收窄，不铺满整条侧栏；空间不足时换行，不裁切。 */
   .account-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px;
-    width: fit-content; max-width: 100%; margin-top: 1px; }
+    width: fit-content; max-width: 100%; margin-top: 0; }
   .account-actions[hidden] { display: none; }
   /* legacy 基础样式对 button 应用 font: inherit；SPA 壳没有该重置，
      账号文字入口需显式继承，否则浏览器表单控件会回退到 Arial 并改变宽度。 */
@@ -52,6 +54,7 @@ export const DEVICE_HANDOFF_STYLE = `
   }
   /* 触控端保留 44px 命中区；宽度也同步放大，避免图标按钮过窄。 */
   @media (pointer: coarse) {
+    .account-avatar { width: 44px; height: 44px; }
     .account-actions { gap: 2px 8px; }
     #account .account-actions .account-scan { height: 44px !important; min-height: 44px !important;
       line-height: 44px !important; }
