@@ -3,14 +3,23 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   createOutboxIntent,
   findReusableIntent,
+  isOutboxIntentExpired,
+  isOutboxStorageKey,
   isRetryableError,
   readOutbox,
+  removeOutboxIntent,
   updateIntent,
   writeOutbox,
   type OutboxIntent,
 } from '../lib/outbox';
+import {
+  applySendStatus,
+  reconcileOutboxStatuses,
+} from '../lib/outbox-reconcile';
+import { currentIdentityEpoch } from '../lib/identity-epoch';
 import { callTool, type McpError } from '../lib/mcp-client';
 import type { SendResult, SendStatusItem } from '../lib/chat';
+import { useRecoveryState } from '../pwa/recovery';
 
 /**
  * 发送队列：持久意图 + 幂等 request_id/client_message_id + 响应丢失对账。
@@ -41,10 +50,6 @@ interface UseSendQueueOptions {
   onCommitted: (messageId: string) => void;
 }
 
-function byteLength(text: string): number {
-  return new TextEncoder().encode(text).length;
-}
-
 export function useSendQueue({ actorId, token, roomId, onCommitted }: UseSendQueueOptions) {
   const [items, setItems] = useState<OutboxIntent[]>([]);
   const itemsRef = useRef(items);
@@ -53,10 +58,15 @@ export function useSendQueue({ actorId, token, roomId, onCommitted }: UseSendQue
   committedRef.current = onCommitted;
   const tokenRef = useRef(token);
   tokenRef.current = token;
-  const reconciledRef = useRef(false);
+  const actorRef = useRef(actorId);
+  actorRef.current = actorId;
+  const reconcileInFlightRef = useRef(false);
+  const recovery = useRecoveryState();
+  const lastRecoveredAtRef = useRef(0);
 
   const persist = useCallback(
     (next: OutboxIntent[]) => {
+      if (actorRef.current !== actorId) return;
       itemsRef.current = next;
       setItems(next);
       if (actorId) writeOutbox(actorId, next);
@@ -66,50 +76,29 @@ export function useSendQueue({ actorId, token, roomId, onCommitted }: UseSendQue
 
   useEffect(() => {
     if (!actorId) {
-      persist([]);
+      itemsRef.current = [];
+      setItems([]);
       return;
     }
     // 队列按 actor 共享；只把当前房间的行展示给时间线，写入时保留其他房间。
     const saved = readOutbox(actorId);
     itemsRef.current = saved;
     setItems(saved);
-    reconciledRef.current = false;
-  }, [actorId, roomId, persist]);
+  }, [actorId, roomId]);
 
   const applyFound = useCallback(
-    (intent: OutboxIntent, status: SendStatusItem): OutboxIntent[] => {
-      if (status.room_id !== intent.room_id) {
-        return updateIntent(itemsRef.current, intent.client_message_id, {
-          status: 'failed',
-          retryable: false,
-          error: 'client_message_id 已用于其他房间',
-          message_id: status.message_id,
-        });
-      }
-      if (!status.recalled && Number(status.body_bytes) !== byteLength(intent.body)) {
-        return updateIntent(itemsRef.current, intent.client_message_id, {
-          status: 'failed',
-          retryable: false,
-          error: 'client_message_id 已用于不同正文',
-          message_id: status.message_id,
-        });
-      }
-      return updateIntent(itemsRef.current, intent.client_message_id, {
-        status: 'committed',
-        retryable: false,
-        error: '',
-        message_id: status.message_id,
-        delivery_ids: status.delivery_ids,
-        created_seq: status.created_seq,
-        committed_at: Date.now(),
-      });
-    },
+    (intent: OutboxIntent, status: SendStatusItem): OutboxIntent[] =>
+      applySendStatus(itemsRef.current, intent, status),
     [],
   );
 
   const queryStatus = useCallback(
-    async (ids: string[]): Promise<{ ok: boolean; found: Map<string, SendStatusItem> }> => {
+    async (
+      ids: string[],
+    ): Promise<{ ok: boolean; found: Map<string, SendStatusItem>; stale?: boolean }> => {
       const accessToken = tokenRef.current;
+      const actorAtStart = actorRef.current;
+      const identityEpoch = currentIdentityEpoch();
       const found = new Map<string, SendStatusItem>();
       if (!accessToken || ids.length === 0) return { ok: true, found };
       for (let index = 0; index < ids.length; index += STATUS_BATCH) {
@@ -120,10 +109,24 @@ export function useSendQueue({ actorId, token, roomId, onCommitted }: UseSendQue
             { client_message_ids: batch },
             { token: accessToken },
           );
+          if (
+            identityEpoch !== currentIdentityEpoch() ||
+            tokenRef.current !== accessToken ||
+            actorRef.current !== actorAtStart
+          ) {
+            return { ok: false, found, stale: true };
+          }
           for (const item of page.items ?? []) {
             if (item.found) found.set(item.client_message_id, item);
           }
         } catch {
+          if (
+            identityEpoch !== currentIdentityEpoch() ||
+            tokenRef.current !== accessToken ||
+            actorRef.current !== actorAtStart
+          ) {
+            return { ok: false, found, stale: true };
+          }
           return { ok: false, found };
         }
       }
@@ -133,42 +136,60 @@ export function useSendQueue({ actorId, token, roomId, onCommitted }: UseSendQue
   );
 
   const reconcile = useCallback(async (): Promise<void> => {
+    if (reconcileInFlightRef.current) return;
     const accessToken = tokenRef.current;
-    if (!accessToken || reconciledRef.current) return;
-    reconciledRef.current = true;
+    const currentActor = actorRef.current;
+    const identityEpoch = currentIdentityEpoch();
+    if (!accessToken || !currentActor) return;
     const pending = itemsRef.current.filter(
       (item) => item.room_id === roomId && item.status !== 'committed',
     );
     if (pending.length === 0) return;
-    const response = await queryStatus(pending.map((item) => item.client_message_id));
-    if (!response.ok) {
-      reconciledRef.current = false;
-      return;
-    }
-    let next = itemsRef.current;
-    let committed = false;
-    for (const intent of pending) {
-      const status = response.found.get(intent.client_message_id);
-      if (status) {
-        next = applyFound(intent, status);
-        committed = true;
-        continue;
+    reconcileInFlightRef.current = true;
+    try {
+      const response = await queryStatus(pending.map((item) => item.client_message_id));
+      // 查询失败保持“待确认”；身份代次变化时丢弃晚到结果。
+      if (!response.ok || response.stale) return;
+      if (
+        identityEpoch !== currentIdentityEpoch() ||
+        actorRef.current !== currentActor ||
+        tokenRef.current !== accessToken
+      ) {
+        return;
       }
-      if (intent.status === 'sending') {
-        next = updateIntent(next, intent.client_message_id, {
-          status: 'failed',
-          retryable: true,
-          error: '发送状态未确认，可重试',
-        });
-      }
+      const result = reconcileOutboxStatuses(itemsRef.current, pending, response.found);
+      persist(result.items);
+      if (result.found) committedRef.current('');
+    } finally {
+      reconcileInFlightRef.current = false;
     }
-    persist(next);
-    if (committed) committedRef.current('');
-  }, [applyFound, persist, queryStatus, roomId]);
+  }, [persist, queryStatus, roomId]);
 
   useEffect(() => {
     void reconcile();
   }, [reconcile]);
+
+  // 前台恢复/更新前显式对账：不因曾对账过而永久跳过。
+  useEffect(() => {
+    if (!actorId || recovery.phase !== 'ready') return;
+    if (recovery.completedAt <= lastRecoveredAtRef.current) return;
+    lastRecoveredAtRef.current = recovery.completedAt;
+    void reconcile();
+  }, [actorId, reconcile, recovery.completedAt, recovery.phase]);
+
+  // 同 actor 另一个标签页写入 journal 后重新并入，不覆盖本地未提交项。
+  useEffect(() => {
+    if (!actorId) return undefined;
+    const onStorage = (event: StorageEvent) => {
+      if (!isOutboxStorageKey(actorId, event.key)) return;
+      const saved = readOutbox(actorId);
+      itemsRef.current = saved;
+      setItems(saved);
+      void reconcile();
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [actorId, reconcile]);
 
   const markCommitted = useCallback(
     (intent: OutboxIntent, result: SendResult): OutboxIntent[] => {
@@ -189,6 +210,8 @@ export function useSendQueue({ actorId, token, roomId, onCommitted }: UseSendQue
   const submit = useCallback(
     async (intent: OutboxIntent): Promise<SendOutcome> => {
       const accessToken = tokenRef.current;
+      const currentActor = actorRef.current;
+      const identityEpoch = currentIdentityEpoch();
       if (!accessToken) return { ok: false, error: '浏览器身份尚未初始化，请刷新页面后重试' };
       persist(
         updateIntent(itemsRef.current, intent.client_message_id, {
@@ -213,11 +236,26 @@ export function useSendQueue({ actorId, token, roomId, onCommitted }: UseSendQue
         const result = await callTool<SendResult>('network_message_send', args, {
           token: accessToken,
         });
+        // 晚到的成功响应不能写进新身份的 outbox。
+        if (
+          identityEpoch !== currentIdentityEpoch() ||
+          actorRef.current !== currentActor ||
+          tokenRef.current !== accessToken
+        ) {
+          return { ok: false, error: '身份已变化，请刷新后重新核对发送结果' };
+        }
         persist(markCommitted(intent, result));
         committedRef.current(result.message?.message_id ?? '');
         return { ok: true, error: null };
       } catch (error) {
         const failure = error as McpError;
+        if (
+          identityEpoch !== currentIdentityEpoch() ||
+          actorRef.current !== currentActor ||
+          tokenRef.current !== accessToken
+        ) {
+          return { ok: false, error: '身份已变化，请刷新后重新核对发送结果' };
+        }
         persist(
           updateIntent(itemsRef.current, intent.client_message_id, {
             status: 'failed',
@@ -244,6 +282,7 @@ export function useSendQueue({ actorId, token, roomId, onCommitted }: UseSendQue
       });
       if (reusable) {
         const response = await queryStatus([reusable.client_message_id]);
+        if (response.stale) return { ok: false, error: '身份已变化，请刷新后重新核对发送结果' };
         if (response.ok) {
           const status = response.found.get(reusable.client_message_id);
           if (status) {
@@ -274,7 +313,18 @@ export function useSendQueue({ actorId, token, roomId, onCommitted }: UseSendQue
     async (clientMessageId: string): Promise<SendOutcome> => {
       const intent = itemsRef.current.find((item) => item.client_message_id === clientMessageId);
       if (!intent) return { ok: false, error: '发送意图不存在' };
+      if (isOutboxIntentExpired(intent)) {
+        persist(
+          updateIntent(itemsRef.current, clientMessageId, {
+            status: 'failed',
+            retryable: false,
+            error: '发送意图已过期，未自动重发',
+          }),
+        );
+        return { ok: false, error: '发送意图已过期，请重新输入' };
+      }
       const response = await queryStatus([clientMessageId]);
+      if (response.stale) return { ok: false, error: '身份已变化，请刷新后重新核对发送结果' };
       if (response.ok) {
         const status = response.found.get(clientMessageId);
         if (status) {
@@ -292,9 +342,14 @@ export function useSendQueue({ actorId, token, roomId, onCommitted }: UseSendQue
 
   const remove = useCallback(
     (clientMessageId: string) => {
-      persist(itemsRef.current.filter((item) => item.client_message_id !== clientMessageId));
+      if (actorId) removeOutboxIntent(actorId, clientMessageId);
+      const next = itemsRef.current.filter(
+        (item) => item.client_message_id !== clientMessageId,
+      );
+      itemsRef.current = next;
+      setItems(next);
     },
-    [persist],
+    [actorId],
   );
 
   /** 服务端消息进入时间线后清掉本地“已提交”行；失败行保留给用户重试。 */

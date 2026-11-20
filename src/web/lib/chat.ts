@@ -62,6 +62,12 @@ export interface HistoryPage {
   timeline_has_more?: boolean;
   timeline_snapshot?: string;
   timeline_resume_cursor?: string;
+  /** 本次读取使用的授权快照；成员代次变化时旧窗口必须重建。 */
+  authorization?: {
+    policy_revision: number;
+    history_from_seq: string;
+    member_generation: string;
+  };
   /** 仅 anchor 请求返回：锚点及窗口两侧是否还有消息。 */
   anchor_window?: {
     message_id: string;
@@ -209,6 +215,20 @@ export function timelineTimestamp(item: HistoryItem): number {
 
 export function timelineCommitSeq(item: HistoryItem): number {
   return Number(item.kind === 'presence' ? item.timeline_seq : item.created_seq) || 0;
+}
+
+/**
+ * 已读水位只取真正渲染过的消息序号，不使用 room.head_seq 或补读目标。
+ * presence 是系统提示，不推进消息阅读水位。
+ */
+export function renderedWatermark(items: HistoryItem[]): string | null {
+  let max = 0;
+  for (const item of items) {
+    if (item.kind === 'presence') continue;
+    const seq = Number(item.created_seq);
+    if (Number.isSafeInteger(seq) && seq > max) max = seq;
+  }
+  return max > 0 ? String(max) : null;
 }
 
 /**

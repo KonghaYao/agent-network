@@ -437,6 +437,16 @@ export const LIMITS = {
   webRequestTimeoutMs: 15_000,
   /** 网页收到房间通知后的刷新合并窗口（毫秒）。 */
   webRefreshDebounceMs: 300,
+  /** 前台恢复事件的合并窗口：online/visibility/pageshow/ACK 只跑一轮（毫秒）。 */
+  webRecoveryDebounceMs: 300,
+  /** 上一轮恢复结束后，短时间内再次触发只并入下一轮，不重复鉴权（毫秒）。 */
+  webRecoveryQuietMs: 1_500,
+  /** 后台停留超过该时长后，回前台先遮住私有视图再重新鉴权（毫秒）。 */
+  webRecoveryLongBackgroundMs: 5 * 60_000,
+  /** 一次恢复批次最多顺序补读的历史页数；达到后让出主线程继续下一批。 */
+  historyCatchUpBatchPages: 20,
+  /** 单轮补洞的页数硬上限，防止异常游标无限循环；超过按权限/游标失效重建。 */
+  historyCatchUpMaxPages: 1_000,
   /** 浏览器本地发送意图上限；超出后保留最新条目。 */
   webOutboxMax: 50,
   /** 未确认/失败的本地发送意图保留时长（毫秒）。 */

@@ -79,6 +79,21 @@ export function invalidateRoomTasks(
 }
 
 /**
+ * 身份边界/重连确认前先丢弃旧 Task 视图，不在这里发起读取。
+ *
+ * `removeQueries` 不会清掉已挂载 observer 手上的数据，因此恢复期间仍在
+ * 屏幕上的 dock/Trace 必须原地 reset 到初始态；等重新鉴权通过后再由
+ * `resetRoomTasks` 从首页重读。这样旧身份条目不会在核对期间继续显示。
+ */
+export function discardRoomTasks(client: QueryClient, roomId: string): void {
+  for (const prefix of [queryKeys.roomTasks(roomId), queryKeys.taskSummaries(roomId)]) {
+    for (const query of client.getQueryCache().findAll({ queryKey: prefix })) {
+      query.reset();
+    }
+  }
+}
+
+/**
  * 成员代次、历史策略或归档变化后丢弃旧授权下的私有预览并重读。
  *
  * `resetQueries` 会清空当前数据并让活动查询立即重建；比单纯 remove 更

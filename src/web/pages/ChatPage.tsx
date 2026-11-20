@@ -50,7 +50,9 @@ import { filePreviewKind, type RoomFileItem } from '../lib/files-ui';
 import { callTool, type McpError } from '../lib/mcp-client';
 import { queryKeys } from '../lib/query-keys';
 import { newRequestId } from '../lib/request-id';
+import { SCOPE_RESET_EVENT, type ScopeResetDetail } from '../lib/scope-reset';
 import { outboxUpdateBusy, setUpdateBusy } from '../pwa/update-busy';
+import { useRecoveryState } from '../pwa/recovery';
 import { isUpdateWriteBlocked, useUpdateWriteBlocked } from '../pwa/update-store';
 
 const FilesPane = lazy(() =>
@@ -144,6 +146,8 @@ function failureText(error: unknown): string {
 export function ChatPage({ roomId }: ChatPageProps) {
   const chat = useRoomChat(roomId);
   const queryClient = useQueryClient();
+  const recovery = useRecoveryState();
+  const restoring = recovery.phase === 'checking' || chat.catchUp?.active === true;
   const [status, setStatus] = useState('');
   const [reply, setReply] = useState<ComposerReply | null>(null);
   const [forcePinToken, setForcePinToken] = useState(0);
@@ -159,6 +163,21 @@ export function ChatPage({ roomId }: ChatPageProps) {
   const [forwardItem, setForwardItem] = useState<HistoryMessage | null>(null);
   const [previewFile, setPreviewFile] = useState<RoomFileItem | null>(null);
   const [panePreviewFile, setPanePreviewFile] = useState<RoomFileItem | null>(null);
+
+  useEffect(() => {
+    const onScopeReset = (event: Event) => {
+      const detail = (event as CustomEvent<ScopeResetDetail>).detail;
+      if (detail?.roomId !== null && detail?.roomId !== undefined && detail.roomId !== roomId) {
+        return;
+      }
+      // 撤权/切号后立即关闭文件预览与右栏预览，卸载组件会中止预览请求。
+      setPreviewFile(null);
+      setPanePreviewFile(null);
+      setOverlayPane(null);
+    };
+    window.addEventListener(SCOPE_RESET_EVENT, onScopeReset);
+    return () => window.removeEventListener(SCOPE_RESET_EVENT, onScopeReset);
+  }, [roomId]);
   // 群成员弹窗从搜索右侧的常驻入口打开；关闭时必须显式回到该按钮。
   const membersButtonRef = useRef<HTMLButtonElement>(null);
   // 搜索弹窗关闭时按 id 取当前节点：Lenso 升级会替换原生按钮 DOM。
@@ -309,11 +328,13 @@ export function ChatPage({ roomId }: ChatPageProps) {
       : room.title || '群聊';
   const subtitle = !room
     ? '正在加载…'
-    : room.kind === 'group'
-      ? `群聊 · ${chat.detail?.members.length ?? room.member_count} 人`
-      : peer?.kind === 'agent'
-        ? onlineLabel(peer.online)
-        : '';
+    : !recovery.online
+      ? '离线 · 当前显示内存中的数据'
+      : room.kind === 'group'
+        ? `群聊 · ${chat.detail?.members.length ?? room.member_count} 人`
+        : peer?.kind === 'agent'
+          ? onlineLabel(peer.online)
+          : '';
   // 群聊头部色标与会话列表群头像瓦片共用 room_id 派生色；直聊不渲染。
   const groupColor = room?.kind === 'group' ? groupColorFor(room.room_id) : null;
 
@@ -847,6 +868,27 @@ export function ChatPage({ roomId }: ChatPageProps) {
                 <div id="chat-loading" className="chat-loading" role="status" hidden={chat.status !== 'loading'}>
                   正在加载会话…
                 </div>
+                {ready && chat.catchUp ? (
+                  <div
+                    id="history-catchup"
+                    className="history-catchup"
+                    role="status"
+                    aria-live="polite"
+                    hidden={!chat.catchUp.active && !chat.catchUp.notice}
+                    data-catchup-active={chat.catchUp.active ? '1' : '0'}
+                    data-catchup-pages={chat.catchUp.pages}
+                    data-catchup-seq={chat.catchUp.coveredSeq ?? ''}
+                    data-catchup-rebuilt={chat.catchUp.rebuiltAt ? '1' : '0'}
+                  >
+                    {chat.catchUp.active
+                      ? `正在补齐离线期间的历史（已覆盖 ${chat.catchUp.pages} 页${
+                          chat.catchUp.coveredSeq ? `，seq ${chat.catchUp.coveredSeq}` : ''
+                        }）…${
+                          chat.catchUp.error ? ` ${chat.catchUp.error}` : ''
+                        }`
+                      : chat.catchUp.notice}
+                  </div>
+                ) : null}
                 {loadingShell ? (
                   <div id="chat-skeleton" className="chat-skeleton" aria-hidden="true">
                     {[0, 1, 2].map((row) => (
@@ -901,6 +943,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                     }
                     hasOlder={anchored ? Boolean(navState.nextOlder) : chat.hasOlder}
                     forcePinToken={forcePinToken}
+                    restoring={restoring}
                     onLoadOlder={anchored ? searchNav.navigation.loadOlder : chat.loadOlder}
                     onRetryOutbox={(id) => void onRetryOutbox(id)}
                     onRemoveOutbox={queue.remove}

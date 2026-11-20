@@ -7,6 +7,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import { LIMITS } from '../../contracts/limits';
+import { currentIdentityEpoch } from '../lib/identity-epoch';
 import type { McpError } from '../lib/mcp-client';
 import { callTool } from '../lib/mcp-client';
 import { queryKeys } from '../lib/query-keys';
@@ -79,6 +80,8 @@ export function useRoomTasks({
   );
   const keyString = JSON.stringify(listKey);
   const keyRef = useRef({ string: keyString, key: listKey as readonly unknown[] });
+  const identityRef = useRef({ token, actorId });
+  identityRef.current = { token, actorId };
   const rebuildControllerRef = useRef<AbortController | null>(null);
   const rebuildSequenceRef = useRef(0);
   const [notice, setNotice] = useState<string | null>(null);
@@ -115,6 +118,7 @@ export function useRoomTasks({
    */
   const rebuildFirstPage = useCallback(async (): Promise<boolean> => {
     if (!enabled || !token) return false;
+    const requestEpoch = currentIdentityEpoch();
     rebuildControllerRef.current?.abort();
     const controller = new AbortController();
     rebuildControllerRef.current = controller;
@@ -131,7 +135,11 @@ export function useRoomTasks({
         },
         { token, signal: controller.signal },
       );
-      if (controller.signal.aborted || sequence !== rebuildSequenceRef.current) {
+      if (
+        controller.signal.aborted ||
+        sequence !== rebuildSequenceRef.current ||
+        requestEpoch !== currentIdentityEpoch()
+      ) {
         return false;
       }
       queryClient.setQueryData<TaskListCache>(listKey, {
@@ -141,7 +149,11 @@ export function useRoomTasks({
       setRebuildError(null);
       return true;
     } catch (error) {
-      if (controller.signal.aborted || sequence !== rebuildSequenceRef.current) {
+      if (
+        controller.signal.aborted ||
+        sequence !== rebuildSequenceRef.current ||
+        requestEpoch !== currentIdentityEpoch()
+      ) {
         return false;
       }
       setRebuildError(failureMessage(error));
@@ -206,7 +218,8 @@ export function useRoomTasks({
       if (isUpdateWriteBlocked()) {
         throw new Error('当前页面与服务器版本不兼容，请先更新后再完成 Task');
       }
-      return callTool(
+      const requestEpoch = currentIdentityEpoch();
+      const result = await callTool(
         'network_task_complete',
         {
           request_id: input.requestId,
@@ -215,8 +228,20 @@ export function useRoomTasks({
         },
         { token },
       );
+      return { result, token, actorId, requestEpoch };
     },
-    onSuccess: async (_result, input) => {
+    onSuccess: async (response, input) => {
+      // 遮罩出现后本组件会卸载，旧实例的 ref 冻结在旧身份；先比较模块级
+      // 代次，再按 token/actor 二次校验，避免旧回执改写新身份的 Task 缓存。
+      if (response.requestEpoch !== currentIdentityEpoch()) return;
+      const current = identityRef.current;
+      if (
+        !current.token ||
+        current.token !== response.token ||
+        current.actorId !== response.actorId
+      ) {
+        return;
+      }
       // 先取消旧请求，避免完成前的在途响应把已完成的 root 加回来。
       await queryClient.cancelQueries({
         queryKey: queryKeys.taskLists(input.roomId),

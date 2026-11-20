@@ -3,6 +3,7 @@ import { useEffect } from 'react';
 
 import { rememberActorAvatars } from '../lib/actor-avatars';
 import { ensureWebSession, type WebSession } from '../lib/identity';
+import { observeIdentity } from '../lib/identity-epoch';
 import type { McpError } from '../lib/mcp-client';
 import { queryKeys } from '../lib/query-keys';
 
@@ -59,6 +60,15 @@ export function useWebSession(): SessionState {
   });
 
   const identity = query.data?.identity;
+  const token = query.data?.token ?? null;
+  const actorId = identity?.actor_id ?? null;
+
+  // 兜底观测：任何来源的身份变化都会推进模块级代次；同一身份重复观测不变。
+  // 只观察 token/actor：头像或昵称更新不是身份边界，不得推进代次。
+  useEffect(() => {
+    observeIdentity(actorId, token);
+  }, [actorId, token]);
+
   useEffect(() => {
     if (!identity) return;
     rememberActorAvatars([

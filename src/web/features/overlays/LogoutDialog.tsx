@@ -3,6 +3,7 @@ import * as AlertDialogPrimitive from './AlertDialog';
 
 import { clearQueryCache } from '../../app/query';
 import { resetWebSession } from '../../lib/identity';
+import { writeAuthSignal } from '../../pwa/recovery';
 
 const TOKEN_KEY = 'agent-network-token';
 const LOGGED_OUT_KEY = 'agent-network-logged-out';
@@ -21,6 +22,8 @@ export function LogoutDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const logout = () => {
+    // 同源其他标签页接收身份失效信号；本标签按原流程整页回首页。
+    writeAuthSignal('logout');
     try {
       localStorage.setItem(LOGGED_OUT_KEY, '1');
       localStorage.removeItem(TOKEN_KEY);

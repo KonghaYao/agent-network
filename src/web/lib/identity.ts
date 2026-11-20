@@ -1,4 +1,5 @@
 import { isMobileDevice } from '../pwa/install';
+import { bumpIdentityEpoch } from './identity-epoch';
 import {
   callTool,
   mcpError,
@@ -196,6 +197,8 @@ export function createFreshIdentity(): Promise<WebSession> {
     }
     clearLoggedOutState();
     cached = { identity, token };
+    // 新身份与旧身份之间没有可比对的会话，直接推进代次丢弃旧在途响应。
+    bumpIdentityEpoch();
     return cached;
   })().finally(() => {
     freshPending = null;
@@ -224,9 +227,53 @@ export function patchCachedIdentity(patch: Partial<WebIdentity>): void {
   cached = { ...cached, identity: { ...cached.identity, ...patch } };
 }
 
+/**
+ * 前台恢复的显式重新鉴权：绕过 `useWebSession` 的 Infinity 缓存，直接向
+ * 服务端核对当前 localStorage token 对应的身份。失败不改用缓存结果，
+ * 由调用方按错误类型遮蔽或标记离线。
+ */
+export async function revalidateWebSession(): Promise<WebSession> {
+  const stored = readBrowserToken();
+  if (!stored) {
+    if (isLoggedOut()) {
+      throw mcpError('已退出登录，请重新配对或创建新身份。', 'LOGGED_OUT');
+    }
+    throw credentialInvalid('当前浏览器没有有效凭据，请重新配对。');
+  }
+  try {
+    const identity = await callTool<WebIdentity>('network_me', {}, { token: stored });
+    const previous = cached;
+    cached = { identity, token: stored };
+    // token/actor 变化意味着旧身份的在途响应不能再写入新身份的缓存。
+    if (
+      previous &&
+      (previous.token !== stored || previous.identity.actor_id !== identity.actor_id)
+    ) {
+      bumpIdentityEpoch();
+    }
+    return cached;
+  } catch (error) {
+    const failure = error as McpError;
+    if (failure.code === 'CREDENTIAL_INVALID') {
+      cached = null;
+      throw credentialInvalid(
+        failure.message ||
+          '当前凭据已失效或已被撤销；本机不会自动创建替代身份。请重新配对。',
+      );
+    }
+    throw error;
+  }
+}
+
+export function cachedWebSession(): WebSession | null {
+  return cached;
+}
+
 /** 身份/token 变化后清空缓存；SPA Home 目前不主动切换身份。 */
 export function resetWebSession(): void {
   cached = null;
   pending = null;
   freshPending = null;
+  // 退出/撤权后旧身份的晚到响应必须全部作废。
+  bumpIdentityEpoch();
 }

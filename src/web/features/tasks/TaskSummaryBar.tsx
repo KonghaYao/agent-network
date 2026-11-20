@@ -13,7 +13,8 @@ import type { CSSProperties } from 'react';
 import { useWebSession } from '../../hooks/useWebSession';
 import { useActorAvatarMap } from '../../lib/actor-avatars';
 import { receiptStatus, type HistoryMessage } from '../../lib/chat';
-import { callTool } from '../../lib/mcp-client';
+import { currentIdentityEpoch } from '../../lib/identity-epoch';
+import { callTool, mcpError } from '../../lib/mcp-client';
 import { queryKeys } from '../../lib/query-keys';
 import { ActorAvatar } from '../avatar/ActorAvatar';
 
@@ -62,12 +63,19 @@ export function TaskSummaryBar({
   const summaryQuery = useQuery({
     queryKey: queryKeys.taskSummary(roomId, item.message_id, headSeq),
     enabled: Boolean(token && marked),
-    queryFn: ({ signal }) =>
-      callTool<SummaryPage>(
+    queryFn: async ({ signal }) => {
+      const requestEpoch = currentIdentityEpoch();
+      const page = await callTool<SummaryPage>(
         'network_task_summaries',
         { room_id: roomId, root_message_ids: [item.message_id] },
         { token: token ?? undefined, signal },
-      ),
+      );
+      // 摘要键不含 actor；切号后旧身份的摘要不能留在新身份的缓存里。
+      if (requestEpoch !== currentIdentityEpoch()) {
+        throw mcpError('身份已变化，丢弃旧 Task 摘要', 'STALE_CONTEXT');
+      }
+      return page;
+    },
     retry: false,
     staleTime: 10_000,
   });

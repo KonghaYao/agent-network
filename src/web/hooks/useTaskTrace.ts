@@ -2,7 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 
 import type { McpError } from '../lib/mcp-client';
-import { callTool } from '../lib/mcp-client';
+import { callTool, mcpError } from '../lib/mcp-client';
+import { currentIdentityEpoch } from '../lib/identity-epoch';
 import { queryKeys } from '../lib/query-keys';
 import type {
   TaskSummariesPageView,
@@ -115,6 +116,8 @@ export function useTaskTrace({
   token: string | null;
 }): TaskTraceState {
   const queryClient = useQueryClient();
+  const tokenRef = useRef(token);
+  tokenRef.current = token;
   const traceKey = useMemo(
     () => queryKeys.taskTrace(roomId, rootId, focusId),
     [roomId, rootId, focusId],
@@ -127,6 +130,7 @@ export function useTaskTrace({
     enabled: Boolean(open && token && rootId),
     retry: false,
     queryFn: async ({ signal }) => {
+      const requestEpoch = currentIdentityEpoch();
       const base = {
         room_id: roomId,
         root_message_id: rootId ?? '',
@@ -146,6 +150,10 @@ export function useTaskTrace({
           { token: token ?? undefined, signal },
         ),
       ]);
+      // Trace 键不含 actor；切号后旧身份的首屏响应不能填进新身份的缓存。
+      if (requestEpoch !== currentIdentityEpoch()) {
+        throw mcpError('身份已变化，丢弃旧 Trace 响应', 'STALE_CONTEXT');
+      }
       const summary =
         summaries.items.find((entry) => entry.root_message_id === rootId) ?? null;
       return toTraceData(page, summary);
@@ -168,6 +176,7 @@ export function useTaskTrace({
 
   const pageMutation = useMutation({
     mutationFn: async (input: PageInput) => {
+      const requestEpoch = currentIdentityEpoch();
       const page = await callTool<TaskTracePageView>(
         'network_task_trace',
         {
@@ -178,9 +187,13 @@ export function useTaskTrace({
         },
         { token: input.token },
       );
-      return { page, mode: input.mode };
+      return { page, mode: input.mode, requestEpoch };
     },
-    onSuccess: ({ page, mode }, input) => {
+    onSuccess: ({ page, mode, requestEpoch }, input) => {
+      // 组件卸载后 tokenRef 冻结在旧身份；模块级代次才是跨卸载的有效边界。
+      if (requestEpoch !== currentIdentityEpoch()) return;
+      // 身份切换后旧 token 的分页响应不能并入新身份的 Trace 缓存。
+      if (input.token !== tokenRef.current) return;
       queryClient.setQueryData<TaskTraceData>(input.key, (current) =>
         current ? mergePage(current, page, mode) : current,
       );

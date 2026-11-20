@@ -6,6 +6,7 @@ import { LIMITS } from '../../../contracts/limits';
 import {
   chatTime,
   historyItemKey,
+  renderedWatermark,
   timelineTimestamp,
   type HistoryItem,
   type HistoryMessage,
@@ -43,6 +44,8 @@ interface TimelineProps {
   olderEnded: boolean;
   hasOlder: boolean;
   forcePinToken: number;
+  /** 恢复/补洞期间不自动滚底、不推进已读。 */
+  restoring?: boolean;
   searchNavigation?: TimelineSearchNavigation | null;
   onLoadOlder: () => Promise<void>;
   onRetryOutbox: (clientMessageId: string) => void;
@@ -74,6 +77,7 @@ export function Timeline({
   olderEnded,
   hasOlder,
   forcePinToken,
+  restoring = false,
   searchNavigation,
   onLoadOlder,
   onRetryOutbox,
@@ -97,6 +101,7 @@ export function Timeline({
   const lastForceRef = useRef(forcePinToken);
   const lastJumpRef = useRef(searchNavigation?.jumpToken ?? -1);
   const autoLoadingRef = useRef(false);
+  const restoreScrollSkipRef = useRef(false);
   const anchored = searchNavigation?.anchored === true;
 
   const setPin = useCallback((value: boolean) => {
@@ -124,6 +129,18 @@ export function Timeline({
       lastKeyRef.current = lastKey;
       return;
     }
+    if (restoring) {
+      // 恢复期间只记录提交位置，不自动滚底；避免把用户从正在阅读/编辑的位置拉走。
+      if (lastKey !== lastKeyRef.current) restoreScrollSkipRef.current = true;
+      lastKeyRef.current = lastKey;
+      return;
+    }
+    if (restoreScrollSkipRef.current) {
+      // 恢复刚结束时也不补一次滚底；用户自己回到底部后才会重新 pin。
+      restoreScrollSkipRef.current = false;
+      lastKeyRef.current = lastKey;
+      return;
+    }
     if (forcePinToken !== lastForceRef.current) {
       lastForceRef.current = forcePinToken;
       setPin(true);
@@ -134,7 +151,7 @@ export function Timeline({
       setHasNew(true);
     }
     lastKeyRef.current = lastKey;
-  }, [anchored, items, lastKey, forcePinToken, scrollBottom, setPin]);
+  }, [anchored, items, lastKey, forcePinToken, restoring, scrollBottom, setPin]);
 
   useEffect(() => {
     const element = listRef.current;
@@ -181,11 +198,20 @@ export function Timeline({
     return () => window.clearTimeout(timer);
   }, [searchNavigation?.activeMessageId, searchNavigation?.jumpToken, setPin]);
 
+  const renderedMaxSeq = useMemo(() => renderedWatermark(items), [items]);
+
   useEffect(() => {
-    if (!pinned || anchored) return undefined;
-    const timer = setTimeout(() => onMarkRead(room.head_seq), LIMITS.webScrollMarkReadDelayMs);
+    if (!pinned || anchored || restoring || !renderedMaxSeq) return undefined;
+    const timer = setTimeout(() => {
+      const element = listRef.current;
+      if (!element) return;
+      const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
+      // 恢复后即使 pin 仍为 true，也要以真实滚动位置确认真实展示。
+      if (distance > LIMITS.webScrollStickyPx) return;
+      onMarkRead(renderedMaxSeq);
+    }, LIMITS.webScrollMarkReadDelayMs);
     return () => clearTimeout(timer);
-  }, [anchored, pinned, room.head_seq, onMarkRead]);
+  }, [anchored, onMarkRead, pinned, renderedMaxSeq, restoring]);
 
   const loadOlder = useCallback(async () => {
     const element = listRef.current;
