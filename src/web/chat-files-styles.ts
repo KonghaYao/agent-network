@@ -181,6 +181,9 @@ export const FILES_STYLE = `
     .files-backdrop { display: none !important; }
     /* 聊天区与右侧文件栏默认 50/50，可拖动分隔条调整；宽度变量由 React 岛写入。 */
     .chat-pane { flex: 1 1 auto; min-width: var(--app-chat-min); }
+    /* 文件栏拉宽时允许聊天区降到最小可读宽度，宽度上限由 React 岛按窗口计算。 */
+    body.page-room #root > .lenso-root > main:has(> .files-pane:not([hidden])) > .chat-pane {
+      min-width: var(--app-chat-readable-min); }
     /* 右栏打开时为聊天头留出完整联系人标题与常用操作的空间。比例偏大时
        允许文件/监控栏收窄，并让聊天头换行；不要把标题压成几字宽。 */
     body.page-room:has(.files-pane:not([hidden])) .chat-head,
