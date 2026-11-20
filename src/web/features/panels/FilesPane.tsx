@@ -39,21 +39,33 @@ function readCssPixels(name: string): number | undefined {
 }
 
 const SIDEBAR_FALLBACK_WIDTH = 300;
+/** 收起聊天区后，文件栏左缘给主区留出的最小空隙。 */
+const WIDE_EDGE_GAP = 24;
+const WIDE_MIN_EXTRA = 200;
+
+interface PaneLimits {
+  /** 普通上限：保留聊天区最小可读宽度，并受 tokens 的 440–1000 约束。 */
+  normal: number;
+  /** 扩展上限：聊天区收起后右栏可占的宽度。 */
+  extended: number;
+}
 
 /**
- * 右栏宽度上限：窗口减去真实侧栏与聊天区最小可读宽度，
- * 夹在 tokens 的下限（440）与上限（1000）之间。
+ * 右栏两组宽度上限。超过 `normal` 即进入扩展模式并收起聊天区；
+ * `extended` 始终比普通上限至少多 200px，且不挤占侧栏。
  */
-function readPaneMaxWidth(): number {
+function readPaneLimits(): PaneLimits {
   const floor = readCssPixels('--app-pane-max') ?? 440;
   const ceiling = readCssPixels('--app-pane-max-ceiling') ?? 1000;
   const chatMin = readCssPixels('--app-chat-readable-min') ?? 280;
-  if (typeof window === 'undefined') return floor;
+  if (typeof window === 'undefined') return { normal: floor, extended: floor + WIDE_MIN_EXTRA };
   const sidebar = document.querySelector<HTMLElement>('.sidebar');
   const measured = sidebar ? sidebar.getBoundingClientRect().width : 0;
   const sidebarWidth =
     measured > 0 ? measured : (readCssPixels('--app-sidebar-width') ?? SIDEBAR_FALLBACK_WIDTH);
-  return Math.min(ceiling, Math.max(floor, window.innerWidth - sidebarWidth - chatMin));
+  const normal = Math.min(ceiling, Math.max(floor, window.innerWidth - sidebarWidth - chatMin));
+  const extended = Math.max(normal + WIDE_MIN_EXTRA, window.innerWidth - sidebarWidth - WIDE_EDGE_GAP);
+  return { normal, extended };
 }
 
 interface FilesPaneProps {
@@ -112,26 +124,65 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, preview, onO
   const statusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const paneRef = useRef<HTMLElement>(null);
   const resizeStart = useRef<{ x: number; width: number } | null>(null);
-  const [paneWidth, setPaneWidth] = useState<number | null>(null);
-  const [paneMax, setPaneMax] = useState<number | null>(null);
+  const [paneSize, setPaneSize] = useState<{ width: number; wide: boolean } | null>(null);
+  const [limits, setLimits] = useState<PaneLimits | null>(null);
+  const [fullscreen, setFullscreen] = useState(false);
 
   const resizePane = (width: number) => {
     const minimum = readCssPixels('--app-pane-min') ?? 280;
-    const maximum = paneMax ?? readPaneMaxWidth();
-    setPaneWidth(Math.max(minimum, Math.min(maximum, width)));
+    const currentLimits = limits ?? readPaneLimits();
+    const wide = width > currentLimits.normal;
+    const maximum = wide ? currentLimits.extended : currentLimits.normal;
+    setPaneSize({ width: Math.max(minimum, Math.min(maximum, width)), wide });
   };
 
-  // 窗口变化时重算上限，并把已拉宽的右栏夹回新上限。
-  useEffect(() => {
-    const syncPaneMax = () => {
-      const next = readPaneMaxWidth();
-      setPaneMax(next);
-      setPaneWidth((current) => (current === null ? current : Math.min(current, next)));
-    };
-    syncPaneMax();
-    window.addEventListener('resize', syncPaneMax);
-    return () => window.removeEventListener('resize', syncPaneMax);
+  // 侧栏宽度、窗口尺寸变化时重算两组上限，并按当前模式把右栏夹回新上限。
+  // 只监听窗口不够：左侧会话栏拖宽后必须立即夹紧右栏。
+  const syncLimits = useCallback(() => {
+    const next = readPaneLimits();
+    const minimum = readCssPixels('--app-pane-min') ?? 280;
+    setLimits(next);
+    setPaneSize((current) => {
+      if (current === null) return current;
+      const maximum = current.wide ? next.extended : next.normal;
+      return { ...current, width: Math.max(minimum, Math.min(maximum, current.width)) };
+    });
   }, []);
+
+  useEffect(() => {
+    syncLimits();
+    window.addEventListener('resize', syncLimits);
+    const sidebar = document.querySelector<HTMLElement>('.sidebar');
+    const observer = sidebar ? new ResizeObserver(syncLimits) : null;
+    if (sidebar && observer) observer.observe(sidebar);
+    return () => {
+      window.removeEventListener('resize', syncLimits);
+      observer?.disconnect();
+    };
+  }, [syncLimits]);
+
+  // 全屏是页面内覆盖，不是浏览器 Fullscreen API；退出时只移除覆盖，宽度与聊天状态不变。
+  useEffect(() => {
+    if (!fullscreen) return undefined;
+    const onResize = () => {
+      if (window.innerWidth < 1200) setFullscreen(false);
+    };
+    document.body.classList.add('file-preview-fullscreen-open');
+    window.addEventListener('resize', onResize);
+    return () => {
+      document.body.classList.remove('file-preview-fullscreen-open');
+      window.removeEventListener('resize', onResize);
+    };
+  }, [fullscreen]);
+
+  // 关闭预览或切换会话时结束全屏，避免下一次预览继承覆盖状态。
+  useEffect(() => {
+    if (!preview) setFullscreen(false);
+  }, [preview]);
+
+  useEffect(() => {
+    setFullscreen(false);
+  }, [roomId]);
 
   const showStatus = useCallback((text: string, options: { error?: boolean; transient?: boolean } = {}) => {
     if (statusTimer.current) clearTimeout(statusTimer.current);
@@ -304,22 +355,31 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, preview, onO
     [showStatus],
   );
 
+  const currentMax = paneSize?.wide ? limits?.extended : limits?.normal;
+  const closePreview = () => {
+    setFullscreen(false);
+    onBack();
+  };
+
   return (
     <>
-      <aside ref={paneRef} className="files-pane" id="files-pane" aria-label="房间文件" hidden={!open}
+      <aside ref={paneRef} className={`files-pane${fullscreen ? ' files-pane-fullscreen' : ''}`} id="files-pane" aria-label="房间文件" hidden={!open}
+        data-pane-wide={paneSize?.wide ? 'true' : undefined}
         style={
-          paneWidth === null && paneMax === null
+          paneSize === null && limits === null
             ? undefined
             : ({
-                ...(paneWidth === null ? {} : { '--app-pane-width': `${paneWidth}px` }),
-                ...(paneMax === null ? {} : { '--app-pane-max': `${paneMax}px` }),
+                ...(paneSize === null ? {} : { '--app-pane-width': `${paneSize.width}px` }),
+                ...(limits === null || currentMax === undefined
+                  ? {}
+                  : { '--app-pane-max': `${currentMax}px` }),
               } as CSSProperties)
         }>
         <div id="files-resizer" className="files-resizer" role="separator" tabIndex={0}
           aria-label="调整文件栏宽度" aria-orientation="vertical" aria-controls="files-pane"
           aria-valuemin={readCssPixels('--app-pane-min')}
-          aria-valuemax={paneMax ?? readCssPixels('--app-pane-max')}
-          aria-valuenow={paneWidth ?? readCssPixels('--app-pane-width')}
+          aria-valuemax={currentMax ?? readCssPixels('--app-pane-max')}
+          aria-valuenow={paneSize?.width ?? readCssPixels('--app-pane-width')}
           onPointerDown={(event) => {
             if (event.button !== 0) return;
             event.preventDefault();
@@ -389,7 +449,12 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, preview, onO
         </header>
         {preview ? (
           <Suspense fallback={<p role="status">正在读取预览…</p>}>
-            <FilePreviewPane item={preview} onBack={onBack} />
+            <FilePreviewPane
+              item={preview}
+              onBack={closePreview}
+              fullscreen={fullscreen}
+              onToggleFullscreen={() => setFullscreen((value) => !value)}
+            />
           </Suspense>
         ) : null}
         <div className="files-list-view" hidden={preview !== null}>

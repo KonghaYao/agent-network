@@ -75,6 +75,9 @@ interface UiPrefState {
   /** `react-resizable-panels` 的桌面布局（panel id → 百分比）。 */
   homeLayout: Record<string, number> | null;
   setHomeLayout: (layout: Record<string, number>) => void;
+  /** 左侧会话栏宽度；桌面 240–480，默认 300。 */
+  sidebarWidth: number;
+  setSidebarWidth: (width: number) => void;
 }
 
 export const useUiPrefStore = create<UiPrefState>()(
@@ -82,12 +85,14 @@ export const useUiPrefStore = create<UiPrefState>()(
     (set) => ({
       homeLayout: null,
       setHomeLayout: (homeLayout) => set({ homeLayout }),
+      sidebarWidth: 300,
+      setSidebarWidth: (sidebarWidth) => set({ sidebarWidth }),
     }),
     {
       name: UI_PREF_KEY,
       version: 1,
       storage: createJSONStorage(() => localStorage),
-      partialize: (state) => ({ homeLayout: state.homeLayout }),
+      partialize: (state) => ({ homeLayout: state.homeLayout, sidebarWidth: state.sidebarWidth }),
     },
   ),
 );

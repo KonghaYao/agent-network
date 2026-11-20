@@ -1,9 +1,8 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 
-import { EmptyPane } from '../app/AppShell';
+import { AppShell, EmptyPane } from '../app/AppShell';
 import { AppSidebar } from '../features/layout/AppSidebar';
-import { SplitLayout } from '../features/layout/SplitLayout';
 import { useWebSession } from '../hooks/useWebSession';
 import {
   friendLinkFailure,
@@ -89,7 +88,7 @@ export function HomePage() {
         : {};
 
   return (
-    <SplitLayout
+    <AppShell
       sidebar={<AppSidebar notice={friendNotice} />}
       main={<EmptyPane title={empty.title} hint={empty.hint} />}
     />

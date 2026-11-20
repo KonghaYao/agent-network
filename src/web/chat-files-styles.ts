@@ -152,6 +152,9 @@ export const FILES_STYLE = `
     padding: 8px 14px; border-top: 1px solid var(--wx-line); }
   .file-preview-foot a { color: var(--wx-link); font-size: 13px; }
   .file-preview-foot a[hidden] { display: none; }
+  /* 全屏按钮是页面内覆盖的入口；只在三栏桌面出现。 */
+  .file-preview-fullscreen { display: none; }
+  body.file-preview-fullscreen-open { overflow: hidden; }
 
   .files-list::-webkit-scrollbar, .file-preview-body::-webkit-scrollbar { width: 6px; }
   .files-list::-webkit-scrollbar-thumb, .file-preview-body::-webkit-scrollbar-thumb {
@@ -169,6 +172,30 @@ export const FILES_STYLE = `
 
   @media (min-width: 1200px) {
     .files-pane { position: relative; }
+    .file-preview-fullscreen { display: inline-flex; align-items: center; }
+    /* 右栏超过普通上限后进入扩展模式：聊天区整体收起，侧栏保留，
+       右栏继续加宽到手柄拖拽的扩展上限。 */
+    body.page-room #root > .lenso-root > main:has(> .files-pane[data-pane-wide="true"]) > .chat-pane {
+      display: none; }
+    /* 聊天收起后右栏仍贴住视口右侧，剩余空隙留在侧栏与面板之间。 */
+    body.page-room #root > .lenso-root > main:has(> .files-pane[data-pane-wide="true"]:not(.files-pane-fullscreen)) > .files-pane {
+      margin-left: auto; }
+    body.page-room #root > .lenso-root > main:has(> .files-pane.files-pane-fullscreen) > .sidebar,
+    body.page-room #root > .lenso-root > main:has(> .files-pane.files-pane-fullscreen) > .chat-pane {
+      display: none; }
+    /* 页面内全屏覆盖：铺满视口，盖住侧栏与聊天，不调用浏览器 Fullscreen API。 */
+    body.page-room #root > .lenso-root > main > .files-pane.files-pane-fullscreen {
+      position: fixed; inset: 0; z-index: var(--app-z-legacy-modal);
+      flex: 0 0 auto; width: 100%; min-width: 0; max-width: none; height: 100dvh;
+      box-sizing: border-box; border-left: 0; box-shadow: none;
+      padding-top: env(safe-area-inset-top);
+      padding-bottom: env(safe-area-inset-bottom); }
+    .files-pane.files-pane-fullscreen .files-head,
+    .files-pane.files-pane-fullscreen .files-resizer,
+    .files-pane.files-pane-fullscreen .files-list-view,
+    .files-pane.files-pane-fullscreen #file-preview-back { display: none; }
+    .files-pane.files-pane-fullscreen .file-preview-inline {
+      width: 100%; max-height: none; border-radius: 0; box-shadow: none; }
     /* 命中区收在面板自身左缘以内：聊天侧 6px 滚动条（右边界与面板左边界重合）
        不被覆盖；内侧 8px 与列表、预览头的 8px padding 对齐，不压任何控件。 */
     .files-resizer { display: block; position: absolute; left: -1px; top: 0; bottom: 0;
