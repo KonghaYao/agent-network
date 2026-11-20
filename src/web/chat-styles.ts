@@ -563,7 +563,9 @@ export const APP_STYLE = `
   .mention-item { display: flex; width: 100%; align-items: center; gap: 8px;
     padding: 7px 8px; border: 0; background: none; border-radius: 4px;
     text-align: left; font-size: 13px; color: inherit; }
-  .mention-item:hover, .mention-item:focus { background: var(--wx-hover); }
+  /* Ariakit 用 data-active-item 标记键盘活动项，焦点始终留在 textarea。 */
+  .mention-item:hover, .mention-item:focus,
+  .mention-item[data-active-item] { background: var(--wx-hover); }
   .mention-kind { margin-left: auto; font-size: 11px; color: var(--wx-muted); }
 
   /* Task dock 的定位锚点：只包住输入区，不参与消息流高度。 */

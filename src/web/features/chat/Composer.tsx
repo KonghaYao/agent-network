@@ -942,6 +942,8 @@ export function Composer({
                 onSelect={(event) => rememberSelection(event.currentTarget)}
                 onKeyUp={(event) => {
                   rememberSelection(event.currentTarget);
+                  // Esc 已显式关闭候选，keyup 不能再按正文重新打开。
+                  if (event.key === 'Escape') return;
                   if (event.key === 'Enter' && suppressEnterRef.current) {
                     suppressEnterRef.current = false;
                     return;

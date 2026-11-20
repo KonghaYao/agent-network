@@ -412,6 +412,103 @@ test.describe('SPA human group auto mention', () => {
       .not.toBeNull();
   });
 
+  test('mention picker filters by name and keyboard selection stays highlighted', async ({
+    page,
+  }) => {
+    if (!other) throw new Error('fixture 未初始化');
+    await page.goto(`${base}/c/${groupRoomId}`);
+    await expect(page.locator('#composer')).toBeVisible();
+
+    await page.locator('#body').click();
+    await page.keyboard.type('@正文');
+    const picker = page.locator('#mention-picker');
+    await expect(picker).toBeVisible();
+    const items = picker.locator('.mention-item');
+    await expect(items).toHaveCount(1);
+    await expect(items.first()).toContainText(other.actor.name);
+    await expect(items.first()).toContainText('Agent');
+
+    // 焦点仍在 textarea；Ariakit 用 data-active-item 标记活动项。
+    const active = picker.locator('.mention-item[data-active-item]');
+    await expect(active).toHaveCount(1);
+    await expect(page.locator('#body')).toHaveAttribute(
+      'aria-activedescendant',
+      await active.getAttribute('id') ?? '',
+    );
+    const background = await active.evaluate((node) => getComputedStyle(node).backgroundColor);
+    expect(background).not.toBe('rgba(0, 0, 0, 0)');
+
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#body')).toHaveValue(`@${other.actor.name} `);
+    await expect(picker).toBeHidden();
+
+    const marker = `键盘过滤提及 ${Date.now()}`;
+    const before = await sendCallCount(page);
+    await page.keyboard.type(marker);
+    await page.locator('#send').click();
+    await expect.poll(() => sendCallCount(page)).toBeGreaterThan(before);
+    const args = await lastSendArgs(page);
+    expect(args.body).toBe(`@${other.actor.name} ${marker}`);
+    expect(args.invoke).toEqual([other.actor.actor_id]);
+
+    const messageId = await messageIdFor(base, humanToken, groupRoomId, marker);
+    await expect
+      .poll(() => pendingDeliveryOrNull(base, other!.token, messageId))
+      .not.toBeNull();
+  });
+
+  test('mention picker closes on Escape without sending', async ({ page }) => {
+    await page.goto(`${base}/c/${groupRoomId}`);
+    await expect(page.locator('#composer')).toBeVisible();
+    const before = await sendCallCount(page);
+
+    await page.locator('#body').click();
+    await page.keyboard.type('@');
+    await expect(page.locator('#mention-picker')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#mention-picker')).toBeHidden();
+    expect(await sendCallCount(page)).toBe(before);
+  });
+
+  test('mention picker stays in viewport and highlights in 390 dark', async ({ page }) => {
+    if (!other) throw new Error('fixture 未初始化');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.goto(`${base}/c/${groupRoomId}`);
+    await expect(page.locator('#composer')).toBeVisible();
+
+    await page.locator('#body').click();
+    await page.keyboard.type('@');
+    const picker = page.locator('#mention-picker');
+    await expect(picker).toBeVisible();
+    const box = await picker.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.y).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+    expect(box!.y + box!.height).toBeLessThanOrEqual(844);
+
+    const initialActive = await page.locator('#body').getAttribute('aria-activedescendant');
+    expect(initialActive).toBeTruthy();
+    await page.keyboard.press('ArrowDown');
+    const movedActive = await page.locator('#body').getAttribute('aria-activedescendant');
+    expect(movedActive).toBeTruthy();
+    expect(movedActive).not.toBe(initialActive);
+
+    const active = picker.locator('.mention-item[data-active-item]');
+    await expect(active).toHaveCount(1);
+    const background = await active.evaluate((node) => getComputedStyle(node).backgroundColor);
+    expect(background).not.toBe('rgba(0, 0, 0, 0)');
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth),
+    ).toBeLessThanOrEqual(390);
+
+    const name = await active.locator('span').first().textContent();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#body')).toHaveValue(`@${name} `);
+    await expect(picker).toBeHidden();
+  });
+
   test('second consecutive plain text does not mention self', async ({ page }) => {
     if (!previous) throw new Error('fixture 未初始化');
     await callTool(base, previous.token, 'network_message_send', {
