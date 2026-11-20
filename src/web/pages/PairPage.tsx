@@ -55,6 +55,12 @@ type PairingPhase = 'idle' | 'joining' | 'awaiting' | 'redeeming' | 'ready' | 'e
 
 type AccountBaseline = 'empty' | 'existing' | 'unknown';
 
+interface AccountSnapshot {
+  token: string | null;
+  loggedOut: boolean;
+  identityCount: number;
+}
+
 let cachedChallenge: string | null = null;
 
 /** 只在 PairPage 首次渲染时读取并清除 `#c=`，StrictMode 双调用也得到同一值。 */
@@ -101,8 +107,10 @@ function failureText(error: unknown): string {
  * token 在配对成功前不注册。
  *
  * 兑换成功后先用兑换 token 调 `network_me` 核对目标 actor。只有开始时
- * 确认“从未有账号”、期间 token/退出状态/身份列表未变化，且落盘与读回
- * 全部成功时才自动进入；其余情况保留显式切换，绝不覆盖晚到的新身份。
+ * 确认“从未有账号”、期间 token/退出状态/身份列表未变化（含跨标签页
+ * storage 事件与瞬时变化），且落盘与读回全部成功时才自动进入；其余
+ * 情况保留显式切换，绝不覆盖晚到的新身份。原身份只在 token 未变或能用
+ * `network_me` 核对为同一 actor 时写入身份列表。
  */
 export function PairPage() {
   const [challenge, setChallenge] = useState(() => initialPairingChallenge().toUpperCase());
@@ -133,6 +141,9 @@ export function PairPage() {
   const baselineToken = useRef<string | null>(null);
   const baselineLoggedOut = useRef(false);
   const baselineIdentityCount = useRef(0);
+  const pairingSnapshot = useRef<AccountSnapshot | null>(null);
+  const accountChangedDuringPairing = useRef(false);
+  const watchingAccountChanges = useRef(false);
   const initialChallenge = useRef(challenge);
   const scanRequested = useRef(initialScanRequested());
 
@@ -228,6 +239,114 @@ export function PairPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 跨标签页的 token/退出标记/身份列表变化不会反映在首尾比较里：另一个
+  // 标签页可能短暂写入再删除 token。配对期间只要收到相关 storage 事件就
+  // 记为“账号状态已变化”，后续只能走显式确认。
+  useEffect(() => {
+    const storagePrototype = Storage.prototype;
+    const originalSetItem = storagePrototype.setItem;
+    const originalRemoveItem = storagePrototype.removeItem;
+    const originalClear = storagePrototype.clear;
+    let patchedSetItem = false;
+    let patchedRemoveItem = false;
+    let patchedClear = false;
+
+    function noteKey(key: string | null) {
+      if (!watchingAccountChanges.current) return;
+      if (
+        key === null ||
+        key === TOKEN_KEY ||
+        key === LOGGED_OUT_KEY ||
+        key.startsWith(IDENTITY_PREFIX)
+      ) {
+        accountChangedDuringPairing.current = true;
+      }
+    }
+
+    function onStorage(event: StorageEvent) {
+      noteKey(event.key);
+    }
+
+    // 同标签页的写入不会触发 `storage` 事件；短暂写入再删除的 token 只能
+    // 在 Storage 方法上打标记才能发现。包装只做观测，不改变存储语义。
+    try {
+      storagePrototype.setItem = function (key: string, value: string) {
+        noteKey(String(key));
+        return originalSetItem.call(this, key, value);
+      };
+      patchedSetItem = true;
+    } catch {
+      // 不允许包装时退回 storage 事件监听。
+    }
+    try {
+      storagePrototype.removeItem = function (key: string) {
+        noteKey(String(key));
+        return originalRemoveItem.call(this, key);
+      };
+      patchedRemoveItem = true;
+    } catch {
+      // 同上。
+    }
+    try {
+      storagePrototype.clear = function () {
+        noteKey(null);
+        return originalClear.call(this);
+      };
+      patchedClear = true;
+    } catch {
+      // 同上。
+    }
+
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('storage', onStorage);
+      if (patchedSetItem) storagePrototype.setItem = originalSetItem;
+      if (patchedRemoveItem) storagePrototype.removeItem = originalRemoveItem;
+      if (patchedClear) storagePrototype.clear = originalClear;
+    };
+  }, []);
+
+  function captureAccountSnapshot(): AccountSnapshot {
+    return {
+      token: currentToken(),
+      loggedOut: hasLoggedOutState(),
+      identityCount: rememberedIdentityCount(),
+    };
+  }
+
+  /** 配对开始时的快照；同一挑战重试不会重置，避免漏掉等待期间的变化。 */
+  function beginPairingAccountWatch(): void {
+    pairingSnapshot.current = captureAccountSnapshot();
+    accountChangedDuringPairing.current = false;
+    watchingAccountChanges.current = true;
+  }
+
+  /**
+   * 配对期间是否出现过 token/退出标记/身份数变化。除 storage 事件标记外，
+   * 还在兑换完成时与配对开始快照比较，覆盖同标签页里持续存在的变化。
+   */
+  function pairingAccountChanged(): boolean {
+    if (accountChangedDuringPairing.current) return true;
+    const snapshot = pairingSnapshot.current;
+    if (!snapshot) return true;
+    if (
+      currentToken() !== snapshot.token ||
+      hasLoggedOutState() !== snapshot.loggedOut ||
+      rememberedIdentityCount() !== snapshot.identityCount
+    ) {
+      accountChangedDuringPairing.current = true;
+      return true;
+    }
+    return false;
+  }
+
+  /** 让已排队的 storage 事件先派发，再决定是否自动进入。 */
+  function flushStorageEvents(): Promise<void> {
+    return new Promise((resolveFlush) => {
+      setTimeout(resolveFlush, 0);
+    });
+  }
+
   function accountStateUnchanged(): boolean {
     return (
       currentToken() === baselineToken.current &&
@@ -242,19 +361,40 @@ export function PairPage() {
   }
 
   /**
+   * 切换到配对身份前保存原身份。仅当 token 仍是页面挂载时读取的那个、
+   * 或换号后能用 `network_me` 核对为同一 actor 时才写入；unknown 基线
+   * （`currentIdentity` 为空）不凭空配对 actor 与 token。
+   */
+  async function preservePreviousIdentity(previousToken: string | null): Promise<void> {
+    const expected = currentIdentity.current;
+    if (!expected || !previousToken) return;
+    if (previousToken === baselineToken.current) {
+      rememberIdentity(expected, previousToken);
+      return;
+    }
+    try {
+      const observed = await callTool<PairingMe>('network_me', {}, { token: previousToken });
+      if (observed.actor_id === expected.actor_id) {
+        rememberIdentity(observed, previousToken);
+      }
+    } catch {
+      // 配对期间换号后无法核对旧 token：不写入，避免 actor 与 token 错配。
+    }
+  }
+
+  /**
    * 写入 token 与身份列表并逐项读回。任何一步失败都恢复原 token 与退出
    * 标记，移除本次写入的身份，不留下半初始化状态。
    */
-  function persistIdentity(identity: PairingMe, attempt: PairingAttempt): boolean {
+  async function persistIdentity(identity: PairingMe, attempt: PairingAttempt): Promise<boolean> {
     const previousToken = currentToken();
     const previousLoggedOut = storageGet(LOGGED_OUT_KEY);
+    await preservePreviousIdentity(previousToken);
+    if (!mounted.current) return false;
     if (!storageSet(TOKEN_KEY, attempt.token) || currentToken() !== attempt.token) {
       restorePreviousToken(previousToken);
       setStatus('浏览器无法保存身份；请允许本地存储后重试。', true);
       return false;
-    }
-    if (currentIdentity.current && previousToken) {
-      rememberIdentity(currentIdentity.current, previousToken);
     }
     const savedTarget =
       rememberIdentity(identity, attempt.token) &&
@@ -279,6 +419,18 @@ export function PairPage() {
 
   function enterHome(): void {
     window.location.replace('/');
+  }
+
+  /** 显式切换前如实说明原身份能否保留，不再无条件承诺。 */
+  function previousIdentityHint(): string {
+    const token = currentToken();
+    if (!currentIdentity.current) {
+      return token ? '当前身份未能核对，不会写入本机身份列表。' : '本机当前没有已登录身份。';
+    }
+    if (token && token === baselineToken.current) {
+      return '当前身份会保存在本机身份列表。';
+    }
+    return '配对期间账号状态已变化；原身份仅在切换时核对一致才会保存。';
   }
 
   async function finishRedemption(
@@ -314,12 +466,17 @@ export function PairPage() {
     credentialReady.current = true;
     targetIdentity.current = me;
     setTargetLabel(`${me.name || '未命名'}（${me.actor_id}）`);
+    await flushStorageEvents();
+    if (requestGeneration !== generation.current || !mounted.current) return;
     const autoEnter =
       baselineReady.current &&
       accountBaseline.current === 'empty' &&
-      accountStateUnchanged();
+      accountStateUnchanged() &&
+      !pairingAccountChanged();
     if (autoEnter) {
-      if (persistIdentity(me, attempt)) {
+      const saved = await persistIdentity(me, attempt);
+      if (!mounted.current) return;
+      if (saved) {
         enterHome();
         return;
       }
@@ -330,10 +487,7 @@ export function PairPage() {
 
     changePhase('ready');
     setSwitchVisible(true);
-    setStatus(
-      '已获得独立凭据。确认后切换到此身份并进入；原身份会保留在本机身份列表。',
-      false,
-    );
+    setStatus(`已获得独立凭据。确认后切换到此身份并进入；${previousIdentityHint()}`, false);
   }
 
   async function redeem(requestGeneration = generation.current) {
@@ -434,7 +588,10 @@ export function PairPage() {
     stopPolling();
     setChallenge(attempt.challenge);
     setScanOpen(false);
-    if (!resolved.reused) resetAttemptView();
+    if (!resolved.reused) {
+      resetAttemptView();
+      beginPairingAccountWatch();
+    }
 
     if (attempt.joined) {
       changePhase('awaiting');
@@ -514,7 +671,8 @@ export function PairPage() {
         return;
       }
       targetIdentity.current = me;
-      if (!persistIdentity(me, attempt)) return;
+      const saved = await persistIdentity(me, attempt);
+      if (!mounted.current || !saved) return;
       enterHome();
     } catch (failure) {
       if (!mounted.current) return;
@@ -630,7 +788,7 @@ export function PairPage() {
       <details>
         <summary>安全说明</summary>
         <p>
-          新设备使用本地生成的独立 token；已登录设备必须核对设备名称、平台与确认码后批准。原身份会保留在本机身份列表。
+          新设备使用本地生成的独立 token；已登录设备必须核对设备名称、平台与确认码后批准。配对期间账号状态未变化时，原身份会保存在本机身份列表；账号已切换时仅在核对一致后保存。
         </p>
       </details>
     </main>

@@ -103,6 +103,7 @@ const base = await baseUrl();
 let ownerToken = '';
 let ownerName = '';
 let otherToken = '';
+let otherActorId = '';
 
 async function newMobileContext(browser: Browser): Promise<BrowserContext> {
   return browser.newContext({
@@ -113,6 +114,21 @@ async function newMobileContext(browser: Browser): Promise<BrowserContext> {
     userAgent:
       'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36',
   });
+}
+
+async function storedIdentity(
+  page: Page,
+  actorId: string,
+): Promise<{ actor_id?: string; token?: string } | null> {
+  return page.evaluate((id) => {
+    const raw = window.localStorage.getItem(`agent-network-identity-v1:${id}`);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as { actor_id?: string; token?: string };
+    } catch {
+      return null;
+    }
+  }, actorId);
 }
 
 function qrSvg(text: string): string {
@@ -321,12 +337,13 @@ test.beforeAll(async ({ request }) => {
     device_id: crypto.randomUUID(),
   });
   otherToken = crypto.randomUUID();
-  await callTool(request, base, otherToken, 'network_register', {
+  const other = await callTool<Registered>(request, base, otherToken, 'network_register', {
     request_id: requestId('pwa_pair_other'),
     kind: 'human',
     name: `PWA 另一账号 ${suffix}`,
     device_id: crypto.randomUUID(),
   });
+  otherActorId = other.actor_id;
 });
 
 test('短码配对保持原流程并在空设备自动进入', async ({ browser, request }) => {
@@ -647,16 +664,15 @@ test('已有账号时保留显式切换，不自动覆盖当前身份', async ({
     expect(pairedToken).toBeTruthy();
     expect(pairedToken).not.toBe(phoneToken);
     expect(pairedToken).not.toBe(ownerToken);
-    const oldIdentitySaved = await page.evaluate(
-      (actorId) => localStorage.getItem(`agent-network-identity-v1:${actorId}`) !== null,
-      registered.actor_id,
-    );
-    expect(oldIdentitySaved).toBe(true);
+    const oldIdentity = await storedIdentity(page, registered.actor_id);
+    expect(oldIdentity).not.toBeNull();
+    expect(oldIdentity?.token).toBe(phoneToken);
+    expect(oldIdentity?.token).not.toBe(ownerToken);
     console.log(
       JSON.stringify({
         flow: 'existing-account-explicit-switch',
         pairedTokenDiffers: true,
-        oldIdentitySaved,
+        oldIdentityTokenMatches: oldIdentity?.token === phoneToken,
       }),
     );
   } finally {
@@ -685,7 +701,148 @@ test('扫码期间切换账号时保留显式确认', async ({ browser, request 
     await page.locator('#pair-switch').click();
     await page.waitForURL(`${base}/`, { timeout: 15_000 });
     await expect(page.locator('#account-name')).toHaveText(ownerName);
+    // unknown 基线（配对期间才出现 token B）不得把 B 按旧身份写入。
+    expect(await storedIdentity(page, otherActorId)).toBeNull();
     console.log(JSON.stringify({ flow: 'account-switched-during-pair', explicit: true }));
+  } finally {
+    await context.close();
+    await cancelPairing(request, created.pairing_id);
+  }
+});
+
+test('已有账号配对期间切到 B 后不写入 actor/token 错配', async ({ browser, request }) => {
+  const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+  const phoneToken = crypto.randomUUID();
+  const registered = await callTool<Registered>(request, base, phoneToken, 'network_register', {
+    request_id: requestId('pwa_pair_identity_phone'),
+    kind: 'human',
+    name: `PWA 切号身份表 ${suffix}`,
+    device_id: crypto.randomUUID(),
+  });
+  const created = await createPairing(request, 'E2E 身份表切号手机');
+  const context = await newMobileContext(browser);
+  await context.addInitScript(
+    ({ token }: { token: string }) => {
+      try {
+        if (localStorage.getItem('__pwa_pair_identity_seeded') !== '1') {
+          localStorage.setItem('agent-network-token', token);
+          localStorage.setItem('__pwa_pair_identity_seeded', '1');
+        }
+      } catch {
+        // 忽略存储不可用。
+      }
+    },
+    { token: phoneToken },
+  );
+  const page = await context.newPage();
+  try {
+    await page.goto(`${base}/pair#c=${created.challenge}`);
+    await expect(page.locator('#pair-original')).toContainText('PWA 切号身份表', {
+      timeout: 10_000,
+    });
+    await page.locator('#pair-start').click();
+    await expect(page.locator('#pair-confirm')).toHaveText(/^[0-9A-F]{4}-[0-9A-F]{4}$/u, {
+      timeout: 10_000,
+    });
+    // 批准前把 token 切到账号 B；页面里的 A 身份已经陈旧。
+    await page.evaluate((token) => localStorage.setItem('agent-network-token', token), otherToken);
+    const confirm = (await page.locator('#pair-confirm').textContent()) ?? '';
+    await approvePairing(request, confirm);
+    await expect(page.locator('#pair-switch')).toBeVisible({ timeout: 15_000 });
+    await page.waitForTimeout(800);
+    await expect(page).toHaveURL(`${base}/pair`);
+    await page.locator('#pair-switch').click();
+    await page.waitForURL(`${base}/`, { timeout: 15_000 });
+    await expect(page.locator('#account-name')).toHaveText(ownerName);
+
+    const oldIdentity = await storedIdentity(page, registered.actor_id);
+    const switchedIdentity = await storedIdentity(page, otherActorId);
+    expect(oldIdentity).not.toBeNull();
+    // A 的记录只能保存 A 的 token；B 不能被顶替成 A，也不会凭空出现。
+    expect(oldIdentity?.token).toBe(phoneToken);
+    expect(oldIdentity?.token).not.toBe(otherToken);
+    expect(switchedIdentity).toBeNull();
+    console.log(
+      JSON.stringify({
+        flow: 'identity-switched-during-pair',
+        oldTokenMatchesA: oldIdentity?.token === phoneToken,
+        foreignIdentityAbsent: switchedIdentity === null,
+      }),
+    );
+  } finally {
+    await context.close();
+    await cancelPairing(request, created.pairing_id);
+  }
+});
+
+test('空设备配对期间瞬时切号后不自动进入', async ({ browser, request }) => {
+  const created = await createPairing(request, 'E2E 瞬时切号手机');
+  const context = await newMobileContext(browser);
+  const page = await context.newPage();
+  const writer = await context.newPage();
+  try {
+    await page.goto(`${base}/pair#c=${created.challenge}`);
+    await page.waitForFunction(() => window.location.hash === '');
+    await page.locator('#pair-start').click();
+    await expect(page.locator('#pair-confirm')).toHaveText(/^[0-9A-F]{4}-[0-9A-F]{4}$/u, {
+      timeout: 10_000,
+    });
+    // 另一个标签页短暂出现 B 的 token，再删除；首尾状态仍为空。
+    await writer.goto(`${base}/pair`);
+    await writer.evaluate((token) => localStorage.setItem('agent-network-token', token), otherToken);
+    await writer.waitForTimeout(100);
+    await writer.evaluate(() => localStorage.removeItem('agent-network-token'));
+    await writer.waitForTimeout(300);
+    expect(await page.evaluate(() => localStorage.getItem('agent-network-token'))).toBeNull();
+
+    const confirm = (await page.locator('#pair-confirm').textContent()) ?? '';
+    await approvePairing(request, confirm);
+    await expect(page.locator('#pair-switch')).toBeVisible({ timeout: 15_000 });
+    await page.waitForTimeout(800);
+    await expect(page).toHaveURL(`${base}/pair`);
+    expect(await page.evaluate(() => localStorage.getItem('agent-network-token'))).toBeNull();
+
+    await page.locator('#pair-switch').click();
+    await page.waitForURL(`${base}/`, { timeout: 15_000 });
+    await expect(page.locator('#account-name')).toHaveText(ownerName);
+    console.log(
+      JSON.stringify({ flow: 'transient-switch-back-to-empty', autoEntered: false }),
+    );
+  } finally {
+    await context.close();
+    await cancelPairing(request, created.pairing_id);
+  }
+});
+
+test('空设备配对期间同标签页瞬时切号后不自动进入', async ({ browser, request }) => {
+  const created = await createPairing(request, 'E2E 同标签瞬时切号手机');
+  const context = await newMobileContext(browser);
+  const page = await context.newPage();
+  try {
+    await page.goto(`${base}/pair#c=${created.challenge}`);
+    await page.waitForFunction(() => window.location.hash === '');
+    await page.locator('#pair-start').click();
+    await expect(page.locator('#pair-confirm')).toHaveText(/^[0-9A-F]{4}-[0-9A-F]{4}$/u, {
+      timeout: 10_000,
+    });
+    // 同一文档内写入后立即删除：不会产生 storage 事件，只能靠存储方法标记。
+    await page.evaluate((token) => localStorage.setItem('agent-network-token', token), otherToken);
+    await page.waitForTimeout(100);
+    await page.evaluate(() => localStorage.removeItem('agent-network-token'));
+    await page.waitForTimeout(200);
+    expect(await page.evaluate(() => localStorage.getItem('agent-network-token'))).toBeNull();
+
+    const confirm = (await page.locator('#pair-confirm').textContent()) ?? '';
+    await approvePairing(request, confirm);
+    await expect(page.locator('#pair-switch')).toBeVisible({ timeout: 15_000 });
+    await page.waitForTimeout(800);
+    await expect(page).toHaveURL(`${base}/pair`);
+    expect(await page.evaluate(() => localStorage.getItem('agent-network-token'))).toBeNull();
+
+    await page.locator('#pair-switch').click();
+    await page.waitForURL(`${base}/`, { timeout: 15_000 });
+    await expect(page.locator('#account-name')).toHaveText(ownerName);
+    console.log(JSON.stringify({ flow: 'same-tab-transient-switch', autoEntered: false }));
   } finally {
     await context.close();
     await cancelPairing(request, created.pairing_id);
