@@ -25,6 +25,11 @@ import {
   applySendStatus,
   reconcileOutboxStatuses,
 } from '../src/web/lib/outbox-reconcile';
+import {
+  bumpIdentityEpoch,
+  currentIdentityEpoch,
+  observeIdentity,
+} from '../src/web/lib/identity-epoch';
 import { RecoveryScheduler, type RecoveryReason } from '../src/web/lib/recovery-coordinator';
 import {
   getRecoverySnapshot,
@@ -312,6 +317,38 @@ function verifyStickyIdentityMask(): void {
   check('重置粘性状态', !getRecoverySnapshot().sticky);
 }
 
+function verifyIdentityEpoch(): void {
+  const start = currentIdentityEpoch();
+  checkEqual(
+    '首次观测身份推进代次',
+    observeIdentity('actor-a', 'token-a'),
+    start + 1,
+  );
+  checkEqual(
+    '同一身份重复观测不推进',
+    observeIdentity('actor-a', 'token-a'),
+    start + 1,
+  );
+  checkEqual(
+    'token 变化推进代次',
+    observeIdentity('actor-a', 'token-b'),
+    start + 2,
+  );
+  checkEqual(
+    'actor 变化推进代次',
+    observeIdentity('actor-b', 'token-b'),
+    start + 3,
+  );
+  bumpIdentityEpoch();
+  checkEqual('显式 bump 推进代次', currentIdentityEpoch(), start + 4);
+
+  // 请求发起时记录代次；切号后回调读取到的当前值必须不同。
+  const requestEpoch = currentIdentityEpoch();
+  observeIdentity('actor-c', 'token-c');
+  check('切号后旧请求代次失效', requestEpoch !== currentIdentityEpoch());
+  bumpIdentityEpoch();
+}
+
 function verifyWatermark(): void {
   checkEqual('只取消息序号', renderedWatermark([message(7), message(9)]), '9');
   checkEqual(
@@ -486,6 +523,7 @@ async function main(): Promise<void> {
   await verifyCatchUpFailureResume();
   await verifyCatchUpStale();
   verifyStickyIdentityMask();
+  verifyIdentityEpoch();
   verifyWatermark();
   verifyOutboxJournal();
   verifyOutboxReconcile();

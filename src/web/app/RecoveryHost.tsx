@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom';
 
 import { callTool, readBrowserToken, type McpError } from '../lib/mcp-client';
 import type { RoomDetail } from '../lib/chat';
+import { bumpIdentityEpoch } from '../lib/identity-epoch';
 import { queryKeys } from '../lib/query-keys';
 import type { WebSession } from '../lib/identity';
 import { revalidateWebSession, resetWebSession, cachedWebSession } from '../lib/identity';
@@ -201,6 +202,8 @@ export function RecoveryHost({ routeName, roomId }: RecoveryHostProps) {
             previous.identity.actor_id !== session.identity.actor_id),
       );
       if (sessionChanged) {
+        // 恢复轮确认 token/actor 已变化：旧身份在途写入全部作废。
+        bumpIdentityEpoch();
         clearPrivateQueries(queryClient, previous?.identity.actor_id ?? null);
       }
       queryClient.setQueryData(queryKeys.session(), session);

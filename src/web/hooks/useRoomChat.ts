@@ -14,6 +14,7 @@ import {
 } from '../lib/chat';
 import { catchUpGap, type CatchUpAuthorization, type CatchUpPage } from '../lib/history-recovery';
 import type { WebSession } from '../lib/identity';
+import { currentIdentityEpoch } from '../lib/identity-epoch';
 import { callTool, mcpError, type McpError } from '../lib/mcp-client';
 import { queryKeys } from '../lib/query-keys';
 import type { RoomsPage } from '../lib/rooms';
@@ -329,13 +330,18 @@ export function useRoomChat(roomId: string) {
     queryKey: detailKey,
     enabled: Boolean(token),
     queryFn: async ({ signal }) => {
+      const requestIdentityEpoch = currentIdentityEpoch();
       const requestEpoch = contextRef.current.epoch;
       const detail = await callTool<RoomDetail>(
         'network_room_get',
         { room_id: roomId },
         { token: token ?? undefined, signal },
       );
-      if (contextRef.current.epoch !== requestEpoch || contextRef.current.roomId !== roomId) {
+      if (
+        requestIdentityEpoch !== currentIdentityEpoch() ||
+        contextRef.current.epoch !== requestEpoch ||
+        contextRef.current.roomId !== roomId
+      ) {
         throw mcpError('身份或房间已变化，丢弃旧会话响应', 'STALE_CONTEXT');
       }
       return detail;
@@ -350,7 +356,9 @@ export function useRoomChat(roomId: string) {
     queryFn: async ({ client, signal, queryKey }) => {
       const requestActor = actorId;
       const requestEpoch = contextRef.current.epoch;
+      const requestIdentityEpoch = currentIdentityEpoch();
       const staleContext = () =>
+        requestIdentityEpoch !== currentIdentityEpoch() ||
         contextRef.current.epoch !== requestEpoch ||
         contextRef.current.actorId !== requestActor ||
         contextRef.current.roomId !== roomId;
@@ -525,6 +533,7 @@ export function useRoomChat(roomId: string) {
   const older = useMutation({
     mutationFn: async () => {
       const requestEpoch = contextRef.current.epoch;
+      const requestIdentityEpoch = currentIdentityEpoch();
       const state = queryClient.getQueryData<HistoryCache>(historyKey);
       const cursor = state?.nextOlder ?? null;
       if (!cursor) throw new Error('已经到最早的消息了');
@@ -533,12 +542,16 @@ export function useRoomChat(roomId: string) {
         historyArgs(roomId, humanTimeline, cursor),
         { token: token ?? undefined },
       );
-      if (contextRef.current.epoch !== requestEpoch) {
+      if (
+        requestIdentityEpoch !== currentIdentityEpoch() ||
+        contextRef.current.epoch !== requestEpoch
+      ) {
         throw mcpError('身份或房间已变化，丢弃旧历史页', 'STALE_CONTEXT');
       }
-      return { page, cursor };
+      return { page, cursor, requestIdentityEpoch };
     },
-    onSuccess: ({ page, cursor }) => {
+    onSuccess: ({ page, cursor, requestIdentityEpoch }) => {
+      if (requestIdentityEpoch !== currentIdentityEpoch()) return;
       queryClient.setQueryData<HistoryCache>(historyKey, (previous) => {
         if (!previous) return previous;
         const incoming = reverseChronological(page, humanTimeline);
@@ -561,18 +574,39 @@ export function useRoomChat(roomId: string) {
   const markReadMutation = useMutation({
     mutationFn: async (throughSeq: string) => {
       const start = contextRef.current;
+      const identityEpoch = currentIdentityEpoch();
       await callTool(
         'network_room_mark_read',
         { room_id: roomId, through_seq: throughSeq },
         { token: start.token ?? undefined },
       );
-      return { throughSeq, epoch: start.epoch, actorId: start.actorId };
+      return {
+        throughSeq,
+        identityEpoch,
+        actorId: start.actorId,
+        token: start.token,
+        roomId: start.roomId,
+      };
     },
-    onSuccess: ({ throughSeq, epoch: startEpoch, actorId: startActor }) => {
-      // 晚到的写响应只属于发起时的身份代次；切号/撤权后丢弃，避免把旧身份
-      // 的已读水位写进新身份的房间与列表缓存。
+    onSuccess: ({
+      throughSeq,
+      identityEpoch,
+      actorId: startActor,
+      token: startToken,
+      roomId: startRoom,
+    }) => {
+      // 遮罩出现会卸载本 hook 的组件；模块级代次不随卸载冻结，晚到的写响应
+      // 只属于发起时的身份，切号/撤权后丢弃，避免把旧身份的已读水位写进
+      // 新身份的房间与列表缓存。token/actor/房间再作二次校验。
+      if (identityEpoch !== currentIdentityEpoch()) return;
       const current = contextRef.current;
-      if (current.epoch !== startEpoch || current.actorId !== startActor) return;
+      if (
+        current.actorId !== startActor ||
+        current.token !== startToken ||
+        current.roomId !== startRoom
+      ) {
+        return;
+      }
       queryClient.setQueryData<RoomDetail>(detailKey, (previous) =>
         previous
           ? { ...previous, room: { ...previous.room, my_last_read_seq: throughSeq } }
@@ -616,6 +650,7 @@ export function useRoomChat(roomId: string) {
       );
       if (!visible) return;
       const requestEpoch = contextRef.current.epoch;
+      const requestIdentityEpoch = currentIdentityEpoch();
       try {
         const page = await callTool<HistoryPage>(
           'network_history_list',
@@ -627,7 +662,12 @@ export function useRoomChat(roomId: string) {
           },
           { token },
         );
-        if (contextRef.current.epoch !== requestEpoch) return;
+        if (
+          requestIdentityEpoch !== currentIdentityEpoch() ||
+          contextRef.current.epoch !== requestEpoch
+        ) {
+          return;
+        }
         const incoming = humanTimeline ? page.timeline_items ?? [] : page.items;
         queryClient.setQueryData<HistoryCache>(historyKey, (previous) =>
           previous

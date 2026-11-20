@@ -7,6 +7,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import { LIMITS } from '../../contracts/limits';
+import { currentIdentityEpoch } from '../lib/identity-epoch';
 import type { McpError } from '../lib/mcp-client';
 import { callTool } from '../lib/mcp-client';
 import { queryKeys } from '../lib/query-keys';
@@ -117,6 +118,7 @@ export function useRoomTasks({
    */
   const rebuildFirstPage = useCallback(async (): Promise<boolean> => {
     if (!enabled || !token) return false;
+    const requestEpoch = currentIdentityEpoch();
     rebuildControllerRef.current?.abort();
     const controller = new AbortController();
     rebuildControllerRef.current = controller;
@@ -133,7 +135,11 @@ export function useRoomTasks({
         },
         { token, signal: controller.signal },
       );
-      if (controller.signal.aborted || sequence !== rebuildSequenceRef.current) {
+      if (
+        controller.signal.aborted ||
+        sequence !== rebuildSequenceRef.current ||
+        requestEpoch !== currentIdentityEpoch()
+      ) {
         return false;
       }
       queryClient.setQueryData<TaskListCache>(listKey, {
@@ -143,7 +149,11 @@ export function useRoomTasks({
       setRebuildError(null);
       return true;
     } catch (error) {
-      if (controller.signal.aborted || sequence !== rebuildSequenceRef.current) {
+      if (
+        controller.signal.aborted ||
+        sequence !== rebuildSequenceRef.current ||
+        requestEpoch !== currentIdentityEpoch()
+      ) {
         return false;
       }
       setRebuildError(failureMessage(error));
@@ -208,6 +218,7 @@ export function useRoomTasks({
       if (isUpdateWriteBlocked()) {
         throw new Error('当前页面与服务器版本不兼容，请先更新后再完成 Task');
       }
+      const requestEpoch = currentIdentityEpoch();
       const result = await callTool(
         'network_task_complete',
         {
@@ -217,10 +228,12 @@ export function useRoomTasks({
         },
         { token },
       );
-      return { result, token, actorId };
+      return { result, token, actorId, requestEpoch };
     },
     onSuccess: async (response, input) => {
-      // 旧身份的完成回执不能在切号后改写新身份的 Task 缓存。
+      // 遮罩出现后本组件会卸载，旧实例的 ref 冻结在旧身份；先比较模块级
+      // 代次，再按 token/actor 二次校验，避免旧回执改写新身份的 Task 缓存。
+      if (response.requestEpoch !== currentIdentityEpoch()) return;
       const current = identityRef.current;
       if (
         !current.token ||

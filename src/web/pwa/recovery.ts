@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 
 import { LIMITS } from '../../contracts/limits';
+import { bumpIdentityEpoch } from '../lib/identity-epoch';
 import {
   RecoveryScheduler,
   type RecoveryReason,
@@ -157,6 +158,8 @@ export function triggerRecovery(
   if (reason === 'auth') {
     stickyMask = true;
     pendingMask = true;
+    // 身份边界事件：从此刻起旧身份的在途响应不能写回新缓存。
+    bumpIdentityEpoch();
   }
   if (options.longBackground === true) pendingLongBackground = true;
   if (options.mask === true || options.longBackground === true) pendingMask = true;
@@ -178,6 +181,7 @@ export function triggerRecovery(
  * 替换）：在发起网络核对前先粘住遮罩，并立即遮蔽旧私有视图。
  */
 export function reportIdentitySignal(): void {
+  bumpIdentityEpoch();
   if (stickyMask && pendingMask) return;
   stickyMask = true;
   pendingMask = true;
@@ -260,6 +264,7 @@ export function reportRecoveryUnavailable(message?: string): void {
 
 export function reportRecoveryBlocked(reason: string, revokedRoomId: string | null = null): void {
   // blocked 是身份/权限边界的终态：后续恢复轮失败时也不能把遮罩撤掉。
+  bumpIdentityEpoch();
   stickyMask = true;
   pendingMask = false;
   pendingLongBackground = false;

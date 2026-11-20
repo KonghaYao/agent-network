@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
+import { useEffect } from 'react';
 
 import { ensureWebSession, type WebSession } from '../lib/identity';
+import { observeIdentity } from '../lib/identity-epoch';
 import type { McpError } from '../lib/mcp-client';
 import { queryKeys } from '../lib/query-keys';
 
@@ -55,6 +57,13 @@ export function useWebSession(): SessionState {
     gcTime: Infinity,
     retry: false,
   });
+
+  // 兜底观测：任何来源的身份变化都会推进模块级代次；同一身份重复观测不变。
+  const token = query.data?.token ?? null;
+  const actorId = query.data?.identity.actor_id ?? null;
+  useEffect(() => {
+    observeIdentity(actorId, token);
+  }, [actorId, token]);
 
   if (query.data) {
     return { session: query.data, status: 'ready', error: null };

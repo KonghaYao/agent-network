@@ -16,6 +16,7 @@ import {
   applySendStatus,
   reconcileOutboxStatuses,
 } from '../lib/outbox-reconcile';
+import { currentIdentityEpoch } from '../lib/identity-epoch';
 import { callTool, type McpError } from '../lib/mcp-client';
 import type { SendResult, SendStatusItem } from '../lib/chat';
 import { useRecoveryState } from '../pwa/recovery';
@@ -97,6 +98,7 @@ export function useSendQueue({ actorId, token, roomId, onCommitted }: UseSendQue
     ): Promise<{ ok: boolean; found: Map<string, SendStatusItem>; stale?: boolean }> => {
       const accessToken = tokenRef.current;
       const actorAtStart = actorRef.current;
+      const identityEpoch = currentIdentityEpoch();
       const found = new Map<string, SendStatusItem>();
       if (!accessToken || ids.length === 0) return { ok: true, found };
       for (let index = 0; index < ids.length; index += STATUS_BATCH) {
@@ -107,14 +109,22 @@ export function useSendQueue({ actorId, token, roomId, onCommitted }: UseSendQue
             { client_message_ids: batch },
             { token: accessToken },
           );
-          if (tokenRef.current !== accessToken || actorRef.current !== actorAtStart) {
+          if (
+            identityEpoch !== currentIdentityEpoch() ||
+            tokenRef.current !== accessToken ||
+            actorRef.current !== actorAtStart
+          ) {
             return { ok: false, found, stale: true };
           }
           for (const item of page.items ?? []) {
             if (item.found) found.set(item.client_message_id, item);
           }
         } catch {
-          if (tokenRef.current !== accessToken || actorRef.current !== actorAtStart) {
+          if (
+            identityEpoch !== currentIdentityEpoch() ||
+            tokenRef.current !== accessToken ||
+            actorRef.current !== actorAtStart
+          ) {
             return { ok: false, found, stale: true };
           }
           return { ok: false, found };
@@ -129,6 +139,7 @@ export function useSendQueue({ actorId, token, roomId, onCommitted }: UseSendQue
     if (reconcileInFlightRef.current) return;
     const accessToken = tokenRef.current;
     const currentActor = actorRef.current;
+    const identityEpoch = currentIdentityEpoch();
     if (!accessToken || !currentActor) return;
     const pending = itemsRef.current.filter(
       (item) => item.room_id === roomId && item.status !== 'committed',
@@ -139,7 +150,13 @@ export function useSendQueue({ actorId, token, roomId, onCommitted }: UseSendQue
       const response = await queryStatus(pending.map((item) => item.client_message_id));
       // 查询失败保持“待确认”；身份代次变化时丢弃晚到结果。
       if (!response.ok || response.stale) return;
-      if (actorRef.current !== currentActor || tokenRef.current !== accessToken) return;
+      if (
+        identityEpoch !== currentIdentityEpoch() ||
+        actorRef.current !== currentActor ||
+        tokenRef.current !== accessToken
+      ) {
+        return;
+      }
       const result = reconcileOutboxStatuses(itemsRef.current, pending, response.found);
       persist(result.items);
       if (result.found) committedRef.current('');
@@ -194,6 +211,7 @@ export function useSendQueue({ actorId, token, roomId, onCommitted }: UseSendQue
     async (intent: OutboxIntent): Promise<SendOutcome> => {
       const accessToken = tokenRef.current;
       const currentActor = actorRef.current;
+      const identityEpoch = currentIdentityEpoch();
       if (!accessToken) return { ok: false, error: '浏览器身份尚未初始化，请刷新页面后重试' };
       persist(
         updateIntent(itemsRef.current, intent.client_message_id, {
@@ -219,7 +237,11 @@ export function useSendQueue({ actorId, token, roomId, onCommitted }: UseSendQue
           token: accessToken,
         });
         // 晚到的成功响应不能写进新身份的 outbox。
-        if (actorRef.current !== currentActor || tokenRef.current !== accessToken) {
+        if (
+          identityEpoch !== currentIdentityEpoch() ||
+          actorRef.current !== currentActor ||
+          tokenRef.current !== accessToken
+        ) {
           return { ok: false, error: '身份已变化，请刷新后重新核对发送结果' };
         }
         persist(markCommitted(intent, result));
@@ -227,7 +249,11 @@ export function useSendQueue({ actorId, token, roomId, onCommitted }: UseSendQue
         return { ok: true, error: null };
       } catch (error) {
         const failure = error as McpError;
-        if (actorRef.current !== currentActor || tokenRef.current !== accessToken) {
+        if (
+          identityEpoch !== currentIdentityEpoch() ||
+          actorRef.current !== currentActor ||
+          tokenRef.current !== accessToken
+        ) {
           return { ok: false, error: '身份已变化，请刷新后重新核对发送结果' };
         }
         persist(

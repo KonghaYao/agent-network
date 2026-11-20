@@ -1,7 +1,8 @@
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback } from 'react';
 
-import { callTool } from '../lib/mcp-client';
+import { currentIdentityEpoch } from '../lib/identity-epoch';
+import { callTool, mcpError } from '../lib/mcp-client';
 import {
   fileKey,
   type RoomFileItem,
@@ -37,8 +38,9 @@ export function useRoomFiles(
     queryKey: queryKeys.roomFiles(roomId),
     enabled: Boolean(token && enabled),
     initialPageParam: null as string | null,
-    queryFn: ({ pageParam, signal }) =>
-      callTool<RoomFilePage>(
+    queryFn: async ({ pageParam, signal }) => {
+      const requestEpoch = currentIdentityEpoch();
+      const page = await callTool<RoomFilePage>(
         'network_room_file_list',
         {
           room_id: roomId,
@@ -46,7 +48,13 @@ export function useRoomFiles(
           ...(pageParam ? { cursor: pageParam } : {}),
         },
         { token: token ?? undefined, signal },
-      ),
+      );
+      // 文件键不含 actor；切号后旧身份的分页响应不能填进新身份的列表。
+      if (requestEpoch !== currentIdentityEpoch()) {
+        throw mcpError('身份已变化，丢弃旧文件响应', 'STALE_CONTEXT');
+      }
+      return page;
+    },
     getNextPageParam: (page) =>
       page.has_more && page.next_cursor ? page.next_cursor : undefined,
   });

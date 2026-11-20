@@ -1,4 +1,5 @@
 import { isMobileDevice } from '../pwa/install';
+import { bumpIdentityEpoch } from './identity-epoch';
 import {
   callTool,
   mcpError,
@@ -194,6 +195,8 @@ export function createFreshIdentity(): Promise<WebSession> {
     }
     clearLoggedOutState();
     cached = { identity, token };
+    // 新身份与旧身份之间没有可比对的会话，直接推进代次丢弃旧在途响应。
+    bumpIdentityEpoch();
     return cached;
   })().finally(() => {
     freshPending = null;
@@ -231,7 +234,15 @@ export async function revalidateWebSession(): Promise<WebSession> {
   }
   try {
     const identity = await callTool<WebIdentity>('network_me', {}, { token: stored });
+    const previous = cached;
     cached = { identity, token: stored };
+    // token/actor 变化意味着旧身份的在途响应不能再写入新身份的缓存。
+    if (
+      previous &&
+      (previous.token !== stored || previous.identity.actor_id !== identity.actor_id)
+    ) {
+      bumpIdentityEpoch();
+    }
     return cached;
   } catch (error) {
     const failure = error as McpError;
@@ -255,4 +266,6 @@ export function resetWebSession(): void {
   cached = null;
   pending = null;
   freshPending = null;
+  // 退出/撤权后旧身份的晚到响应必须全部作废。
+  bumpIdentityEpoch();
 }
