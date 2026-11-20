@@ -6,6 +6,7 @@ import { PairScanner } from '../features/pairing/PairScanner';
 import { callTool, type McpError } from '../lib/mcp-client';
 import { resolvePairingAttempt, type PairingAttempt } from '../lib/pairing-attempt';
 import { isPairingChallenge, parsePairingQr } from '../lib/pairing-qr';
+import { pairingUpdateBusy, setUpdateBusy } from '../pwa/update-busy';
 import {
   IDENTITY_PREFIX,
   LOGGED_OUT_KEY,
@@ -152,6 +153,12 @@ export function PairPage() {
     busy || phase === 'awaiting' || phase === 'ready' || switchBusy;
   const scanDisabled =
     scanOpen || busy || phase === 'awaiting' || phase === 'ready' || switchBusy;
+  const pairingBusyLabel = pairingUpdateBusy(phase, switchBusy, scanOpen).join('；');
+
+  useEffect(() => {
+    setUpdateBusy('pairing', pairingBusyLabel || null);
+    return () => setUpdateBusy('pairing', null);
+  }, [pairingBusyLabel]);
 
   function changePhase(next: PairingPhase) {
     phaseRef.current = next;

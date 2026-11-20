@@ -11,6 +11,7 @@ import { useWebSession } from '../../hooks/useWebSession';
 import { callTool } from '../../lib/mcp-client';
 import { queryKeys } from '../../lib/query-keys';
 import { newRequestId } from '../../lib/request-id';
+import { useUpdateWriteBlocked } from '../../pwa/update-store';
 
 function actorLabel(actor: ContactRequestActor | undefined): string {
   if (!actor || typeof actor.name !== 'string') return '未知身份';
@@ -44,6 +45,7 @@ export function ContactRequestsPanel({
   const token = session.session?.token ?? null;
   const requests = useContactRequests(active);
   const queryClient = useQueryClient();
+  const writeBlocked = useUpdateWriteBlocked();
   const [status, setStatus] = useState('');
   const [error, setError] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -75,6 +77,10 @@ export function ContactRequestsPanel({
   };
 
   const respond = async (item: ContactRequestView, action: 'accept' | 'reject') => {
+    if (writeBlocked) {
+      setMessage('当前页面与服务器版本不兼容，请先更新后再处理好友申请。', true);
+      return;
+    }
     if (!token || busyId) return;
     setBusyId(item.contact_request_id);
     setMessage(action === 'accept' ? '正在接受…' : '正在拒绝…');
@@ -101,6 +107,10 @@ export function ContactRequestsPanel({
   };
 
   const cancel = async (item: ContactRequestView) => {
+    if (writeBlocked) {
+      setMessage('当前页面与服务器版本不兼容，请先更新后再撤销好友申请。', true);
+      return;
+    }
     if (!token || busyId) return;
     setBusyId(item.contact_request_id);
     setMessage('正在撤销…');
@@ -139,6 +149,11 @@ export function ContactRequestsPanel({
           {incoming === 0 ? '暂无待处理申请。' : `${incoming} 条待处理申请`}
         </span>
       </p>
+      {writeBlocked ? (
+        <p className="composer-update-block" role="status">
+          当前页面与服务器版本不兼容，请先更新后再处理好友申请。
+        </p>
+      ) : null}
       <p
         id="contact-request-status"
         className="contact-search-status"
@@ -177,14 +192,14 @@ export function ContactRequestsPanel({
                       <Button
                         type="button"
                         className="primary"
-                        disabled={busyId !== null}
+                        disabled={busyId !== null || writeBlocked}
                         onClick={() => void respond(item, 'accept')}
                       >
                         {rowBusy ? '处理中…' : '接受'}
                       </Button>
                       <Button
                         type="button"
-                        disabled={busyId !== null}
+                        disabled={busyId !== null || writeBlocked}
                         onClick={() => void respond(item, 'reject')}
                       >
                         拒绝
@@ -194,7 +209,7 @@ export function ContactRequestsPanel({
                   {item.can_cancel ? (
                     <Button
                       type="button"
-                      disabled={busyId !== null}
+                      disabled={busyId !== null || writeBlocked}
                       onClick={() => void cancel(item)}
                     >
                       {rowBusy ? '处理中…' : '撤销申请'}

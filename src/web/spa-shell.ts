@@ -47,6 +47,77 @@ export interface SpaShellOptions {
 }
 
 /**
+ * 入口脚本 404/解析失败时 React 尚未运行；这段标记与内联脚本不依赖 CSS
+ * chunk、Lenso 或任何业务数据，直接显示可操作错误页。它放在 `#root` 外，
+ * 避免 share/join hydrate 不匹配；成功挂载后由 `__webBootOk` 隐藏。
+ */
+export const BOOT_ERROR_MARKUP = `<div id="web-boot-error" class="web-boot-error" hidden>
+<main class="web-boot-error-card" role="alert">
+<h1>资源加载失败</h1>
+<p>页面脚本未能加载。请检查网络连接后重试；已输入的文字草稿仍保存在本机。</p>
+<button type="button" id="web-boot-retry">重试</button>
+<p class="web-boot-error-hint">如果刚完成更新，也可以关闭页面后重新打开。</p>
+</main>
+</div>`;
+
+/** 不读取 storage、不请求网络、不自动刷新；只响应脚本错误并提供手动重试。 */
+export const BOOT_ERROR_SCRIPT = `(function(){
+  var panel = document.getElementById('web-boot-error');
+  var retry = document.getElementById('web-boot-retry');
+  var booted = false;
+  function show() {
+    if (booted || !panel) return;
+    panel.hidden = false;
+  }
+  function bootOk() {
+    booted = true;
+    if (panel) panel.hidden = true;
+  }
+  window.__webBootOk = bootOk;
+  window.addEventListener('error', function (event) {
+    if (booted) return;
+    // 入口模块 404/解析失败在部分浏览器只把 target 指向 window；挂载前
+    // 的任何脚本错误都应停在可操作错误页，而不是留下空壳。
+    var target = event.target;
+    if (target && target.tagName === 'SCRIPT') { show(); return; }
+    show();
+  }, true);
+  window.addEventListener('unhandledrejection', function (event) {
+    if (booted) return;
+    var reason = event.reason;
+    var text = reason && (reason.message || String(reason));
+    if (typeof text === 'string' &&
+      /Importing a module script failed|Failed to fetch dynamically imported module/i.test(text)) {
+      show();
+    }
+  });
+  if (retry) retry.addEventListener('click', function () { window.location.reload(); });
+})();`;
+
+const BOOT_ERROR_STYLE = `
+  .web-boot-error { position: fixed; inset: 0; z-index: 1000; display: grid;
+    place-items: center; padding: 24px; background: #f5f5f5; color: #1a1a1a;
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+      "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+  .web-boot-error[hidden] { display: none; }
+  .web-boot-error-card { width: min(420px, 100%); padding: 28px 24px; border-radius: 12px;
+    background: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,.08); text-align: center; }
+  .web-boot-error-card h1 { margin: 0 0 10px; font-size: 20px; font-weight: 600; }
+  .web-boot-error-card p { margin: 0 0 18px; color: #666666; }
+  .web-boot-error-card button { min-height: 44px; padding: 0 24px; border: 0;
+    border-radius: 8px; background: #07c160; color: #ffffff; font: inherit;
+    font-weight: 600; cursor: pointer; }
+  .web-boot-error-card button:focus-visible { outline: 2px solid #1a1a1a; outline-offset: 2px; }
+  .web-boot-error-hint { margin: 12px 0 0 !important; font-size: 12px; color: #999999 !important; }
+  @media (prefers-color-scheme: dark) {
+    .web-boot-error { background: #191919; color: #ededed; }
+    .web-boot-error-card { background: #2c2c2c; box-shadow: none; }
+    .web-boot-error-card p { color: #a3a3a3; }
+    .web-boot-error-card button:focus-visible { outline-color: #ededed; }
+  }
+`;
+
+/**
  * React 壳复用原有的应用页样式：会话项、头像、空状态、移动端单栏
  * 与 Memory 抽屉都沿用同一套 CSS 变量和选择器。
  */
@@ -101,14 +172,16 @@ export function renderSpaShell(
 <meta property="og:type" content="website">
 ${pwaHeadTags()}
 <title>${escapeHtml(title)}</title>
-<style>:root{color-scheme:light dark}${CHAT_STYLE}</style>
+<style>:root{color-scheme:light dark}${CHAT_STYLE}${BOOT_ERROR_STYLE}</style>
 ${css}
 </head>
 <body class="${escapeHtml(bodyClass)}" data-spa-route="${route}">
 <div id="root">${options.bodyHtml ?? ''}</div>
+${BOOT_ERROR_MARKUP}
 <noscript><p>WeBots 需要启用 JavaScript。</p></noscript>
 <script type="application/json" id="spa-bootstrap">${bootstrap}</script>
 ${release}
+<script>${BOOT_ERROR_SCRIPT}</script>
 <script type="module" src="${escapeHtml(manifest.entry)}"></script>
 </body>
 </html>`;

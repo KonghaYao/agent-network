@@ -19,6 +19,7 @@ import { copyText, extractFileCards } from '../../lib/files';
 import type { RoomFileItem } from '../../lib/files-ui';
 import { readFullMessage } from '../../lib/message-body';
 import { avatarColor, firstChar } from '../../lib/rooms';
+import { useUpdateWriteBlocked } from '../../pwa/update-store';
 import { openAgentMemory, type AgentMemoryTarget } from '../memory/memory-store';
 import { HumanBody } from './MessageBody';
 import { MarkdownIsland } from './MarkdownIsland';
@@ -171,6 +172,7 @@ function ReplyReference({
 interface MessageAction {
   id: string;
   label: string;
+  disabled?: boolean;
   run: () => void | Promise<void>;
 }
 
@@ -196,6 +198,7 @@ function useMessageActions(
   onForward: (item: HistoryMessage) => void,
   memoryTarget: AgentMemoryTarget | null,
 ): MessageAction[] {
+  const writeBlocked = useUpdateWriteBlocked();
   const truncated = item.body_bytes > messageBodyBytes(item.preview);
   const mine = item.sender_id === identityId;
   const copy = async () => {
@@ -217,10 +220,16 @@ function useMessageActions(
     actions.push({
       id: 'message-action-task',
       label: marked ? '取消 Task' : '标记为 Task',
+      disabled: writeBlocked,
       run: () => onToggleTask(item),
     });
   }
-  actions.push({ id: 'message-action-forward', label: '转发', run: () => onForward(item) });
+  actions.push({
+    id: 'message-action-forward',
+    label: '转发',
+    disabled: writeBlocked,
+    run: () => onForward(item),
+  });
   if (memoryTarget) {
     actions.push({
       id: 'message-action-memory',
@@ -232,7 +241,12 @@ function useMessageActions(
     });
   }
   if (identityKind === 'human' && mine && !room.read_only) {
-    actions.push({ id: 'message-action-recall', label: '撤回', run: () => onRecall(item) });
+    actions.push({
+      id: 'message-action-recall',
+      label: '撤回',
+      disabled: writeBlocked,
+      run: () => onRecall(item),
+    });
   }
   return actions;
 }
@@ -251,6 +265,7 @@ function MessageMenuItems({
           key={action.id}
           id={action.id}
           className="room-menu-item"
+          disabled={action.disabled}
           onSelect={() => {
             void action.run();
           }}
@@ -304,7 +319,7 @@ function MessageActions({
       open={open} onOpenChange={setOpen} sideOffset={4} align="start"
       fallbackAnchor instantCloseOnSelect
       items={actions.map((action) => ({
-        id: action.id, label: action.label,
+        id: action.id, label: action.label, disabled: action.disabled,
         className: `room-menu-item${action.id === 'message-action-recall' ? ' danger' : ''}`,
         variant: action.id === 'message-action-recall' ? 'danger' : 'default',
         onSelect: () => { void action.run(); },

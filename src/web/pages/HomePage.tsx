@@ -12,6 +12,7 @@ import {
   takeFriendLinkToken,
 } from '../lib/friend-link';
 import { queryKeys } from '../lib/query-keys';
+import { friendRedeemUpdateBusy, setUpdateBusy } from '../pwa/update-busy';
 
 /**
  * Home：会话列表、搜索、分类与空状态。
@@ -27,6 +28,13 @@ export function HomePage() {
   const [friendNotice, setFriendNotice] = useState<{ message: string; error: boolean } | null>(
     null,
   );
+  const [friendRedeeming, setFriendRedeeming] = useState(false);
+  const friendBusy = friendRedeemUpdateBusy(friendRedeeming).join('；');
+
+  useEffect(() => {
+    setUpdateBusy('friend-redeem', friendBusy || null);
+    return () => setUpdateBusy('friend-redeem', null);
+  }, [friendBusy]);
 
   useEffect(() => {
     if (friendRead.current) return;
@@ -49,6 +57,7 @@ export function HomePage() {
     if (session.status !== 'ready' || !token || !identity) return;
     const pending = friendToken.current;
     friendToken.current = null;
+    setFriendRedeeming(true);
     void (async () => {
       try {
         const preview = await previewFriendLink(pending, token);
@@ -70,6 +79,8 @@ export function HomePage() {
         ]);
       } catch (failure) {
         setFriendNotice({ message: `添加好友失败：${friendLinkFailure(failure)}`, error: true });
+      } finally {
+        setFriendRedeeming(false);
       }
     })();
   }, [queryClient, session.session, session.status]);

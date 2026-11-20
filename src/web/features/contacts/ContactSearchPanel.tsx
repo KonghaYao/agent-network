@@ -6,6 +6,8 @@ import { LIMITS } from '../../../contracts/limits';
 import { callTool, type McpError } from '../../lib/mcp-client';
 import { queryKeys } from '../../lib/query-keys';
 import { newRequestId } from '../../lib/request-id';
+import { friendInviteUpdateBusy, setUpdateBusy } from '../../pwa/update-busy';
+import { useUpdateWriteBlocked } from '../../pwa/update-store';
 
 interface SearchActor {
   actor_id: string;
@@ -54,14 +56,22 @@ export function ContactSearchPanel({
   onAccepted: () => void;
 }) {
   const queryClient = useQueryClient();
+  const writeBlocked = useUpdateWriteBlocked();
   const [query, setQuery] = useState('');
   const [items, setItems] = useState<SearchItem[]>([]);
   const [status, setStatus] = useState('');
   const [error, setError] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [inviteSending, setInviteSending] = useState(false);
   const [selected, setSelected] = useState<SearchItem | null>(null);
   const [message, setMessage] = useState('');
   const abortRef = useRef<AbortController | null>(null);
+  const inviteBusy = friendInviteUpdateBusy(inviteSending).join('；');
+
+  useEffect(() => {
+    setUpdateBusy('friend-invite', inviteBusy || null);
+    return () => setUpdateBusy('friend-invite', null);
+  }, [inviteBusy]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
@@ -110,8 +120,14 @@ export function ContactSearchPanel({
   };
 
   const send = async () => {
+    if (writeBlocked) {
+      setStatus('当前页面与服务器版本不兼容，请先更新后再发送好友邀请。');
+      setError(true);
+      return;
+    }
     if (!selected || busy) return;
     setBusy(true);
+    setInviteSending(true);
     setError(false);
     setStatus('正在发送好友邀请…');
     try {
@@ -152,6 +168,7 @@ export function ContactSearchPanel({
       setError(true);
     } finally {
       setBusy(false);
+      setInviteSending(false);
     }
   };
 
@@ -244,6 +261,11 @@ export function ContactSearchPanel({
             onChange={(event) => setMessage(event.target.value)}
           />
           <div className="contact-search-confirm-actions">
+            {writeBlocked ? (
+              <p className="composer-update-block" role="status">
+                当前页面与服务器版本不兼容，请先更新后再发送好友邀请。
+              </p>
+            ) : null}
             <Button
               id="contact-search-cancel"
               type="button"
@@ -260,7 +282,7 @@ export function ContactSearchPanel({
               id="contact-search-send"
               className="primary"
               type="button"
-              disabled={busy}
+              disabled={busy || writeBlocked}
               onClick={() => void send()}
             >
               发送邀请

@@ -40,6 +40,8 @@ async function waitForHealth(base: string, deadlineMs = 20_000): Promise<void> {
 
 export default async function globalSetup(): Promise<(() => Promise<void>) | undefined> {
   if (process.env.E2E_BASE_URL) return undefined;
+  // A/B 发布套件自带 release-mode 实例，不依赖兼容模式的默认服务。
+  if (process.env.E2E_PWA_UPDATE === '1') return undefined;
 
   const root = resolve(process.cwd());
   const manifest = resolve(root, 'dist/web/.vite/manifest.json');

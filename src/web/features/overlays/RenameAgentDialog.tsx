@@ -4,6 +4,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { LIMITS } from '../../../contracts/limits';
 import { callTool, type McpError } from '../../lib/mcp-client';
 import { newRequestId } from '../../lib/request-id';
+import { useUpdateWriteBlocked } from '../../pwa/update-store';
 import { Modal } from './Modal';
 
 /**
@@ -27,6 +28,7 @@ export function RenameAgentDialog({
   const [name, setName] = useState(currentName);
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
+  const writeBlocked = useUpdateWriteBlocked();
 
   useEffect(() => {
     if (!open) return;
@@ -37,6 +39,10 @@ export function RenameAgentDialog({
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (writeBlocked) {
+      setStatus('当前页面与服务器版本不兼容，请先更新后再改名');
+      return;
+    }
     const value = name.trim();
     if (!value) {
       setStatus('名称不能为空');
@@ -75,7 +81,7 @@ export function RenameAgentDialog({
           <Button id="rename-cancel" type="button" disabled={busy} onClick={() => onOpenChange(false)}>
             取消
           </Button>
-          <Button id="rename-save" className="primary" type="submit" form="rename-form" disabled={busy}>
+          <Button id="rename-save" className="primary" type="submit" form="rename-form" disabled={busy || writeBlocked}>
             {busy ? '正在保存…' : '保存'}
           </Button>
         </div>
@@ -92,6 +98,11 @@ export function RenameAgentDialog({
             onChange={(event) => setName(event.target.value)}
           />
         </div>
+        {writeBlocked ? (
+          <p className="composer-update-block" role="status">
+            当前页面与服务器版本不兼容，请先更新后再改名。
+          </p>
+        ) : null}
         <p id="rename-status" className="form-error" role="status">
           {status}
         </p>

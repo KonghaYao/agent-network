@@ -16,6 +16,7 @@ import { useWebSession } from '../../hooks/useWebSession';
 import { callTool, type McpError } from '../../lib/mcp-client';
 import { queryKeys } from '../../lib/query-keys';
 import { newRequestId } from '../../lib/request-id';
+import { useUpdateWriteBlocked } from '../../pwa/update-store';
 import { navigate } from '../../app/router';
 import { Modal } from './Modal';
 
@@ -41,6 +42,7 @@ export function GroupCreateDialog({
   const token = session.session?.token ?? null;
   const actorId = session.session?.identity.actor_id ?? null;
   const contacts = useContacts(open);
+  const writeBlocked = useUpdateWriteBlocked();
   const [search, setSearch] = useState('');
   const [submitError, setSubmitError] = useState('');
 
@@ -86,6 +88,10 @@ export function GroupCreateDialog({
   };
 
   const submit = handleSubmit(async (values) => {
+    if (writeBlocked) {
+      setSubmitError('当前页面与服务器版本不兼容，请先更新后再创建群聊');
+      return;
+    }
     if (!token) {
       setSubmitError('浏览器身份尚未初始化，请刷新页面后重试');
       return;
@@ -131,7 +137,7 @@ export function GroupCreateDialog({
             type="submit"
             form="group-form"
             className="primary"
-            disabled={isSubmitting || !token}
+            disabled={isSubmitting || !token || writeBlocked}
           >
             {isSubmitting ? '正在创建…' : '创建'}
           </Button>
@@ -241,6 +247,11 @@ export function GroupCreateDialog({
         </p>
         {errors.members ? (
           <FieldError id="group-members-error">{errors.members.message}</FieldError>
+        ) : null}
+        {writeBlocked ? (
+          <p id="group-update-block" className="composer-update-block" role="status">
+            当前页面与服务器版本不兼容，请先更新后再创建群聊。
+          </p>
         ) : null}
         {submitError ? (
           <FieldError id="group-error">{submitError}</FieldError>

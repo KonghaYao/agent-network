@@ -1,4 +1,7 @@
+import { Button } from '../../app/lenso-controls';
 import { useEffect, useRef, useState } from 'react';
+
+import { requestSafeUpdate, useUpdateState } from '../../pwa/update-store';
 
 /**
  * AI 消息 Markdown 岛：复用 legacy `/assets/chat-markdown.js`。
@@ -31,10 +34,13 @@ interface MarkdownModule {
 }
 
 let loadPromise: Promise<MarkdownModule | null> | null = null;
+let loadRetry = 0;
 
-function loadMarkdown(): Promise<MarkdownModule | null> {
-  if (!loadPromise) {
-    loadPromise = import(/* @vite-ignore */ MARKDOWN_URL)
+function loadMarkdown(forceRetry: boolean): Promise<MarkdownModule | null> {
+  if (!loadPromise || forceRetry) {
+    if (forceRetry) loadRetry += 1;
+    const url = forceRetry ? `${MARKDOWN_URL}?r=${loadRetry}` : MARKDOWN_URL;
+    loadPromise = import(/* @vite-ignore */ url)
       .then((module) => {
         const candidate = module as Partial<MarkdownModule>;
         return typeof candidate.mountMarkdown === 'function'
@@ -44,6 +50,7 @@ function loadMarkdown(): Promise<MarkdownModule | null> {
       .catch(() => {
         // 只记录资源路径，不输出正文、成员名或 token。
         console.warn(`markdown bundle unavailable: ${MARKDOWN_URL}`);
+        loadPromise = null;
         return null;
       });
   }
@@ -64,12 +71,17 @@ export function MarkdownIsland({
   const textRef = useRef(text);
   const optionsRef = useRef({ mentions, preview });
   const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const update = useUpdateState();
+  const online = typeof navigator === 'undefined' || navigator.onLine !== false;
+  const canUpdate =
+    online && (update.phase === 'available' || update.phase === 'incompatible');
   textRef.current = text;
   optionsRef.current = { mentions, preview };
 
   useEffect(() => {
     let cancelled = false;
-    void loadMarkdown().then((module) => {
+    void loadMarkdown(attempt > 0).then((module) => {
       if (cancelled || !hostRef.current) return;
       if (!module) {
         setFailed(true);
@@ -80,6 +92,7 @@ export function MarkdownIsland({
         setFailed(true);
         return;
       }
+      setFailed(false);
       handleRef.current = handle;
     });
     return () => {
@@ -87,7 +100,7 @@ export function MarkdownIsland({
       handleRef.current?.destroy();
       handleRef.current = null;
     };
-  }, []);
+  }, [attempt]);
 
   useEffect(() => {
     handleRef.current?.update(text, { mentions, preview });
@@ -96,8 +109,35 @@ export function MarkdownIsland({
   if (failed) {
     return (
       <div className="msg-markdown">
-        <span className="md-unavailable">Markdown 渲染不可用，已显示纯文本</span>
+        <span className="md-unavailable" role="status">
+          Markdown 渲染不可用，已显示纯文本
+        </span>
         <div className="md-fallback">{text}</div>
+        <div className="md-unavailable-actions">
+          <Button
+            type="button"
+            id="markdown-retry"
+            size="sm"
+            variant="bordered"
+            onClick={() => {
+              setFailed(false);
+              setAttempt((value) => value + 1);
+            }}
+          >
+            重试
+          </Button>
+          {canUpdate ? (
+            <Button
+              type="button"
+              id="markdown-update-retry"
+              size="sm"
+              variant="borderless"
+              onClick={() => void requestSafeUpdate()}
+            >
+              更新后重试
+            </Button>
+          ) : null}
+        </div>
       </div>
     );
   }
