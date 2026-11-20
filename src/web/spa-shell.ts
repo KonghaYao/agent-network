@@ -10,7 +10,8 @@ import { TASK_DOCK_STYLE } from './chat-task-dock-styles';
 import { TASK_TRACE_STYLE } from './chat-task-trace-styles';
 import { UPLOAD_STYLE } from './chat-upload-styles';
 import { DEVICE_HANDOFF_STYLE } from './device-handoff-styles';
-import { BASE_FAVICON_HREF } from './lib/favicon';
+import { pwaHeadTags } from './pwa/manifest';
+import { PWA_STYLE } from './pwa-styles';
 import { escapeHtml, jsonForScript } from './layout';
 import type { SpaManifest, SpaRoute } from './spa-manifest';
 
@@ -49,7 +50,7 @@ export interface SpaShellOptions {
  * React 壳复用原有的应用页样式：会话项、头像、空状态、移动端单栏
  * 与 Memory 抽屉都沿用同一套 CSS 变量和选择器。
  */
-const SPA_STYLE = `${APP_STYLE}${DEVICE_HANDOFF_STYLE}${MEMORY_STYLE}
+const SPA_STYLE = `${APP_STYLE}${DEVICE_HANDOFF_STYLE}${MEMORY_STYLE}${PWA_STYLE}
   html, body { height: 100%; }
   body.wide { display: block; min-height: 100dvh; height: 100dvh; padding: 0;
     overflow: hidden; background: var(--wx-bg); }
@@ -93,12 +94,12 @@ export function renderSpaShell(
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="description" content="${escapeHtml(description)}">
 <meta property="og:title" content="${escapeHtml(title)}">
 <meta property="og:description" content="${escapeHtml(description)}">
 <meta property="og:type" content="website">
-<link rel="icon" type="image/svg+xml" href="${escapeHtml(BASE_FAVICON_HREF)}">
+${pwaHeadTags()}
 <title>${escapeHtml(title)}</title>
 <style>:root{color-scheme:light dark}${CHAT_STYLE}</style>
 ${css}

@@ -229,7 +229,7 @@ test.describe('tab unread badge', () => {
     await expect(page.locator('.unread')).toHaveCount(0);
     await expect(page).toHaveTitle(TITLE_BASE);
     const baseIcon = await icon.getAttribute('href');
-    expect(baseIcon).toMatch(/^data:image\/svg\+xml/);
+    expect(baseIcon).toMatch(/^\/pwa\/favicon-[0-9a-f]{12}\.svg$/);
 
     // 1. 只有静音会话有新消息：列表灰点出现，但标题与图标不变。
     const mutedBody = `静音消息 ${Date.now()}`;
@@ -244,7 +244,7 @@ test.describe('tab unread badge', () => {
     await expect(mutedRow.locator('.unread.muted')).toBeVisible({ timeout: 10_000 });
     await expect(mutedRow.locator('.room-preview')).toContainText(mutedBody);
     await expect(page).toHaveTitle(TITLE_BASE);
-    await expect(icon).toHaveAttribute('href', /^data:image\/svg\+xml/);
+    await expect(icon).toHaveAttribute('href', baseIcon ?? '');
 
     // 2. 未静音群聊有新消息：标题 (1)，favicon 变成带红点的 PNG。
     await callTool(base, tokenB, 'network_message_send', {
@@ -298,7 +298,7 @@ test.describe('tab unread badge', () => {
     await expect(page).toHaveTitle(TITLE_BASE);
     await expect(page.locator('link[rel~="icon"]')).toHaveAttribute(
       'href',
-      /^data:image\/svg\+xml/,
+      /^\/pwa\/favicon-[0-9a-f]{12}\.svg$/,
     );
     expect(await hasRedPixel(page)).toBe(false);
   });

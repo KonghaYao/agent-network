@@ -1,3 +1,4 @@
+import { isMobileDevice } from '../pwa/install';
 import {
   callTool,
   mcpError,
@@ -94,6 +95,20 @@ function newToken(): string {
   return crypto.randomUUID();
 }
 
+export const PAIRING_REQUIRED = 'PAIRING_REQUIRED';
+
+/**
+ * 移动端无本地凭据时不自动注册访客：先展示安装/配对引导。这里只改变
+ * 浏览器入口策略，服务端认证、角色与凭据语义不变。
+ */
+export function pairingRequiredError(): McpError {
+  const error = mcpError(
+    '在手机上使用 WeBots：请先安装并从主屏幕打开，扫描电脑上的二维码；也可以连接已有账号。',
+    PAIRING_REQUIRED,
+  );
+  return error;
+}
+
 async function register(token: string): Promise<WebIdentity> {
   return callTool<WebIdentity>(
     'network_register',
@@ -128,6 +143,10 @@ async function bootstrap(): Promise<WebSession> {
       );
     }
   }
+
+  // 手机普通窗口/独立窗口没有本地凭据：不生成正式 browser token、不注册，
+  // 让安装引导与配对入口先出现。桌面原有自动访客保持不变。
+  if (isMobileDevice()) throw pairingRequiredError();
 
   const token = newToken();
   if (!writeBrowserToken(token)) {

@@ -85,7 +85,12 @@ export function HomePage() {
             title: '凭据已失效',
             hint: '请用另一台已登录设备生成配对码后打开 /pair。',
           }
-        : {};
+        : session.status === 'pairing-required'
+          ? {
+              title: '在手机上使用 WeBots',
+              hint: '安装后扫描电脑上的二维码；也可以点击左下角「连接已有账号」。',
+            }
+          : {};
 
   return (
     <AppShell

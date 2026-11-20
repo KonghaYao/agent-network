@@ -2,8 +2,11 @@ import { Button } from '../app/lenso-controls';
 import { useEffect, useRef, useState } from 'react';
 
 import { Link, navigate } from '../app/router';
+import { pairingRequiredError } from '../lib/identity';
 import { callTool, type McpError } from '../lib/mcp-client';
-import { browserToken, newRequestId } from '../lib/token-handoff';
+import { browserToken, currentToken, newRequestId } from '../lib/token-handoff';
+import { isMobileDevice } from '../pwa/install';
+import { InstallGuideDialog } from '../pwa/InstallGuideDialog';
 
 interface Invitation {
   invitation_id: string;
@@ -61,6 +64,8 @@ async function ensureIdentity(token: string): Promise<unknown> {
     return await callTool('network_me', {}, { token });
   } catch (error) {
     if ((error as McpError).code !== 'CREDENTIAL_INVALID') throw error;
+    // 手机没有有效凭据时不自动补注册访客；交给安装/配对引导。
+    if (isMobileDevice()) throw pairingRequiredError();
   }
   return callTool(
     'network_register',
@@ -86,6 +91,10 @@ export function JoinPage({ inviteKey }: JoinPageProps) {
 }
 
 function ValidJoinPage({ inviteKey }: { inviteKey: string }) {
+  // 服务端不知道设备类型；首帧保持与 SSR 相同的邀请壳，挂载后再判断，
+  // 避免 hydration 不一致。判断完成前预览 effect 不会创建访客。
+  const [gateReady, setGateReady] = useState(false);
+  const [requiresPairing, setRequiresPairing] = useState(false);
   const [title, setTitle] = useState('群邀请');
   const [avatar, setAvatar] = useState('群');
   const [meta, setMeta] = useState('正在读取邀请…');
@@ -101,8 +110,15 @@ function ValidJoinPage({ inviteKey }: { inviteKey: string }) {
   const [status, setStatus] = useState('');
   const [error, setError] = useState(false);
   const pendingRequestId = useRef<string | null>(null);
+  const pairingRequired =
+    gateReady && (requiresPairing || (isMobileDevice() && !currentToken()));
 
   useEffect(() => {
+    setGateReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!gateReady || pairingRequired) return;
     let cancelled = false;
     async function loadPreview() {
       try {
@@ -138,6 +154,10 @@ function ValidJoinPage({ inviteKey }: { inviteKey: string }) {
         }
       } catch (failure) {
         if (cancelled) return;
+        if ((failure as McpError).code === 'PAIRING_REQUIRED') {
+          setRequiresPairing(true);
+          return;
+        }
         setLoadFailed(true);
         setTitle('邀请不可用');
         setMeta('链接可能已过期、被撤销或不是有效的群邀请。');
@@ -150,7 +170,9 @@ function ValidJoinPage({ inviteKey }: { inviteKey: string }) {
     return () => {
       cancelled = true;
     };
-  }, [inviteKey]);
+  }, [inviteKey, gateReady, pairingRequired]);
+
+  if (pairingRequired) return <JoinPairingGate />;
 
   async function confirmJoin() {
     if (busy || !invitation) return;
@@ -252,6 +274,50 @@ function ValidJoinPage({ inviteKey }: { inviteKey: string }) {
         <p>本页不会读取加入前的群消息，也不会把邀请码当作登录凭据。</p>
       </details>
     </main>
+  );
+}
+
+function JoinPairingGate() {
+  const [guideOpen, setGuideOpen] = useState(true);
+  return (
+    <>
+      <main>
+        <div className="share-head">
+          <div className="share-avatar" aria-hidden="true">
+            群
+          </div>
+          <h1>群邀请</h1>
+          <p className="muted">连接已有账号后查看并确认加入</p>
+        </div>
+        <p className="share-lead">
+          在手机上使用 WeBots：安装并扫描电脑上的二维码，就能用已有账号打开这个邀请。
+        </p>
+        <div className="row share-actions">
+          <Button
+            className="primary"
+            id="join-pair"
+            type="button"
+            onClick={() => navigate('/pair')}
+          >
+            连接已有账号
+          </Button>
+          <Button
+            id="join-install-guide"
+            type="button"
+            onClick={() => setGuideOpen(true)}
+          >
+            安装说明
+          </Button>
+          <Link id="join-gate-home" to="/">
+            返回 WeBots
+          </Link>
+        </div>
+        <p className="muted">
+          配对完成后再重新打开这个邀请链接；本页不会在引导前创建访客身份。
+        </p>
+      </main>
+      <InstallGuideDialog open={guideOpen} onOpenChange={setGuideOpen} />
+    </>
   );
 }
 

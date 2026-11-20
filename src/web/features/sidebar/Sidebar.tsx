@@ -34,7 +34,8 @@ export type SidebarStatus =
   | 'ready'
   | 'error'
   | 'logged-out'
-  | 'credential-invalid';
+  | 'credential-invalid'
+  | 'pairing-required';
 
 interface SidebarProps {
   me: WebIdentity | null;
@@ -110,6 +111,9 @@ function statusMessage(props: SidebarProps): string {
   const { status, rooms, query, filter, error } = props;
   if (status === 'logged-out') return roomFilterEmptyMessage(filter, true);
   if (status === 'credential-invalid') return roomFilterEmptyMessage(filter, false, true);
+  if (status === 'pairing-required') {
+    return '在手机上使用 WeBots：先安装并扫描电脑上的二维码，或连接已有账号。';
+  }
   if (status === 'loading' && rooms.length === 0) return '正在读取…';
   if (query.trim() && rooms.length === 0) return '没有匹配的会话';
   if (status === 'error' && rooms.length === 0) return error ?? '读取会话失败';

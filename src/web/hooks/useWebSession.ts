@@ -9,6 +9,7 @@ export type SessionStatus =
   | 'ready'
   | 'logged-out'
   | 'credential-invalid'
+  | 'pairing-required'
   | 'error';
 
 export interface SessionState {
@@ -29,6 +30,12 @@ function classify(error: unknown): { status: SessionStatus; message: string } {
     return {
       status: 'credential-invalid',
       message: failure.message || '当前凭据已失效',
+    };
+  }
+  if (failure.code === 'PAIRING_REQUIRED') {
+    return {
+      status: 'pairing-required',
+      message: failure.message || '请先连接已有账号',
     };
   }
   return { status: 'error', message: failure.message || '身份初始化失败' };

@@ -125,6 +125,42 @@ async function main() {
     console.log(`  A buildId: ${a.manifest.buildId}`);
     console.log(`  A deploymentId: ${aDeploymentId}`);
 
+    // PWA 固定 URL 不依赖 /static 索引：release 模式下 manifest/sw/图标仍可读。
+    const pwaManifestResponse = await fetch(`${server.base}/manifest.webmanifest`);
+    const pwaManifest = (await pwaManifestResponse.json()) as {
+      id?: string;
+      icons?: { src?: string }[];
+    };
+    checkEqual('release manifest 200', pwaManifestResponse.status, 200);
+    checkEqual(
+      'release manifest MIME',
+      pwaManifestResponse.headers.get('content-type'),
+      'application/manifest+json; charset=utf-8',
+    );
+    checkEqual(
+      'release manifest no-cache',
+      pwaManifestResponse.headers.get('cache-control'),
+      'no-cache',
+    );
+    checkEqual('release manifest id', pwaManifest.id, '/');
+    const pwaSwResponse = await fetch(`${server.base}/sw.js`);
+    checkEqual('release sw 200', pwaSwResponse.status, 200);
+    checkEqual(
+      'release sw no-cache',
+      pwaSwResponse.headers.get('cache-control'),
+      'no-cache',
+    );
+    const pwaIconPath = pwaManifest.icons?.[0]?.src;
+    check('release manifest 图标 URL', typeof pwaIconPath === 'string', pwaIconPath);
+    if (pwaIconPath) {
+      const pwaIcon = await fetch(`${server.base}${pwaIconPath}`);
+      checkEqual('release 图标 200', pwaIcon.status, 200);
+      check(
+        'release 图标 immutable',
+        (pwaIcon.headers.get('cache-control') ?? '').includes('immutable'),
+      );
+    }
+
     const aModule = moduleAsset(a, a.manifest.modules.markdown.url);
     const bundleText = (
       await Promise.all(

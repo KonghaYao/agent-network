@@ -129,9 +129,11 @@ export function AppSidebar({ notice = null, live = true, streamError = null }: A
         ? 'logged-out'
         : session.status === 'credential-invalid'
           ? 'credential-invalid'
-          : session.status === 'error' || (roomsState.error && rooms.length === 0)
-            ? 'error'
-            : 'ready';
+          : session.status === 'pairing-required'
+            ? 'pairing-required'
+            : session.status === 'error' || (roomsState.error && rooms.length === 0)
+              ? 'error'
+              : 'ready';
 
   const retry = useCallback(() => {
     if (session.status === 'loading') return;

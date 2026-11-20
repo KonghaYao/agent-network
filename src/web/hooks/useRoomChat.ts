@@ -535,11 +535,13 @@ export function useRoomChat(roomId: string) {
   const fatal =
     sessionState.status === 'logged-out' ||
     sessionState.status === 'credential-invalid' ||
+    sessionState.status === 'pairing-required' ||
     fatalError(detailQuery.error) ||
     fatalError(historyQuery.error);
   const initialError =
     sessionState.status === 'error' ||
     sessionState.status === 'credential-invalid' ||
+    sessionState.status === 'pairing-required' ||
     sessionState.status === 'logged-out'
       ? sessionState.error
       : (!detail || !history) && (detailQuery.error || historyQuery.error)

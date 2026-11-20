@@ -33,6 +33,15 @@ import { renderInvalidJoinSpaPage, renderJoinSpaPage } from './web/ssr/join';
 import { renderInvalidShareSpaPage, renderShareSpaPage } from './web/ssr/share';
 import { renderSpaShell } from './web/spa-shell';
 import type { SpaManifest, SpaRoute } from './web/spa-manifest';
+import {
+  PWA_MANIFEST_BODY,
+  PWA_MANIFEST_ETAG,
+  PWA_SERVICE_WORKER_BODY,
+  PWA_SERVICE_WORKER_ETAG,
+  pwaAssetEtag,
+  pwaAssetForUrl,
+  readPwaAsset,
+} from './web/pwa/assets.server';
 import type { LoadedWebRelease } from './web/web-release';
 import type { Env } from './env';
 
@@ -742,6 +751,63 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
       200,
       { 'cache-control': 'no-store' },
     );
+  });
+
+  // PWA 固定 URL：两种发布模式都由进程内生成的同一份字节提供。
+  // manifest/sw 允许重新验证（no-cache + 内容 ETag）；图标 URL 含内容哈希，
+  // 可安全使用一年 immutable。
+  app.get('/manifest.webmanifest', (c) => {
+    const headers = {
+      'content-type': 'application/manifest+json; charset=utf-8',
+      'cache-control': 'no-cache',
+      'x-content-type-options': 'nosniff',
+      etag: PWA_MANIFEST_ETAG,
+    };
+    if (matchesEtag(c.req.header('if-none-match'), PWA_MANIFEST_ETAG)) {
+      return c.body(null, 304, headers);
+    }
+    return c.body(PWA_MANIFEST_BODY, 200, headers);
+  });
+
+  app.get('/sw.js', (c) => {
+    const headers = {
+      'content-type': 'text/javascript; charset=utf-8',
+      'cache-control': 'no-cache',
+      'x-content-type-options': 'nosniff',
+      'service-worker-allowed': '/',
+      etag: PWA_SERVICE_WORKER_ETAG,
+    };
+    if (matchesEtag(c.req.header('if-none-match'), PWA_SERVICE_WORKER_ETAG)) {
+      return c.body(null, 304, headers);
+    }
+    return c.body(PWA_SERVICE_WORKER_BODY, 200, headers);
+  });
+
+  app.get('/pwa/:file', async (c) => {
+    const asset = pwaAssetForUrl(`/pwa/${c.req.param('file')}`);
+    const notFound = () =>
+      c.text('Not Found', 404, {
+        'cache-control': 'no-cache',
+        'x-content-type-options': 'nosniff',
+      });
+    if (!asset) return notFound();
+    let bytes: ArrayBuffer;
+    try {
+      bytes = await readPwaAsset(asset);
+    } catch {
+      return notFound();
+    }
+    const etag = pwaAssetEtag(asset);
+    const headers = {
+      'content-type': asset.contentType,
+      'cache-control': STATIC_CACHE_CONTROL,
+      'x-content-type-options': 'nosniff',
+      etag,
+    };
+    if (matchesEtag(c.req.header('if-none-match'), etag)) {
+      return c.body(null, 304, headers);
+    }
+    return c.body(bytes, 200, headers);
   });
 
   // 浏览器岛 bundle：React 仍从 `/assets/*` 懒加载 Markdown 与画板。
