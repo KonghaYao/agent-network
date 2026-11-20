@@ -75,6 +75,17 @@ export function renderSpaShell(
   const description = options.description ?? DESCRIPTIONS[route];
   const bodyClass = options.bodyClass ?? (CARD_ROUTES.has(route) ? `page-${route}` : `wide page-${route}`);
   const bootstrap = jsonForScript(options.bootstrap ?? { route });
+  // 发布模式下五条路由（含 SSR share/join）共用一个进程已固定的 buildId；
+  // 开发/旧模式没有发布描述，不输出该标签，客户端只依赖 bootstrap。
+  const release =
+    typeof manifest.buildId === 'string' &&
+    manifest.buildId.length > 0 &&
+    typeof manifest.webContract === 'number'
+      ? `<script type="application/json" id="web-release">${jsonForScript({
+          buildId: manifest.buildId,
+          webContract: manifest.webContract,
+        })}</script>`
+      : '';
   const css = manifest.css
     .map((href) => `<link rel="stylesheet" href="${escapeHtml(href)}">`)
     .join('\n');
@@ -96,6 +107,7 @@ ${css}
 <div id="root">${options.bodyHtml ?? ''}</div>
 <noscript><p>WeBots 需要启用 JavaScript。</p></noscript>
 <script type="application/json" id="spa-bootstrap">${bootstrap}</script>
+${release}
 <script type="module" src="${escapeHtml(manifest.entry)}"></script>
 </body>
 </html>`;

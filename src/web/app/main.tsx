@@ -130,6 +130,10 @@ function App({ bootstrap }: { bootstrap: SpaBootstrap | null }) {
 }
 
 const bootstrap = readSpaBootstrap();
+// 发布构建的 nonce 只用于支持诊断；不参与权限或业务判断。
+if (typeof __WEB_BUILD_NONCE__ === 'string' && __WEB_BUILD_NONCE__.length > 0) {
+  document.documentElement.dataset.webBuild = __WEB_BUILD_NONCE__;
+}
 const root = document.getElementById('root');
 if (root) {
   const app = (

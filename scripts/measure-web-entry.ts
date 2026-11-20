@@ -1,6 +1,8 @@
 import { stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
+import { LIMITS } from '../src/contracts/limits';
+
 interface Chunk {
   file: string;
   imports?: string[];
@@ -30,11 +32,19 @@ async function bytes(files: Set<string>) {
 }
 const main = manifest[entry];
 if (!main) throw new Error('manifest 缺少应用入口');
+const entryBytes = (await stat(resolve(root, main.file))).size;
+const hardLimitBytes = LIMITS.webEntryHardLimitBytes;
 console.log(JSON.stringify({
   entry: main.file,
-  entryBytes: (await stat(resolve(root, main.file))).size,
+  entryBytes,
+  hardLimitBytes,
+  headroomBytes: hardLimitBytes - entryBytes,
   staticJsBytes: await bytes(js),
   staticCssBytes: await bytes(css),
   staticFiles: [...js, ...css],
   dynamicImports: main.dynamicImports ?? [],
 }, null, 2));
+if (entryBytes > hardLimitBytes) {
+  console.error(`入口 ${entryBytes} B 超过硬上限 ${hardLimitBytes} B`);
+  process.exit(1);
+}

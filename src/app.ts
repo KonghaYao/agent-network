@@ -33,6 +33,7 @@ import { renderInvalidJoinSpaPage, renderJoinSpaPage } from './web/ssr/join';
 import { renderInvalidShareSpaPage, renderShareSpaPage } from './web/ssr/share';
 import { renderSpaShell } from './web/spa-shell';
 import type { SpaManifest, SpaRoute } from './web/spa-manifest';
+import type { LoadedWebRelease } from './web/web-release';
 import type { Env } from './env';
 
 interface RpcBody {
@@ -552,6 +553,8 @@ export interface AppDeps {
   spaManifest?: SpaManifest | null;
   /** Vite 产物目录；默认仓库根的 `dist/web`，测试可指向临时目录。 */
   spaDistDir?: string;
+  /** 发布模式快照；null/undefined 时走 `dist/web` 兼容模式。 */
+  webRelease?: LoadedWebRelease | null;
 }
 
 interface ByteRange {
@@ -621,7 +624,17 @@ async function openPayload(
 export function createApp(env: Env, deps: AppDeps = {}): Hono {
   const app = new Hono();
   const spaDistDir = deps.spaDistDir ?? WEB_DIST_ROOT;
-  const spaManifest = deps.spaManifest ?? null;
+  const webRelease = deps.webRelease ?? null;
+  const spaManifest =
+    deps.spaManifest ??
+    (webRelease
+      ? {
+          entry: webRelease.manifest.entry,
+          css: webRelease.manifest.css,
+          buildId: webRelease.manifest.buildId,
+          webContract: webRelease.manifest.webContract,
+        }
+      : null);
   const spaHtml = (route: SpaRoute): string | null =>
     spaManifest ? renderSpaShell(route, spaManifest) : null;
   /** manifest 缺失时页面路由返回可读的 503，而不是静默渲染空白页。 */
@@ -637,8 +650,22 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
       },
     );
 
-  // 只服务 Vite 构建产物：扩展名白名单、拒绝路径穿越、目录不列表。
-  // 文件名带内容哈希，因此可以长期 immutable；ETag 直接取文件名。
+  // 只服务构建产物：拒绝路径穿越、目录不列表。
+  // - 兼容模式：扩展名白名单 + 文件名 ETag + 一年 immutable；
+  // - 发布模式：只有 append-only 索引认可的 URL 才能读取，MIME/摘要/缓存策略
+  //   全部来自发布描述；旧页在切换后仍能取到上一个 build 的哈希资源。
+  const staticNotFound = (relative: string): Response => {
+    const contentType =
+      STATIC_CONTENT_TYPES[extname(relative).toLowerCase()] ?? 'text/plain; charset=utf-8';
+    return new Response('Not Found', {
+      status: 404,
+      headers: {
+        'content-type': contentType,
+        'cache-control': 'no-store',
+        'x-content-type-options': 'nosniff',
+      },
+    });
+  };
   app.get('/static/*', async (c) => {
     let relative: string;
     try {
@@ -647,6 +674,29 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
       return c.notFound();
     }
     if (relative.length === 0 || relative.includes('\0')) return c.notFound();
+
+    if (webRelease) {
+      const asset = webRelease.index.assets[relative];
+      if (!asset) return staticNotFound(relative);
+      const publicRoot = resolve(webRelease.publicDir);
+      const path = resolve(publicRoot, relative);
+      if (!path.startsWith(`${publicRoot}${sep}`)) return staticNotFound(relative);
+      const info = await stat(path).catch(() => null);
+      if (!info?.isFile()) return staticNotFound(relative);
+      const etag = `"${asset.sha256}"`;
+      const headers = {
+        'content-type': asset.contentType,
+        'cache-control': asset.immutable ? STATIC_CACHE_CONTROL : 'no-cache',
+        'x-content-type-options': 'nosniff',
+        'referrer-policy': 'same-origin',
+        etag,
+      };
+      if (matchesEtag(c.req.header('if-none-match'), etag)) {
+        return c.body(null, 304, headers);
+      }
+      return c.body(await Bun.file(path).arrayBuffer(), 200, headers);
+    }
+
     const contentType = STATIC_CONTENT_TYPES[extname(relative).toLowerCase()];
     if (!contentType) return c.notFound();
     const path = resolve(spaDistDir, relative);
@@ -676,6 +726,24 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
     }),
   );
 
+  // 运行中进程公告的是启动时固定的发布；切换指针但未重启时这里仍是旧值。
+  // 未加载可用发布（兼容模式或构建缺失）返回 503，不公告候选版本。
+  app.get('/web-version.json', (c) => {
+    if (!webRelease) {
+      return c.text('Web release unavailable', 503, { 'cache-control': 'no-store' });
+    }
+    return c.json(
+      {
+        deploymentId: webRelease.deploymentId,
+        buildId: webRelease.manifest.buildId,
+        minWebContract: webRelease.manifest.minWebContract,
+        maxWebContract: webRelease.manifest.maxWebContract,
+      },
+      200,
+      { 'cache-control': 'no-store' },
+    );
+  });
+
   // 浏览器岛 bundle：React 仍从 `/assets/*` 懒加载 Markdown 与画板。
   // 4B-6 删除的 resizer/icons 返回 410，给仍缓存旧 HTML 的客户端明确迁移信号。
   const assets: Record<
@@ -685,7 +753,7 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
     'chat-markdown.js': { body: deps.markdownAsset, version: deps.markdownAssetVersion },
     'chat-drawboard.js': { body: deps.drawboardAsset, version: deps.drawboardAssetVersion },
   };
-  app.get('/assets/:name', (c) => {
+  app.get('/assets/:name', async (c) => {
     const name = c.req.param('name');
     if (RETIRED_ASSETS.has(name)) {
       return c.text('This browser asset has been removed in 4B-6.', 410, {
@@ -694,6 +762,36 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
       });
     }
     if (!LIVE_ASSETS.has(name)) return c.notFound();
+
+    // 发布模式：固定别名只读取首次迁移冻结的基线字节，永不指向最新 build。
+    if (webRelease) {
+      const alias =
+        name === 'chat-markdown.js'
+          ? webRelease.legacy?.aliases['chat-markdown.js']
+          : webRelease.legacy?.aliases['chat-drawboard.js'];
+      if (!alias) return c.text('Not Found', 404, { 'cache-control': 'no-store' });
+      const root = resolve(webRelease.root);
+      const path = resolve(root, alias.file);
+      if (!path.startsWith(`${root}${sep}`)) {
+        return c.text('Not Found', 404, { 'cache-control': 'no-store' });
+      }
+      const info = await stat(path).catch(() => null);
+      if (!info?.isFile()) {
+        return c.text('Not Found', 404, { 'cache-control': 'no-store' });
+      }
+      const etag = `"${alias.sha256}"`;
+      const headers = {
+        'content-type': alias.contentType,
+        'cache-control': `public, max-age=${LIMITS.webAliasCacheMaxAgeSeconds}`,
+        'x-content-type-options': 'nosniff',
+        etag,
+      };
+      if (matchesEtag(c.req.header('if-none-match'), etag)) {
+        return c.body(null, 304, headers);
+      }
+      return c.body(await Bun.file(path).arrayBuffer(), 200, headers);
+    }
+
     const asset = assets[name];
     const body = asset?.body;
     if (!body) {
@@ -701,7 +799,7 @@ export function createApp(env: Env, deps: AppDeps = {}): Hono {
     }
     return c.body(body, 200, {
       'content-type': 'text/javascript; charset=utf-8',
-      'cache-control': 'public, max-age=300',
+      'cache-control': `public, max-age=${LIMITS.webAliasCacheMaxAgeSeconds}`,
       'x-content-type-options': 'nosniff',
       ...(asset.version ? { etag: `"${asset.version}"` } : {}),
     });

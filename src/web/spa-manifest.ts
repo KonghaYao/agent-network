@@ -10,6 +10,10 @@ export interface SpaManifest {
   readonly entry: string;
   /** 入口 CSS 的公开 URL 列表。 */
   readonly css: readonly string[];
+  /** 发布模式下的 buildId；开发/旧模式为空，壳内不输出 `#web-release`。 */
+  readonly buildId?: string;
+  /** 发布模式下的 API 契约版本。 */
+  readonly webContract?: number;
 }
 
 interface ViteManifestEntry {
@@ -18,7 +22,7 @@ interface ViteManifestEntry {
   css?: unknown;
 }
 
-function publicStaticUrl(file: string): string {
+export function publicStaticUrl(file: string): string {
   return `/static/${file.replace(/^\/+/u, '')}`;
 }
 

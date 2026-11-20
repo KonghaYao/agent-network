@@ -308,6 +308,15 @@ async function main() {
       404,
     );
 
+    // 兼容模式没有发布描述：版本接口必须 503 no-store，不能公告伪造版本。
+    const legacyVersion = await fetch(`${spa.base}/web-version.json`);
+    checkEqual('legacy mode web version is 503', legacyVersion.status, 503);
+    checkEqual('legacy mode web version is no-store', legacyVersion.headers.get('cache-control'), 'no-store');
+    check(
+      'legacy mode HTML has no web-release metadata',
+      !home.text.includes('id="web-release"'),
+    );
+
     // manifest 缺失：页面 503，API/健康检查与浏览器岛不受影响。
     emptyDist = await mkdtemp(join(tmpdir(), 'agentnet-spa-empty-'));
     fallback = await startTestServer({
