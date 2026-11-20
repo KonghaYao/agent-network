@@ -28,7 +28,11 @@
   color: var(--wx-text);
 }
 
-.spa-dialog-content.members-card[data-lenso-slot='modal-popup'],
+.spa-dialog-content.members-card[data-lenso-slot='modal-popup'] {
+  width: min(760px, calc(100vw - 32px));
+  overflow: hidden;
+}
+
 .spa-dialog-content.message-search-card[data-lenso-slot='modal-popup'] {
   width: min(680px, calc(100vw - 32px));
   overflow: hidden;
