@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useActorStream, type ActorStreamEvent } from '../../app/mcp/useActorStream';
 import { LIMITS } from '../../../contracts/limits';
+import { triggerRecovery } from '../../pwa/recovery';
 import { useRoomPreferences } from '../../hooks/useRoomPreferences';
 import { useRooms } from '../../hooks/useRooms';
 import { useWebSession } from '../../hooks/useWebSession';
@@ -71,9 +72,12 @@ export function AppSidebar({ notice = null, live = true, streamError = null }: A
     token: live ? (session.session?.token ?? null) : null,
     onEvent: useCallback(
       (event: ActorStreamEvent) => {
-        // 首次 ack 由初始 rooms_list 覆盖；重连才补拉，避免搜索/分类期间
-        // 迟到的刷新把“只过滤已加载会话”变成额外工具调用。
+        // 首次 ack 由初始 rooms_list 覆盖；重连走统一恢复轮，不再单独补拉。
         if (event.type === 'ack' && !event.reconnect) return;
+        if (event.type === 'ack') {
+          triggerRecovery('stream-ack');
+          return;
+        }
         if (event.type === 'event' && event.source === 'contact') {
           streamContactRef.current = true;
         }

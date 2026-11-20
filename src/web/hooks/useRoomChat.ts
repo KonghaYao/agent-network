@@ -6,16 +6,20 @@ import { useActorStream, type ActorStreamEvent } from '../app/mcp/useActorStream
 import {
   mergeTimelineItems,
   nextOlderCursor,
+  renderedWatermark,
   reverseChronological,
   type HistoryItem,
   type HistoryPage,
   type RoomDetail,
 } from '../lib/chat';
+import { catchUpGap, type CatchUpAuthorization, type CatchUpPage } from '../lib/history-recovery';
 import type { WebSession } from '../lib/identity';
-import { callTool, type McpError } from '../lib/mcp-client';
+import { callTool, mcpError, type McpError } from '../lib/mcp-client';
 import { queryKeys } from '../lib/query-keys';
 import type { RoomsPage } from '../lib/rooms';
+import { SCOPE_RESET_EVENT, type ScopeResetDetail } from '../lib/scope-reset';
 import { invalidateRoomTasks, resetRoomTasks } from '../lib/task-cache';
+import { triggerRecovery } from '../pwa/recovery';
 import { useWebSession } from './useWebSession';
 
 /**
@@ -41,6 +45,21 @@ export interface RoomChatState {
   olderLoading: boolean;
   olderEnded: boolean;
   hasOlder: boolean;
+  catchUp: HistoryCatchUpView | null;
+}
+
+export interface HistoryCatchUpView {
+  /** 正在补读或待重试。 */
+  active: boolean;
+  caughtUp: boolean | null;
+  pages: number;
+  /** 已连续覆盖到的游标；失败后从这里继续。 */
+  coveredCursor: string | null;
+  coveredSeq: string | null;
+  error: string | null;
+  /** 权限代次/游标失效后从最新授权快照重建。 */
+  rebuiltAt: number | null;
+  notice: string | null;
 }
 
 interface HistoryCache {
@@ -51,6 +70,12 @@ interface HistoryCache {
   /** 已成功并入的 older 页数；刷新响应继承该值，翻页响应加一。 */
   olderPages: number;
   resumeCursor: string | null;
+  /** 历史授权快照（成员代次 + 起始边界）；变化时旧窗口不可继续拼接。 */
+  authorization: string | null;
+  /** 缺口补读进度；未追平前不把缺口两端拼成连续历史。 */
+  catchUp: HistoryCatchUpView | null;
+  /** 重建代次；更大的值表示丢弃旧 items。 */
+  reset: number;
 }
 
 /**
@@ -67,6 +92,7 @@ function mergeHistoryCache(
   incoming: HistoryCache,
 ): HistoryCache {
   if (!current) return incoming;
+  if (incoming.reset > current.reset) return incoming;
   const olderLoaded = current.olderLoaded || incoming.olderLoaded;
   const owner = incoming.olderPages >= current.olderPages ? incoming : current;
   return {
@@ -76,6 +102,9 @@ function mergeHistoryCache(
     olderLoaded,
     olderPages: Math.max(current.olderPages, incoming.olderPages),
     resumeCursor: incoming.resumeCursor ?? current.resumeCursor,
+    authorization: incoming.authorization ?? current.authorization,
+    catchUp: incoming.catchUp ?? current.catchUp,
+    reset: Math.max(current.reset, incoming.reset),
   };
 }
 
@@ -111,41 +140,40 @@ function historyArgs(roomId: string, humanTimeline: boolean, cursor?: string | n
 
 /**
  * 最新页与已加载页之间可能隔着多页消息。按 `timeline_resume_cursor` 补读，
- * 直到追到本轮 snapshot，避免离线/后台标签页一次收到大量事件时漏消息。
+ * 直到追到本轮 snapshot；预算只表示让出主线程，不表示追平。
  */
-async function catchUpTimeline(
+function authorizationKey(
+  authorization: CatchUpAuthorization | null | undefined,
+): string | null {
+  if (!authorization) return null;
+  return `${authorization.member_generation}:${authorization.history_from_seq}`;
+}
+
+async function fetchTimelineAfter(
   token: string,
   roomId: string,
-  snapshot: string,
-  resumeCursor: string,
-  latest: HistoryItem[],
+  cursor: string,
   signal: AbortSignal,
-): Promise<HistoryItem[]> {
-  let target: bigint;
-  try {
-    target = BigInt(snapshot);
-  } catch {
-    return latest;
-  }
-  let merged = latest.slice();
-  let cursor = resumeCursor;
-  for (let pageIndex = 0; pageIndex < 20; pageIndex += 1) {
-    const page = await callTool<HistoryPage>(
-      'network_history_list',
-      { room_id: roomId, view: 'timeline', direction: 'after', cursor, limit: LIMITS.historyPageMax },
-      { token, signal },
-    );
-    const items = page.timeline_items ?? [];
-    merged = mergeTimelineItems(merged, items);
-    const last = items[items.length - 1];
-    const reached =
-      last !== undefined &&
-      BigInt(last.kind === 'presence' ? last.timeline_seq : last.created_seq) >= target;
-    if (!page.timeline_has_more || reached) return merged;
-    if (!page.timeline_next_cursor || page.timeline_next_cursor === cursor) return merged;
-    cursor = page.timeline_next_cursor;
-  }
-  return merged;
+): Promise<CatchUpPage> {
+  const page = await callTool<HistoryPage>(
+    'network_history_list',
+    {
+      room_id: roomId,
+      view: 'timeline',
+      direction: 'after',
+      cursor,
+      limit: LIMITS.historyPageMax,
+    },
+    { token, signal },
+  );
+  return {
+    items: page.timeline_items ?? [],
+    nextCursor: page.timeline_next_cursor ?? null,
+    hasMore: page.timeline_has_more === true,
+    resumeCursor: page.timeline_resume_cursor ?? null,
+    snapshot: page.timeline_snapshot ?? null,
+    authorization: page.authorization ?? null,
+  };
 }
 
 interface PendingRefresh {
@@ -160,6 +188,8 @@ interface PendingRefresh {
   taskReset: boolean;
   contacts: boolean;
   contactBadge: boolean;
+  /** 当前房间内需要按锚点重读的消息（撤回、回执等旧窗口项）。 */
+  messageIds: Set<string>;
 }
 
 function emptyPendingRefresh(): PendingRefresh {
@@ -173,6 +203,7 @@ function emptyPendingRefresh(): PendingRefresh {
     taskReset: false,
     contacts: false,
     contactBadge: false,
+    messageIds: new Set(),
   };
 }
 
@@ -191,7 +222,7 @@ function markPendingRefresh(
   currentRoomId: string,
   humanTimeline: boolean,
 ): void {
-  const { source, kind, roomId } = event;
+  const { source, kind, roomId, messageId } = event;
   if (source === 'contact' || kind === 'contact') {
     pending.rooms = true;
     pending.contacts = true;
@@ -212,6 +243,11 @@ function markPendingRefresh(
   }
   if (source === 'room.read' || kind === 'read') {
     return;
+  }
+  // 撤回与回执可能落在已加载但不在最新页的旧消息上；锚点重读权威结果，
+  // 不能只靠 append 增量流把旧 preview/delivery_states 留在窗口里。
+  if (messageId && (kind === 'message' || kind === 'receipt')) {
+    pending.messageIds.add(messageId);
   }
   if (source === 'task.updated' || kind === 'task') {
     pending.history = true;
@@ -257,6 +293,24 @@ export function useRoomChat(roomId: string) {
   const historyKey = queryKeys.history(roomId, humanTimeline);
 
   /**
+   * 身份/房间代次：晚到的补读、翻页与回执写入必须与发起时一致。
+   * token 变化视为新身份会话；同一 actor 重登录也丢弃旧响应。
+   */
+  const contextRef = useRef({ actorId, token, roomId, epoch: 0 });
+  if (
+    contextRef.current.actorId !== actorId ||
+    contextRef.current.token !== token ||
+    contextRef.current.roomId !== roomId
+  ) {
+    contextRef.current = {
+      actorId,
+      token,
+      roomId,
+      epoch: contextRef.current.epoch + 1,
+    };
+  }
+
+  /**
    * 首屏 history 请求发起时刻，按挂载/切房后的首次查询记录。
    *
    * 不能用“响应完成时刻”判断握手窗口：请求可能先被服务端读取快照，
@@ -274,8 +328,18 @@ export function useRoomChat(roomId: string) {
   const detailQuery = useQuery({
     queryKey: detailKey,
     enabled: Boolean(token),
-    queryFn: ({ signal }) =>
-      callTool<RoomDetail>('network_room_get', { room_id: roomId }, { token: token ?? undefined, signal }),
+    queryFn: async ({ signal }) => {
+      const requestEpoch = contextRef.current.epoch;
+      const detail = await callTool<RoomDetail>(
+        'network_room_get',
+        { room_id: roomId },
+        { token: token ?? undefined, signal },
+      );
+      if (contextRef.current.epoch !== requestEpoch || contextRef.current.roomId !== roomId) {
+        throw mcpError('身份或房间已变化，丢弃旧会话响应', 'STALE_CONTEXT');
+      }
+      return detail;
+    },
   });
 
   const historyQuery = useQuery<HistoryCache>({
@@ -284,6 +348,12 @@ export function useRoomChat(roomId: string) {
     // 翻页与刷新写同一份缓存；提交时以当时的缓存为准，避免晚到的刷新覆盖 older。
     structuralSharing: shareHistoryCache,
     queryFn: async ({ client, signal, queryKey }) => {
+      const requestActor = actorId;
+      const requestEpoch = contextRef.current.epoch;
+      const staleContext = () =>
+        contextRef.current.epoch !== requestEpoch ||
+        contextRef.current.actorId !== requestActor ||
+        contextRef.current.roomId !== roomId;
       const first = initialHistoryRequestedRef.current;
       if (first.roomId === roomId && first.at === null) first.at = Date.now();
       const previous = client.getQueryData<HistoryCache>(queryKey) ?? null;
@@ -292,33 +362,161 @@ export function useRoomChat(roomId: string) {
         historyArgs(roomId, humanTimeline),
         { token: token ?? undefined, signal },
       );
-      let incoming = reverseChronological(page, humanTimeline);
+      if (staleContext()) {
+        throw mcpError('身份或房间已变化，丢弃旧历史响应', 'STALE_CONTEXT');
+      }
+      const latest = reverseChronological(page, humanTimeline);
+      const pageAuth = authorizationKey(page.authorization);
+      const pageResume = page.timeline_resume_cursor ?? null;
+      const generationChanged = Boolean(
+        previous?.authorization && pageAuth && previous.authorization !== pageAuth,
+      );
+      let rebuilt = generationChanged;
+      let incoming = latest;
+      let catchUp: HistoryCatchUpView | null = generationChanged
+        ? null
+        : previous?.catchUp ?? null;
+      const previousResume =
+        previous?.catchUp?.caughtUp === false && previous.catchUp.coveredCursor
+          ? previous.catchUp.coveredCursor
+          : previous?.resumeCursor ?? null;
+
       if (
         humanTimeline &&
-        page.timeline_resume_cursor &&
-        previous?.resumeCursor &&
-        page.timeline_resume_cursor !== previous.resumeCursor &&
-        page.timeline_snapshot
+        page.timeline_snapshot &&
+        previous &&
+        pageResume &&
+        previousResume &&
+        pageResume !== previousResume &&
+        !generationChanged
       ) {
-        incoming = await catchUpTimeline(
-          token ?? '',
-          roomId,
-          page.timeline_snapshot,
-          previous.resumeCursor,
-          incoming,
-          signal,
-        );
+        let pagesRead = previous.catchUp?.pages ?? 0;
+        const progress = (
+          error: string | null,
+          coveredCursor: string | null,
+          coveredSeq: string | null,
+        ): HistoryCatchUpView => ({
+          active: true,
+          caughtUp: false,
+          pages: pagesRead,
+          coveredCursor,
+          coveredSeq,
+          error,
+          rebuiltAt: null,
+          notice: '正在补齐离线期间的历史…',
+        });
+        try {
+          const result = await catchUpGap({
+            initialItems: latest,
+            resumeCursor: previousResume,
+            targetSnapshot: page.timeline_snapshot,
+            expectedAuthorization: pageAuth ?? previous.authorization,
+            authorizationKey,
+            signal,
+            fetchPage: (cursor) =>
+              fetchTimelineAfter(token ?? '', roomId, cursor, signal),
+            onBatch: (batch) => {
+              pagesRead += batch.pages;
+              if (staleContext()) return;
+              const next = progress(null, batch.coveredCursor, batch.coveredSeq);
+              client.setQueryData<HistoryCache>(queryKey, (current) =>
+                current ? { ...current, catchUp: next } : current,
+              );
+            },
+          });
+          if (staleContext()) {
+            throw mcpError('身份或房间已变化，丢弃旧历史响应', 'STALE_CONTEXT');
+          }
+          if (result.caughtUp) {
+            incoming = result.items;
+            catchUp = {
+              active: false,
+              caughtUp: true,
+              pages: Math.max(pagesRead, result.pages),
+              coveredCursor: null,
+              coveredSeq: result.coveredSeq,
+              error: null,
+              rebuiltAt: null,
+              notice: null,
+            };
+          } else if (result.failure?.kind === 'stale') {
+            rebuilt = true;
+            incoming = latest;
+            catchUp = {
+              active: false,
+              caughtUp: false,
+              pages: Math.max(pagesRead, result.pages),
+              coveredCursor: null,
+              coveredSeq: result.coveredSeq,
+              error: null,
+              rebuiltAt: Date.now(),
+              notice: '权限或历史边界已变化，已按最新授权重建；可上翻加载更早消息。',
+            };
+          } else if (result.failure?.kind === 'aborted') {
+            throw mcpError('恢复已取消', 'ABORTED');
+          } else {
+            pagesRead = Math.max(pagesRead, result.pages);
+            const next = progress(
+              `补读中断：${result.failure?.message || '将从最后成功位置重试'}`,
+              result.coveredCursor,
+              result.coveredSeq,
+            );
+            const updated = client.setQueryData<HistoryCache>(queryKey, (current) =>
+              current ? { ...current, catchUp: next } : current,
+            );
+            // 不把缺口两端拼成连续历史：保留旧窗口，下一轮从 coveredCursor 继续。
+            return updated ?? previous;
+          }
+        } catch (error) {
+          if (staleContext() || signal.aborted) throw error;
+          const code = (error as McpError).code;
+          if (code === 'CURSOR_EXPIRED' || code === 'INVALID_ARGUMENT') {
+            rebuilt = true;
+            incoming = latest;
+            catchUp = {
+              active: false,
+              caughtUp: false,
+              pages: pagesRead,
+              coveredCursor: null,
+              coveredSeq: null,
+              error: null,
+              rebuiltAt: Date.now(),
+              notice: '权限或历史边界已变化，已按最新授权重建；可上翻加载更早消息。',
+            };
+          } else {
+            const next = progress(
+              `补读中断：${
+                (error as McpError).message || '将从最后成功位置重试'
+              }`,
+              previous.catchUp?.coveredCursor ?? previousResume,
+              previous.catchUp?.coveredSeq ?? null,
+            );
+            const updated = client.setQueryData<HistoryCache>(queryKey, (current) =>
+              current ? { ...current, catchUp: next } : current,
+            );
+            return updated ?? previous;
+          }
+        }
       }
+
       // 请求期间可能已完成翻页；以此刻的缓存为基准，而不是请求前的 previous。
       const current = client.getQueryData<HistoryCache>(queryKey) ?? previous ?? undefined;
+      if (staleContext()) {
+        throw mcpError('身份或房间已变化，丢弃旧历史响应', 'STALE_CONTEXT');
+      }
       const pageNextOlder = nextOlderCursor(page, humanTimeline);
+      const reset = rebuilt ? (current?.reset ?? 0) + 1 : current?.reset ?? 0;
+      const base = rebuilt ? [] : current?.items ?? [];
       const merged = mergeHistoryCache(current, {
-        items: incoming,
+        items: mergeTimelineItems(base, incoming),
         nextOlder: pageNextOlder,
         olderEnded: pageNextOlder === null,
         olderLoaded: false,
         olderPages: 0,
-        resumeCursor: page.timeline_resume_cursor ?? current?.resumeCursor ?? null,
+        resumeCursor: pageResume ?? current?.resumeCursor ?? null,
+        authorization: pageAuth ?? current?.authorization ?? null,
+        catchUp,
+        reset,
       });
       return merged;
     },
@@ -326,6 +524,7 @@ export function useRoomChat(roomId: string) {
 
   const older = useMutation({
     mutationFn: async () => {
+      const requestEpoch = contextRef.current.epoch;
       const state = queryClient.getQueryData<HistoryCache>(historyKey);
       const cursor = state?.nextOlder ?? null;
       if (!cursor) throw new Error('已经到最早的消息了');
@@ -334,6 +533,9 @@ export function useRoomChat(roomId: string) {
         historyArgs(roomId, humanTimeline, cursor),
         { token: token ?? undefined },
       );
+      if (contextRef.current.epoch !== requestEpoch) {
+        throw mcpError('身份或房间已变化，丢弃旧历史页', 'STALE_CONTEXT');
+      }
       return { page, cursor };
     },
     onSuccess: ({ page, cursor }) => {
@@ -390,6 +592,56 @@ export function useRoomChat(roomId: string) {
     },
   });
 
+  /**
+   * 已加载消息的权威重读：撤回、回执可能不在最新页。
+   * 只有消息确实在可见窗口内才发锚点请求，避免每条新消息都额外读一次。
+   */
+  const refreshVisibleMessage = useCallback(
+    async (messageId: string): Promise<void> => {
+      if (!token) return;
+      const cached = queryClient.getQueryData<HistoryCache>(historyKey);
+      const visible = cached?.items.some(
+        (item) => item.kind !== 'presence' && item.message_id === messageId,
+      );
+      if (!visible) return;
+      const requestEpoch = contextRef.current.epoch;
+      try {
+        const page = await callTool<HistoryPage>(
+          'network_history_list',
+          {
+            room_id: roomId,
+            anchor_message_id: messageId,
+            limit: LIMITS.historyPageDefault,
+            ...(humanTimeline ? { view: 'timeline' } : {}),
+          },
+          { token },
+        );
+        if (contextRef.current.epoch !== requestEpoch) return;
+        const incoming = humanTimeline ? page.timeline_items ?? [] : page.items;
+        queryClient.setQueryData<HistoryCache>(historyKey, (previous) =>
+          previous
+            ? { ...previous, items: mergeTimelineItems(previous.items, incoming) }
+            : previous,
+        );
+      } catch {
+        // 消息已不可见/已撤权时由恢复轮统一处理，不把单个锚点失败升级为整页错误。
+      }
+    },
+    [historyKey, humanTimeline, queryClient, roomId, token],
+  );
+
+  useEffect(() => {
+    const onReset = (event: Event) => {
+      const detail = (event as CustomEvent<ScopeResetDetail>).detail;
+      if (detail?.roomId === roomId || detail?.actorId === actorId) {
+        contextRef.current = { ...contextRef.current, epoch: contextRef.current.epoch + 1 };
+        lastMarkedRef.current = null;
+      }
+    };
+    window.addEventListener(SCOPE_RESET_EVENT, onReset);
+    return () => window.removeEventListener(SCOPE_RESET_EVENT, onReset);
+  }, [actorId, roomId]);
+
   const refresh = useCallback(async (): Promise<void> => {
     if (!token) {
       await queryClient.refetchQueries({ queryKey: queryKeys.session() });
@@ -419,6 +671,8 @@ export function useRoomChat(roomId: string) {
   // 切换房间时旧房间的事件不能失效新房间的查询。
   useEffect(() => {
     pendingRefreshRef.current = emptyPendingRefresh();
+    lastMarkedRef.current = null;
+    initialAckHandledRef.current = false;
     if (refreshTimerRef.current) {
       clearTimeout(refreshTimerRef.current);
       refreshTimerRef.current = null;
@@ -462,7 +716,17 @@ export function useRoomChat(roomId: string) {
         queryKey: queryKeys.contactRequestBadge(actorId),
       });
     }
-  }, [actorId, detailKey, historyKey, queryClient, roomId]);
+    for (const messageId of pending.messageIds) {
+      void refreshVisibleMessage(messageId);
+    }
+  }, [
+    actorId,
+    detailKey,
+    historyKey,
+    queryClient,
+    refreshVisibleMessage,
+    roomId,
+  ]);
 
   /**
    * SSE 只给“某处变了”的提示；300ms 窗口内按房间与查询类别合并，
@@ -480,29 +744,34 @@ export function useRoomChat(roomId: string) {
       const pending = pendingRefreshRef.current;
       if (event.type === 'ack') {
         if (event.reconnect) {
-          pending.rooms = true;
-          pending.detail = true;
-          pending.history = true;
-          pending.files = true;
-          pending.tasks = true;
-          // 断线期间成员代次或历史策略可能已收紧；ack 先按 live membership
-          // 同路径清空列表与 Trace 私有缓存，再由 room detail 重新鉴权补拉。
-          pending.taskReset = true;
-          pending.taskSummaries = true;
-        } else {
-          // 首次 ack 只判断一次，避免重复 ack/事件再次触发补拉。
-          if (initialAckHandledRef.current) return;
-          initialAckHandledRef.current = true;
-          const requestedAt = initialHistoryRequestedRef.current.at;
-          if (requestedAt === null || event.at <= requestedAt) return;
-          // 握手窗口：history 请求早于 ack，快照可能不含 ack 前的写入。
-          // 只补当前房间；无关房间事件仍只刷新侧栏。
-          pending.history = true;
-          pending.detail = true;
-          pending.tasks = true;
-          pending.taskSummaries = true;
+          // 重连 ACK 与 online/visibility 合并成同一轮统一恢复；
+          // 身份与房间边界由 RecoveryHost 先核对，再复用当前游标补洞。
+          triggerRecovery('stream-ack');
+          return;
         }
+        // 首次 ack 只判断一次，避免重复 ack/事件再次触发补拉。
+        if (initialAckHandledRef.current) return;
+        initialAckHandledRef.current = true;
+        const requestedAt = initialHistoryRequestedRef.current.at;
+        if (requestedAt === null || event.at <= requestedAt) return;
+        // 握手窗口：history 请求早于 ack，快照可能不含 ack 前的写入。
+        // 只补当前房间；无关房间事件仍只刷新侧栏。
+        pending.history = true;
+        pending.detail = true;
+        pending.tasks = true;
+        pending.taskSummaries = true;
       } else {
+        if (
+          event.roomId === roomId &&
+          (event.source === 'room.membership' ||
+            event.source === 'room.lifecycle' ||
+            event.kind === 'room')
+        ) {
+          // 成员代次/生命周期变化可能已经撤权：先遮住旧私有视图，
+          // 由统一恢复轮重新鉴权后决定是否恢复。
+          triggerRecovery('membership', { mask: true });
+          return;
+        }
         markPendingRefresh(pending, event, roomId, humanTimeline);
       }
       if (refreshTimerRef.current) return;
@@ -521,13 +790,32 @@ export function useRoomChat(roomId: string) {
   const markRead = useCallback(
     async (throughSeq: string): Promise<void> => {
       if (!token || !throughSeq) return;
-      if (lastMarkedRef.current === throughSeq) return;
-      lastMarkedRef.current = throughSeq;
-      await markReadMutation.mutateAsync(throughSeq).catch(() => {
+      // 只能推进到真正渲染过的消息；补读目标与 room.head_seq 都不算展示。
+      const watermark = renderedWatermark(historyQuery.data?.items ?? []);
+      if (!watermark) return;
+      let target = throughSeq;
+      try {
+        if (BigInt(throughSeq) > BigInt(watermark)) target = watermark;
+      } catch {
+        return;
+      }
+      const currentRead = historyQuery.data
+        ? detailQuery.data?.room.my_last_read_seq
+        : null;
+      if (currentRead) {
+        try {
+          if (BigInt(target) <= BigInt(currentRead)) return;
+        } catch {
+          // 旧数据格式异常时仍允许服务端校验。
+        }
+      }
+      if (lastMarkedRef.current === target) return;
+      lastMarkedRef.current = target;
+      await markReadMutation.mutateAsync(target).catch(() => {
         lastMarkedRef.current = null;
       });
     },
-    [markReadMutation, token],
+    [detailQuery.data, historyQuery.data, markReadMutation, token],
   );
 
   const detail = detailQuery.data ?? null;
@@ -566,6 +854,7 @@ export function useRoomChat(roomId: string) {
     olderLoading: older.isPending,
     olderEnded: history?.olderEnded ?? false,
     hasOlder: Boolean(history?.nextOlder),
+    catchUp: history?.catchUp ?? null,
     load,
     refresh,
     loadOlder,

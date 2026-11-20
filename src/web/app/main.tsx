@@ -14,6 +14,7 @@ import './pages.css';
 import './app.css';
 import { readSpaBootstrap, type SpaBootstrap } from './bootstrap';
 import { Providers } from './providers';
+import { RecoveryHost } from './RecoveryHost';
 import { useRoute } from './router';
 import { TabUnreadBadge } from './TabUnreadBadge';
 import { ConfirmHost } from '../features/overlays/confirm';
@@ -175,6 +176,12 @@ function App({ bootstrap }: { bootstrap: SpaBootstrap | null }) {
         </Suspense>
       </RouteBoundary>
       {appRoute ? <TabUnreadBadge baseTitle={baseTitle} /> : null}
+      {appRoute ? (
+        <RecoveryHost
+          routeName={route.name}
+          roomId={route.name === 'room' ? route.roomId : null}
+        />
+      ) : null}
       <ConfirmHost />
       <AgentMemoryDialogHost />
       {appRoute ? <InstallGuideHost appRoute /> : null}

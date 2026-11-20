@@ -1274,3 +1274,109 @@ body .memory-drawer {
   outline: 2px solid var(--lenso-focus-ring);
   outline-offset: 2px;
 }
+
+/* 前台恢复：遮罩期间旧私有视图不可见，骨架只展示验证状态。 */
+body[data-recovery-masked='1'] #root {
+  visibility: hidden;
+}
+
+.recovery-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--wx-bg, #ededed);
+  color: var(--wx-text, #1a1a1a);
+}
+
+.recovery-mask-card {
+  width: min(420px, 100%);
+  padding: 24px;
+  border-radius: 12px;
+  background: var(--wx-panel, #fff);
+  box-shadow: 0 12px 40px rgb(0 0 0 / 12%);
+}
+
+.recovery-mask-card h2 {
+  margin: 16px 0 8px;
+  font-size: 16px;
+}
+
+.recovery-mask-card p {
+  margin: 0 0 16px;
+  color: var(--wx-muted, #666);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.recovery-mask-card a {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  padding: 0 12px;
+  border-radius: 6px;
+  background: var(--wx-green, #07c160);
+  color: var(--wx-green-text, #fff);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.offline-banner {
+  position: fixed;
+  right: 16px;
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  z-index: 8000;
+  display: flex;
+  max-width: min(420px, calc(100vw - 32px));
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--wx-toast-bg, rgb(28 28 30 / 92%));
+  color: #fff;
+  font-size: 13px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+}
+
+.offline-banner button {
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid rgb(255 255 255 / 40%);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.history-catchup {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 8px 12px 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--wx-green, #07c160) 12%, var(--wx-panel, #fff));
+  color: var(--wx-text, #1a1a1a);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+@media (prefers-color-scheme: dark) {
+  .recovery-mask {
+    background: #191919;
+    color: #e6e6e6;
+  }
+
+  .recovery-mask-card {
+    background: #2c2c2c;
+  }
+
+  .history-catchup {
+    background: color-mix(in srgb, var(--wx-green, #07c160) 18%, #2c2c2c);
+    color: #e6e6e6;
+  }
+}

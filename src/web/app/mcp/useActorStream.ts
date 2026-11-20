@@ -32,7 +32,16 @@ interface StreamOptions {
 
 export type ActorStreamEvent =
   | { type: 'ack'; reconnect: boolean; at: number }
-  | { type: 'event'; source: string; kind: string; roomId: string | null };
+  | {
+      type: 'event';
+      source: string;
+      kind: string;
+      roomId: string | null;
+      /** 事件定位到的消息；撤回与回执可据此重读可见窗口。 */
+      messageId: string | null;
+      /** 服务端提供的 change（如 recalled/marked/completed）。 */
+      change: string | null;
+    };
 
 interface StreamState {
   error: string | null;
@@ -125,12 +134,20 @@ function notificationEvents(message: unknown): ActorStreamEvent[] {
   const events: ActorStreamEvent[] = [];
   for (const raw of items) {
     if (!raw || typeof raw !== 'object') continue;
-    const item = raw as { source?: unknown; kind?: unknown; room_id?: unknown };
+    const item = raw as {
+      source?: unknown;
+      kind?: unknown;
+      room_id?: unknown;
+      message_id?: unknown;
+      change?: unknown;
+    };
     events.push({
       type: 'event',
       source: typeof item.source === 'string' ? item.source : '',
       kind: typeof item.kind === 'string' ? item.kind : '',
       roomId: typeof item.room_id === 'string' ? item.room_id : null,
+      messageId: typeof item.message_id === 'string' ? item.message_id : null,
+      change: typeof item.change === 'string' ? item.change : null,
     });
   }
   return events;
@@ -265,6 +282,8 @@ export function useActorStream({ token, onEvent }: StreamOptions): StreamState {
                     source: '',
                     kind: '',
                     roomId: null,
+                    messageId: null,
+                    change: null,
                   });
                 } else {
                   for (const event of events) handlerRef.current(event);
