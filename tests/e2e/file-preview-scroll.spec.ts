@@ -94,6 +94,9 @@ interface UploadedFile {
   publicUrl: string;
 }
 
+/** 长会话列表需要超过一屏的群聊会话；30 条 × 约 64px 已足够。 */
+const GROUP_ROOM_COUNT = 30;
+
 const PIXEL_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
   'base64',
@@ -332,6 +335,16 @@ test.describe('file preview scroll', () => {
       members: [agent.actor_id],
     });
     roomId = direct.room.room_id;
+
+    // 30 个群聊撑出会话列表滚动条，用于验证手柄不覆盖滚动容器。
+    for (let index = 0; index < GROUP_ROOM_COUNT; index += 1) {
+      await callTool<RoomDetail>(base, humanToken, 'network_room_create', {
+        request_id: requestId('e2e_preview_group'),
+        kind: 'group',
+        members: [agent.actor_id],
+        title: `滚动会话 ${suffix} ${index + 1}`,
+      });
+    }
   });
 
   test.beforeEach(async ({ page }) => {
@@ -518,6 +531,173 @@ test.describe('file preview scroll', () => {
       () => document.documentElement.scrollWidth - window.innerWidth,
     );
     expect(overflow).toBeLessThanOrEqual(1);
+  });
+
+  test('sidebar handle leaves the long list scrollbar unobstructed', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${base}/c/${roomId}`);
+    await page.locator('#room-filter-group').click();
+    await expect(page.locator('#room-list .room-item')).toHaveCount(GROUP_ROOM_COUNT);
+    await expect(page.locator('#sidebar-resizer')).toBeVisible();
+
+    const probe = await page.evaluate(() => {
+      const list = document.querySelector<HTMLElement>('.sidebar-list')!;
+      const sidebar = document.querySelector<HTMLElement>('#sidebar')!;
+      const resizer = document.querySelector<HTMLElement>('#sidebar-resizer')!;
+      const listRect = list.getBoundingClientRect();
+      const resizerRect = resizer.getBoundingClientRect();
+      // 滚动条占据列表右缘 6px；无头 Chromium 用 overlay 滚动条时仍画在这里。
+      const x = listRect.right - 3;
+      const y = listRect.top + 120;
+      const hit = document.elementFromPoint(x, y);
+      return {
+        x,
+        y,
+        listRight: listRect.right,
+        resizerLeft: resizerRect.left,
+        hitInList: hit !== null && list.contains(hit),
+        hitInResizer: hit !== null && (hit === resizer || resizer.contains(hit)),
+        scrollHeight: list.scrollHeight,
+        clientHeight: list.clientHeight,
+        sidebarWidth: sidebar.getBoundingClientRect().width,
+      };
+    });
+    // 手柄从列表右缘之后开始，滚动条整条 6px 都不在手柄命中区内。
+    expect(probe.resizerLeft).toBeGreaterThanOrEqual(probe.listRight - 0.5);
+    expect(probe.hitInList).toBe(true);
+    expect(probe.hitInResizer).toBe(false);
+    expect(probe.scrollHeight).toBeGreaterThan(probe.clientHeight + 100);
+
+    // 在滚动条位置按下并横拖，不能变成拖侧栏（修复前会命中手柄）。
+    // 无头 Chromium 的 overlay 滚动条不接受 CDP 合成的拖拽，原生拖动
+    // 由几何断言覆盖；这里验证指针不会落到手柄上。
+    await page.mouse.move(probe.x, probe.y);
+    await page.mouse.down();
+    await page.mouse.move(probe.x + 60, probe.y + 80, { steps: 10 });
+    await page.mouse.up();
+    expect(
+      await page.locator('#sidebar').evaluate((element) => element.getBoundingClientRect().width),
+    ).toBeCloseTo(probe.sidebarWidth, 0);
+
+    // 滚动条位置滚轮滚动列表。
+    await page.locator('.sidebar-list').evaluate((element) => {
+      element.scrollTop = 0;
+    });
+    await page.mouse.move(probe.x, probe.y);
+    await page.mouse.wheel(0, 400);
+    await expect
+      .poll(() => page.locator('.sidebar-list').evaluate((element) => element.scrollTop))
+      .toBeGreaterThan(0);
+
+    // 手柄区域滚轮仍应滚动列表内容。
+    await page.locator('.sidebar-list').evaluate((element) => {
+      element.scrollTop = 0;
+    });
+    const box = await page.locator('#sidebar-resizer').boundingBox();
+    if (!box) throw new Error('侧栏手柄不可见');
+    await page.mouse.move(box.x + box.width / 2, probe.y);
+    await page.mouse.wheel(0, 400);
+    await expect
+      .poll(() => page.locator('.sidebar-list').evaluate((element) => element.scrollTop))
+      .toBeGreaterThan(0);
+
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth,
+    );
+    expect(overflow).toBeLessThanOrEqual(1);
+  });
+
+  test('persisted out-of-range sidebar width clamps state, root variable and ARIA', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${base}/`);
+    const handle = page.locator('#sidebar-resizer');
+    await expect(handle).toBeVisible();
+
+    const cases = [
+      { value: 900, expected: 480 },
+      { value: 100, expected: 240 },
+      { value: 'abc', expected: 300 },
+      { value: null, expected: 300 },
+    ] as const;
+
+    for (const { value, expected } of cases) {
+      await page.evaluate((width) => {
+        localStorage.setItem(
+          'agent-network-ui-v1',
+          JSON.stringify({ state: { homeLayout: null, sidebarWidth: width }, version: 1 }),
+        );
+      }, value);
+      await page.reload();
+      await expect(handle).toHaveAttribute('aria-valuenow', String(expected));
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const raw = localStorage.getItem('agent-network-ui-v1');
+            return raw ? (JSON.parse(raw) as { state: { sidebarWidth: number } }).state.sidebarWidth : null;
+          }),
+        )
+        .toBe(expected);
+
+      const layout = await page.evaluate(() => ({
+        root: getComputedStyle(document.documentElement).getPropertyValue('--app-sidebar-width').trim(),
+        sidebar: document.querySelector<HTMLElement>('#sidebar')!.getBoundingClientRect().width,
+        overflow: document.documentElement.scrollWidth - window.innerWidth,
+      }));
+      expect(layout.root).toBe(`${expected}px`);
+      expect(layout.sidebar).toBeCloseTo(expected, 0);
+      expect(layout.overflow).toBeLessThanOrEqual(1);
+    }
+  });
+
+  test('tablet widths keep the sidebar draggable and the drawer unchanged', async ({ page }) => {
+    await page.setViewportSize({ width: 1199, height: 800 });
+    await page.goto(`${base}/c/${roomId}`);
+    const handle = page.locator('#sidebar-resizer');
+    const sidebarWidth = () =>
+      page.locator('#sidebar').evaluate((element) => element.getBoundingClientRect().width);
+    await expect(handle).toBeVisible();
+    await expect(handle).toHaveAttribute('aria-valuenow', '300');
+    await handle.focus();
+    await page.keyboard.press('ArrowRight');
+    await expect.poll(sidebarWidth).toBeCloseTo(310, 0);
+
+    // 1199 仍是平板抽屉：文件栏固定覆盖，不进入三栏文档流。
+    await expect(page.locator('#files-pane')).toBeHidden();
+    await page.locator('#files-toggle').click();
+    await expect(page.locator('#files-pane')).toBeVisible();
+    expect(await page.locator('#files-pane').evaluate((element) => getComputedStyle(element).position))
+      .toBe('fixed');
+    await expect(page.locator('#files-backdrop')).toBeVisible();
+    const drawer = await page.evaluate(() => {
+      const pane = document.querySelector<HTMLElement>('#files-pane')!.getBoundingClientRect();
+      return {
+        sidebar: document.querySelector<HTMLElement>('#sidebar')!.getBoundingClientRect().width,
+        paneRight: pane.right,
+        overflow: document.documentElement.scrollWidth - window.innerWidth,
+      };
+    });
+    expect(drawer.sidebar).toBeCloseTo(310, 0);
+    expect(drawer.paneRight).toBeCloseTo(1199, 0);
+    expect(drawer.overflow).toBeLessThanOrEqual(1);
+    await page.locator('#files-backdrop').click();
+    await expect(page.locator('#files-pane')).toBeHidden();
+
+    // 1200 回到三栏，侧栏手柄与文件栏同时存在。
+    await page.setViewportSize({ width: 1200, height: 800 });
+    await expect(page.locator('#files-pane')).toBeVisible();
+    expect(await page.locator('#files-pane').evaluate((element) => getComputedStyle(element).position))
+      .toBe('relative');
+    await expect(handle).toBeVisible();
+    const desktop = await page.evaluate(() => ({
+      sidebar: document.querySelector<HTMLElement>('#sidebar')!.getBoundingClientRect().width,
+      chat: document.querySelector<HTMLElement>('.chat-pane')!.getBoundingClientRect().width,
+      pane: document.querySelector<HTMLElement>('#files-pane')!.getBoundingClientRect().width,
+      overflow: document.documentElement.scrollWidth - window.innerWidth,
+    }));
+    expect(desktop.sidebar).toBeCloseTo(310, 0);
+    expect(desktop.chat).toBeGreaterThan(0);
+    expect(desktop.pane).toBeGreaterThan(0);
+    expect(desktop.overflow).toBeLessThanOrEqual(1);
   });
 
   test('right pane max follows sidebar width changes immediately', async ({ page }) => {
@@ -758,7 +938,11 @@ test.describe('file preview scroll', () => {
     expect(fullscreenGeometry.scrollHeight).toBeGreaterThan(fullscreenGeometry.clientHeight + 100);
     expect(fullscreenGeometry.bodyBottom).toBeLessThanOrEqual(fullscreenGeometry.footTop + 1);
 
-    // Esc 分层：第一次只退出全屏，预览仍在。
+    // 点击预览正文后焦点回到 body；Esc 仍由 document 监听分层退出。
+    await page.mouse.click(bodyBox!.x + 24, bodyBox!.y + 120);
+    await expect
+      .poll(() => page.evaluate(() => document.activeElement === document.body))
+      .toBe(true);
     await page.keyboard.press('Escape');
     await expect(button).toHaveText('全屏');
     await expect(button).toHaveAttribute('aria-pressed', 'false');
@@ -773,6 +957,13 @@ test.describe('file preview scroll', () => {
     expect(restored!.width).toBeCloseTo(before!.width, 0);
     expect(restored!.x).toBeCloseTo(before!.x, 0);
     expect(await pane.evaluate((element) => getComputedStyle(element).position)).not.toBe('fixed');
+
+    // 焦点在全屏按钮时，section 与 document 监听不会重复处理同一次 Esc。
+    await button.click();
+    await expect(button).toHaveText('退出全屏');
+    await page.keyboard.press('Escape');
+    await expect(button).toHaveText('全屏');
+    await expect(button).toBeFocused();
 
     // 第二次 Esc 才走原有预览关闭逻辑。
     await page.keyboard.press('Escape');

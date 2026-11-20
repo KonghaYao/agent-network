@@ -33,14 +33,27 @@ export function FilePreviewPane({ item, onBack, fullscreen = false, onToggleFull
     wasFullscreen.current = fullscreen;
   }, [fullscreen]);
 
+  // 全屏覆盖全页，点击正文后焦点会落到 body，section 收不到按键。
+  // 监听挂在 document；非全屏的 Esc 仍由 section 处理，两者不会重复触发。
+  useEffect(() => {
+    if (!fullscreen) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      onToggleFullscreen?.();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [fullscreen, onToggleFullscreen]);
+
   return (
     <section id="file-preview-pane" className="file-preview-card file-preview-inline" aria-label="文件预览"
       onKeyDown={(event) => {
         if (event.key !== 'Escape') return;
+        // 全屏由 document 监听统一处理，避免同一按键被 section 再退出一次。
+        if (fullscreen) return;
         event.stopPropagation();
-        // Esc 分层：全屏时先退出覆盖，再次 Esc 才走原有预览关闭逻辑。
-        if (fullscreen) onToggleFullscreen?.();
-        else onBack();
+        onBack();
       }}>
       <header className="file-preview-head">
         <Button ref={backRef} id="file-preview-back" type="button" onClick={onBack}>返回列表</Button>

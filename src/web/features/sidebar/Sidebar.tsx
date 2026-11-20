@@ -79,9 +79,15 @@ function readCssPixels(name: string): number | undefined {
 }
 
 function clampSidebarWidth(width: number): number {
+  if (!Number.isFinite(width)) return SIDEBAR_DEFAULT_WIDTH;
   const minimum = readCssPixels('--app-sidebar-min') ?? SIDEBAR_MIN_FALLBACK;
   const maximum = readCssPixels('--app-sidebar-max') ?? SIDEBAR_MAX_FALLBACK;
   return Math.max(minimum, Math.min(maximum, width));
+}
+
+/** 持久化值可能来自旧版本或被手工改写，非法类型统一回到默认宽度。 */
+function normalizeSidebarWidth(value: unknown): number {
+  return typeof value === 'number' ? clampSidebarWidth(value) : SIDEBAR_DEFAULT_WIDTH;
 }
 
 /**
@@ -141,14 +147,16 @@ export function Sidebar(props: SidebarProps) {
   const showRetry = status === 'error' && rooms.length === 0;
   const filterLabel = FILTERS.find((entry) => entry.value === filter)?.label ?? '好友';
 
-  // 左侧栏只在大屏三栏出现手柄；平板抽屉与移动端单栏不渲染。
-  const desktop = useMediaQuery('(min-width: 1200px)');
+  // ≥760 侧栏是可见列，平板上也可拖拽；<760 单栏不渲染手柄。
+  const resizable = useMediaQuery('(min-width: 760px)');
   const sidebarWidth = useUiPrefStore((state) => state.sidebarWidth);
   const setSidebarWidth = useUiPrefStore((state) => state.setSidebarWidth);
   const asideRef = useRef<HTMLElement>(null);
   const resizerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ x: number; width: number } | null>(null);
   const widthRef = useRef(sidebarWidth);
+  // 首帧的 ARIA 也读夹紧后的值，避免水合前短暂暴露越界持久化数据。
+  const displayWidth = normalizeSidebarWidth(sidebarWidth);
 
   // 拖动期间直接写 CSS 变量，避免每个 pointermove 都重渲染整张会话列表；
   // 根节点变量同时供右栏读取侧栏宽度与初始比例计算。
@@ -162,10 +170,12 @@ export function Sidebar(props: SidebarProps) {
   };
 
   useLayoutEffect(() => {
-    widthRef.current = sidebarWidth;
-    asideRef.current?.style.setProperty('--app-sidebar-width', `${sidebarWidth}px`);
-    document.documentElement.style.setProperty('--app-sidebar-width', `${sidebarWidth}px`);
-  }, [sidebarWidth]);
+    const next = normalizeSidebarWidth(sidebarWidth);
+    widthRef.current = next;
+    asideRef.current?.style.setProperty('--app-sidebar-width', `${next}px`);
+    document.documentElement.style.setProperty('--app-sidebar-width', `${next}px`);
+    if (next !== sidebarWidth) setSidebarWidth(next);
+  }, [sidebarWidth, setSidebarWidth]);
 
   // 防抖后只播报变化后的汇总，避免消息连续到达时反复打断读屏。
   const [filterAnnouncement, setFilterAnnouncement] = useState('');
@@ -217,7 +227,7 @@ export function Sidebar(props: SidebarProps) {
       className="sidebar"
       aria-label="会话列表"
     >
-      {desktop ? (
+      {resizable ? (
         <div
           ref={resizerRef}
           id="sidebar-resizer"
@@ -229,7 +239,7 @@ export function Sidebar(props: SidebarProps) {
           aria-controls="sidebar"
           aria-valuemin={readCssPixels('--app-sidebar-min') ?? SIDEBAR_MIN_FALLBACK}
           aria-valuemax={readCssPixels('--app-sidebar-max') ?? SIDEBAR_MAX_FALLBACK}
-          aria-valuenow={Math.round(sidebarWidth)}
+          aria-valuenow={Math.round(displayWidth)}
           onPointerDown={(event) => {
             if (event.button !== 0) return;
             event.preventDefault();
@@ -265,6 +275,11 @@ export function Sidebar(props: SidebarProps) {
             if (!dragRef.current) return;
             dragRef.current = null;
             setSidebarWidth(widthRef.current);
+          }}
+          onWheel={(event) => {
+            // 手柄占据侧栏右侧 8px 空白，滚轮落在手柄上时仍应滚动会话列表。
+            const list = asideRef.current?.querySelector<HTMLElement>('.sidebar-list');
+            if (list) list.scrollTop += event.deltaY;
           }}
           onKeyDown={(event) => {
             if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
