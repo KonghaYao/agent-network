@@ -33,6 +33,8 @@ let groupId = '';
 let groupTitle = '';
 let imageAgentName = '';
 let textAgentName = '';
+let longNames: string[] = [];
+let shortAgentName = '';
 
 async function loginWithFilter(page: Page, token: string, filter: string) {
   await page.addInitScript(({ credential, roomFilter }) => {
@@ -52,6 +54,12 @@ test.beforeAll(async () => {
   imageAgentName = `Claude 头像 ${suffix}`;
   textAgentName = `首字头像 ${suffix}`;
   groupTitle = `Presence 群 ${suffix}`;
+  shortAgentName = `短名${suffix}`;
+  longNames = [
+    '超长成员名称甲用于验证群成员弹窗名字折行与操作按钮布局并在两行后省略其余内容的完整展示效果补充文字确保超过两行',
+    'Metalnfer-Bridge-Architecture-Agent-Long-Display-Name-ABCDEFGHIJKLMNOPQRSTUVWXYZ-0123456789',
+    '这是一个非常非常长的群成员名称乙需要折行显示并验证最多两行其余内容用省略号替代再补充一些文字确保超过两行的展示',
+  ];
 
   tokenA = crypto.randomUUID();
   tokenB = crypto.randomUUID();
@@ -86,6 +94,15 @@ test.beforeAll(async () => {
   const textAgent = await callTool<AgentCreated>(base, tokenA, 'network_agent_create', {
     request_id: requestId('presence_agent'), name: textAgentName,
   });
+  const longAgents: AgentCreated[] = [];
+  for (const name of longNames) {
+    longAgents.push(await callTool<AgentCreated>(base, tokenA, 'network_agent_create', {
+      request_id: requestId('presence_agent'), name,
+    }));
+  }
+  const shortAgent = await callTool<AgentCreated>(base, tokenA, 'network_agent_create', {
+    request_id: requestId('presence_agent'), name: shortAgentName,
+  });
   // 任意已认证 Agent 请求都会把持久化 presence 置为 online；不发消息、不建流。
   await callTool(base, online.token, 'network_rooms_list', { limit: 1 });
 
@@ -113,9 +130,25 @@ test.beforeAll(async () => {
       online.actor_id,
       imageAgent.actor_id,
       textAgent.actor_id,
+      ...longAgents.map((agent) => agent.actor_id),
+      shortAgent.actor_id,
     ],
   });
   groupId = group.room.room_id;
+
+  // 一个长名成员设为管理员，覆盖「管理员 · Agent」次要行。
+  const detail = await callTool<{
+    members: { actor_id: string; role_revision: number }[];
+  }>(base, tokenA, 'network_room_get', { room_id: groupId });
+  const adminTarget = detail.members.find((member) => member.actor_id === longAgents[0]!.actor_id);
+  if (!adminTarget) throw new Error('长名成员未加入群');
+  await callTool(base, tokenA, 'network_room_role_set', {
+    request_id: requestId('presence_role'),
+    room_id: groupId,
+    actor_id: adminTarget.actor_id,
+    role: 'admin',
+    expected_role_revision: adminTarget.role_revision,
+  });
 });
 
 test('未知与人类在线态不会被当成离线', () => {
@@ -321,4 +354,138 @@ test('群成员图片头像 404 时回退首字且不出现白底', async ({ pag
   expect(style.backgroundImage).toBe('none');
   expect(style.background).not.toBe('rgb(255, 255, 255)');
   expect(style.background).not.toBe('rgba(0, 0, 0, 0)');
+});
+
+test('群成员弹窗名字优先占宽，长名最多两行且操作按钮可点', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await loginWithFilter(page, tokenA, 'group');
+  await page.goto(`${base}/c/${groupId}`);
+  await page.locator('#members-button').click();
+  await expect(page.locator('#members-modal')).toBeVisible();
+
+  const layout = await page.evaluate((names) => {
+    const dialog = document.getElementById('members-modal')!.getBoundingClientRect();
+    const columnWidths = Array.from(
+      document.querySelectorAll<HTMLElement>('#members-modal .members-column'),
+    ).map((column) => column.getBoundingClientRect().width);
+    const rows = names.map((name) => {
+      const row = Array.from(
+        document.querySelectorAll<HTMLElement>('#members-current .spa-member'),
+      ).find((item) => item.querySelector('.member-roster-name')?.textContent?.includes(name));
+      if (!row) throw new Error(`缺少成员行：${name}`);
+      const column = row.closest<HTMLElement>('.members-column')!;
+      const nameEl = row.querySelector<HTMLElement>('.member-roster-name')!;
+      const roleEl = row.querySelector<HTMLElement>('.member-roster-role')!;
+      const actionsEl = row.querySelector<HTMLElement>('.member-roster-actions');
+      const nameRect = nameEl.getBoundingClientRect();
+      const roleRect = roleEl.getBoundingClientRect();
+      const actionsRect = actionsEl?.getBoundingClientRect() ?? null;
+      const style = getComputedStyle(nameEl);
+      const lineHeight = Number.parseFloat(style.lineHeight);
+      return {
+        name,
+        columnWidth: column.getBoundingClientRect().width,
+        nameWidth: nameRect.width,
+        nameRight: nameRect.right,
+        nameBottom: nameRect.bottom,
+        roleTop: roleRect.top,
+        actionsLeft: actionsRect?.left ?? null,
+        lines: Math.round(nameRect.height / lineHeight),
+        lineClamp: style.webkitLineClamp,
+        overflowWrap: style.overflowWrap,
+        truncated: nameEl.scrollHeight > nameEl.clientHeight + 1,
+        buttons: Array.from(actionsEl?.querySelectorAll<HTMLElement>('button') ?? []).map(
+          (button) => button.getBoundingClientRect(),
+        ),
+      };
+    });
+    return { columnWidths, rows, dialogWidth: dialog.width, viewport: window.innerWidth };
+  }, [...longNames, shortAgentName]);
+
+  expect(layout.dialogWidth).toBeLessThanOrEqual(layout.viewport + 1);
+  expect(layout.columnWidths).toHaveLength(2);
+  expect(layout.columnWidths[0]! / layout.columnWidths[1]!).toBeGreaterThan(1.35);
+
+  const longRows = layout.rows.filter((row) => longNames.includes(row.name));
+  expect(longRows).toHaveLength(3);
+  for (const row of layout.rows) {
+    expect(row.nameWidth).toBeGreaterThanOrEqual(180);
+    expect(row.nameWidth).toBeGreaterThanOrEqual(row.columnWidth * 0.5);
+    expect(row.actionsLeft).not.toBeNull();
+    expect(row.nameRight).toBeLessThanOrEqual(row.actionsLeft! - 3);
+    expect(row.roleTop).toBeGreaterThanOrEqual(row.nameBottom - 1);
+    expect(row.lineClamp).toBe('2');
+    expect(row.overflowWrap).toBe('anywhere');
+    expect(row.lines).toBeLessThanOrEqual(2);
+    expect(row.buttons.length).toBeGreaterThan(0);
+    expect(row.buttons.every((button) => button.width > 0 && button.height > 0)).toBe(true);
+    // 桌面操作按钮收窄为固定 28px，不再按文字内容撑宽。
+    expect(
+      row.buttons.every((button) => button.width <= 30 && button.height <= 30),
+    ).toBe(true);
+  }
+  for (const row of longRows) {
+    expect(row.lines).toBe(2);
+  }
+  // 超过两行的名字仍渲染两行并省略剩余内容。
+  expect(longRows.some((row) => row.truncated)).toBe(true);
+  for (const row of longRows.filter((visible) => visible.truncated)) {
+    expect(row.lines).toBe(2);
+  }
+
+  const shortRow = layout.rows.find((row) => row.name === shortAgentName)!;
+  expect(shortRow.lines).toBe(1);
+
+  // 收缩后的操作按钮仍可点击：移除按钮打开确认框，取消后弹窗保留。
+  await page.getByRole('button', { name: `移除 ${longNames[0]!}`, exact: true }).click();
+  await expect(page.locator('#confirm-dialog')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#confirm-dialog')).toBeHidden();
+  await expect(page.locator('#members-modal')).toBeVisible();
+
+  // 390：单栏堆叠、无横向溢出，触屏操作按钮维持 44px。
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobile = await page.evaluate((name) => {
+    const dialog = document.getElementById('members-modal')!.getBoundingClientRect();
+    const columns = Array.from(
+      document.querySelectorAll<HTMLElement>('#members-modal .members-column'),
+    ).map((column) => column.getBoundingClientRect());
+    const buttons = Array.from(
+      document.querySelectorAll<HTMLElement>('#members-current .member-action'),
+    ).map((button) => button.getBoundingClientRect());
+    const row = Array.from(
+      document.querySelectorAll<HTMLElement>('#members-current .spa-member'),
+    ).find((item) => item.querySelector('.member-roster-name')?.textContent?.includes(name))!;
+    const nameEl = row.querySelector<HTMLElement>('.member-roster-name')!;
+    const roleEl = row.querySelector<HTMLElement>('.member-roster-role')!;
+    const actionsEl = row.querySelector<HTMLElement>('.member-roster-actions')!;
+    const nameRect = nameEl.getBoundingClientRect();
+    const style = getComputedStyle(nameEl);
+    return {
+      overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      dialogWidth: dialog.width,
+      viewport: window.innerWidth,
+      columns,
+      buttons,
+      nameWidth: nameRect.width,
+      nameRight: nameRect.right,
+      nameBottom: nameRect.bottom,
+      roleTop: roleEl.getBoundingClientRect().top,
+      actionsLeft: actionsEl.getBoundingClientRect().left,
+      lines: Math.round(nameRect.height / Number.parseFloat(style.lineHeight)),
+    };
+  }, longNames[0]!);
+
+  expect(mobile.overflow).toBeLessThanOrEqual(1);
+  expect(mobile.dialogWidth).toBeLessThanOrEqual(mobile.viewport + 1);
+  expect(mobile.columns).toHaveLength(2);
+  expect(mobile.columns[1]!.top).toBeGreaterThanOrEqual(
+    mobile.columns[0]!.top + mobile.columns[0]!.height - 1,
+  );
+  expect(mobile.buttons.length).toBeGreaterThan(0);
+  expect(mobile.buttons.every((button) => button.height >= 44 && button.width >= 44)).toBe(true);
+  expect(mobile.nameWidth).toBeGreaterThan(0);
+  expect(mobile.nameRight).toBeLessThanOrEqual(mobile.actionsLeft - 3);
+  expect(mobile.roleTop).toBeGreaterThanOrEqual(mobile.nameBottom - 1);
+  expect(mobile.lines).toBe(2);
 });

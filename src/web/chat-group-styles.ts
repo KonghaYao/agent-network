@@ -1,6 +1,6 @@
 /** Group settings and shared member-picker styles, inserted before responsive overrides. */
 export const GROUP_STYLE = `
-  .members-card { width: min(680px, 100%); display: flex; flex-direction: column;
+  .members-card { width: min(760px, 100%); display: flex; flex-direction: column;
     overflow: hidden; }
   #members-form { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
   .members-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
@@ -12,7 +12,7 @@ export const GROUP_STYLE = `
     border: 0; background: transparent; color: var(--wx-muted);
     font-size: 20px; line-height: 1; }
   .members-close:hover { background: var(--wx-hover); color: var(--wx-text); }
-  .members-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  .members-columns { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
     gap: 12px; align-items: stretch; }
   .members-column { min-width: 0; display: flex; flex-direction: column;
     border: 1px solid var(--wx-line); border-radius: 8px; overflow: hidden;
@@ -31,11 +31,17 @@ export const GROUP_STYLE = `
   .member-roster-item:hover { background: var(--wx-hover); }
   .member-avatar { flex: 0 0 auto; width: 24px; height: 24px; border-radius: 5px;
     font-size: 11px; }
-  .member-roster-name { min-width: 0; flex: 1 1 auto; overflow: hidden;
-    text-overflow: ellipsis; white-space: nowrap; }
-  .member-roster-role { flex: 0 0 auto; margin-left: auto; font-size: 11px;
-    color: var(--wx-muted); }
-  .member-roster-actions { flex: 0 0 auto; display: flex; gap: 4px; }
+  .member-roster-main { flex: 1 1 auto; min-width: 0; display: flex;
+    flex-direction: column; gap: 1px; }
+  /* 名字优先占满剩余宽度；最多两行，仍超长才省略。 */
+  .member-roster-name { min-width: 0; display: -webkit-box; overflow: hidden;
+    -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+    overflow-wrap: anywhere; line-height: 1.4; }
+  .member-roster-role { min-width: 0; font-size: 11px; line-height: 1.35;
+    color: var(--wx-muted); white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; }
+  .member-roster-actions { flex: 0 0 auto; display: flex; gap: 4px;
+    align-items: center; }
   .member-menu-toggle { width: 24px; height: 24px; padding: 0; border: 1px solid var(--wx-line);
     border-radius: 4px; background: var(--wx-panel); color: var(--wx-text);
     font-size: 15px; line-height: 1; cursor: pointer; }
@@ -53,11 +59,17 @@ export const GROUP_STYLE = `
     background: var(--wx-hover); }
   .member-menu-item.danger { color: var(--wx-unread); }
   .member-menu-item:disabled { opacity: 0.5; cursor: default; }
-  .member-action { padding: 2px 6px; border: 1px solid var(--wx-line); border-radius: 4px;
-    background: var(--wx-panel); color: var(--wx-text); font-size: 11px; line-height: 1.5; }
-  .member-action:hover:not(:disabled) { background: var(--wx-hover); }
-  .member-action.danger { color: var(--wx-unread); }
-  .member-action:disabled { opacity: 0.5; cursor: default; }
+  /* Lenso Button 用 StyleX 提权，紧凑操作按钮必须显式压过 SDK 尺寸。 */
+  .members-card .member-roster-item .member-action { box-sizing: border-box; flex: 0 0 auto;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 28px !important; height: 28px !important;
+    min-width: 28px !important; min-height: 28px !important; padding: 0 !important;
+    border: 1px solid var(--wx-line); border-radius: 4px;
+    background: var(--wx-panel); color: var(--wx-text); font-size: 11px; line-height: 1; }
+  .members-card .member-roster-item .member-action:hover:not(:disabled) {
+    background: var(--wx-hover); }
+  .members-card .member-roster-item .member-action.danger { color: var(--wx-unread); }
+  .members-card .member-roster-item .member-action:disabled { opacity: 0.5; cursor: default; }
   .members-card .contact-list { margin: 0; padding: 4px;
     max-height: min(46dvh, 360px); }
   .contact-choice { display: flex; align-items: center; gap: 9px; padding: 8px;

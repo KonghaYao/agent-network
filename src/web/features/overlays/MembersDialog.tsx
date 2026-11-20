@@ -439,12 +439,14 @@ export function MembersDialog({
                         offline={offline}
                       />
                     )}
-                    <span className="member-roster-name">
-                      {member.name}
-                      {member.actor_id === identityId ? '（我）' : ''}
-                      {offline ? <span className="visually-hidden">（离线）</span> : null}
+                    <span className="member-roster-main">
+                      <span className="member-roster-name">
+                        {member.name}
+                        {member.actor_id === identityId ? '（我）' : ''}
+                        {offline ? <span className="visually-hidden">（离线）</span> : null}
+                      </span>
+                      <span className="member-roster-role">{roleText(member)}</span>
                     </span>
-                    <span className="member-roster-role">{roleText(member)}</span>
                     {actions &&
                     (actions.can_set_admin ||
                       actions.can_revoke_admin ||
