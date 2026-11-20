@@ -79,6 +79,19 @@ export function headCursor(scope: string, head: number): string {
   return encodeCursor({ v: 1, scope: `sync:${scope}`, dir: 'after', seq: head, snapshot: head });
 }
 
+/**
+ * 内部转换标识只用于同批 SQL 归属判断，不进入公开 sync 投影。
+ *
+ * `message_recalled` 的稳定 event_key 需要 metadata.operation_nonce 区分
+ * 首次转换；客户端只需要 sender_id/recalled_by/body_sha256 定位。
+ */
+function publicEventMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
+  if (!('operation_nonce' in metadata)) return metadata;
+  const copy = { ...metadata };
+  delete copy.operation_nonce;
+  return copy;
+}
+
 export async function sync(
   db: D1Database,
   principal: Principal,
@@ -133,7 +146,7 @@ export async function sync(
       scope: `${row.scope_kind}:${row.scope_id}`,
       type: row.event_type,
       ref_id: row.ref_id,
-      metadata: parseMetadataObject(row.metadata),
+      metadata: publicEventMetadata(parseMetadataObject(row.metadata)),
       created_at: String(row.created_at),
     })),
     next_cursor: headCursor(input.scope, nextSeq),

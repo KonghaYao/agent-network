@@ -9,14 +9,14 @@ import {
   uniqueIndex,
 } from 'drizzle-orm/sqlite-core';
 
-import { actors, rooms } from './core';
+import { actors, messages, rooms } from './core';
 
 /**
  * 4C-3 rooms 域 Drizzle schema。
  *
- * 只覆盖 rooms 只读查询实际读取的表：邀请、入群申请、群主转让与管理审计。
- * 迁移 SQL 仍是唯一事实源；列顺序、默认值、CHECK、索引与 FK 必须与
- * `migrations/0023`、`0024`、`0027`、`0037` 完全一致，由
+ * 只覆盖 rooms 只读查询实际读取的表：邀请、入群申请、群主转让、消息置顶
+ * 与管理审计。迁移 SQL 仍是唯一事实源；列顺序、默认值、CHECK、索引与 FK
+ * 必须与 `migrations/0023`、`0024`、`0027`、`0037`、`0051` 完全一致，由
  * `test:schema-parity` 逐表校验。guard、FTS、trigger 与写路径不进入这里。
  */
 
@@ -174,6 +174,31 @@ export const roomOwnerTransfers = sqliteTable(
   ],
 );
 
+export const roomPinnedMessages = sqliteTable(
+  'room_pinned_messages',
+  {
+    room_id: text('room_id')
+      .notNull()
+      .references(() => rooms.room_id),
+    message_id: text('message_id')
+      .notNull()
+      .references(() => messages.message_id),
+    slot: integer('slot').notNull(),
+    pinned_by: text('pinned_by')
+      .notNull()
+      .references(() => actors.actor_id),
+    pinned_at: integer('pinned_at').notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.room_id, table.message_id] }),
+    uniqueIndex('room_pinned_messages_room_slot').on(table.room_id, table.slot),
+    check(
+      'room_pinned_messages_slot',
+      sql`${table.slot} >= 1 and ${table.slot} <= 3`,
+    ),
+  ],
+);
+
 export const roomManagementAudit = sqliteTable(
   'room_management_audit',
   {
@@ -209,7 +234,7 @@ export const roomManagementAudit = sqliteTable(
     ),
     check(
       'room_management_audit_action_check',
-      sql`${table.action} in ('member_added', 'member_removed', 'member_left', 'admin_appointed', 'admin_revoked', 'owner_transferred', 'owner_transfer_proposed', 'owner_transfer_accepted', 'owner_transfer_rejected', 'owner_transfer_cancelled', 'owner_transfer_expired', 'policy_updated', 'announcement_updated', 'invite_created', 'invite_revoked', 'join_requested', 'join_approved', 'join_rejected', 'room_dissolved')`,
+      sql`${table.action} in ('member_added', 'member_removed', 'member_left', 'admin_appointed', 'admin_revoked', 'owner_transferred', 'owner_transfer_proposed', 'owner_transfer_accepted', 'owner_transfer_rejected', 'owner_transfer_cancelled', 'owner_transfer_expired', 'policy_updated', 'announcement_updated', 'invite_created', 'invite_revoked', 'join_requested', 'join_approved', 'join_rejected', 'room_dissolved', 'message_recalled', 'message_pinned', 'message_unpinned')`,
     ),
     check(
       'room_management_audit_previous_role_check',

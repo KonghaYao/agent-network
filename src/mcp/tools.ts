@@ -7,6 +7,7 @@ import { provisionAgentAfterMessage } from '../memory/provision';
 import { messageSearch, messageContext, messageSearchSchema, messageContextSchema, messageSearchOutputSchema, messageContextOutputSchema } from '../domain/message-search';
 import { fileTicketSecret } from '../domain/file-ticket';
 import { messageRecallSchema } from '../contracts/message-recall';
+import { roomMessagePinSchema } from '../contracts/room-message-pin';
 import { messageRecall } from '../domain/message-recall';
 import {
   agentArchiveSchema,
@@ -202,6 +203,7 @@ import {
   type RoomPage,
 } from '../domain/rooms';
 import { roomRename } from '../domain/room-profile';
+import { roomMessagePin } from '../domain/room-message-pins';
 import { roomMonitorGet, roomMonitorSet } from '../domain/room-monitors';
 import { roomNoticeList } from '../domain/room-notices';
 import {
@@ -301,6 +303,7 @@ import {
   roomNoticePageSchema,
   roomPolicySetResultSchema,
   roomRoleHistorySchema as roomRoleHistoryResultSchema,
+  roomMessagePinResultSchema,
   sendResultSchema,
   messageSendStatusPageSchema,
   syncPageSchema,
@@ -476,6 +479,7 @@ export function registerTools(
     return {
       room: detail.room,
       members,
+      pinned_messages: detail.pinned_messages,
       invited: detail.invited,
       owner_transfer: detail.owner_transfer,
     };
@@ -1203,7 +1207,7 @@ export function registerTools(
   register(
     server,
     'network_room_get',
-    '读取房间摘要与当前有效成员；Agent 成员的 online 表示可用性（保持 SSE 连接，或最近 60 秒内有 MCP 请求），null 表示未知，人类成员恒为 null。direct 房间的 peer_can_manage 只表示当前调用者能否管理对端 Agent，不暴露 manager_id；群聊不返回该字段。遗留无主群（历史数据中 owner_id 为空且未解散）返回 owner_missing=true，不能再邀请或加入成员，但不会自动解散。',
+    '读取房间摘要与当前有效成员；Agent 成员的 online 表示可用性（保持 SSE 连接，或最近 60 秒内有 MCP 请求），null 表示未知，人类成员恒为 null。direct 房间的 peer_can_manage 只表示当前调用者能否管理对端 Agent，不暴露 manager_id；群聊不返回该字段。顶层 pinned_messages 是当前查看者按 historyBoundary 可见的置顶消息（预览取当前消息，已撤回消息排除，direct 与无置顶为 []）。遗留无主群（历史数据中 owner_id 为空且未解散）返回 owner_missing=true，不能再邀请或加入成员，但不会自动解散。',
     roomGetSchema,
     roomDetailSchema,
     async (input) => {
@@ -1517,13 +1521,26 @@ export function registerTools(
   register(
     server,
     'network_message_recall',
-    '撤回自己两分钟内发送的普通消息。含 Agent 投递的消息不能撤回；请单独取消投递。消息式 Task 标记不阻止撤回，撤回后保留 tombstone 与标记。重复调用安全幂等。',
+    '撤回消息。群主可撤回当前历史边界内任意成员（human/agent、文字/图片/文件）的消息，不受两分钟限制；同一事务取消该消息 pending/claimed 的 Agent 投递，completed/failed/cancelled 保持原状态，文件本身不删除、可见性与 TTL 不变。取消投递不终止已经发生的外部执行，旧 claim 的后续上报会失效。普通 human 仍只能撤回自己两分钟内、且不包含任何投递的消息；admin 不继承群主权限，普通 Agent 不能自撤回。已置顶消息会同时取消置顶。消息式 Task 标记不阻止撤回，撤回后保留 tombstone、标记与 body_sha256 重放校验。重复调用安全幂等。',
     messageRecallSchema,
     z.object({ message_id: z.string(), recalled: z.literal(true) }),
     async (input) => {
       requireActor(principal);
       return messageRecall(db, principal, input, memory);
     },
+  );
+
+  register(
+    server,
+    'network_room_message_pin',
+    '设置或取消群消息置顶（owner only，admin 不继承）。pinned 是目标状态而不是 toggle；每个群最多置顶 3 条，第 4 条返回 CONFLICT（reason=pin_limit），不隐式替换已有置顶。消息必须属于该群且位于当前调用者的 historyBoundary 内；已撤回消息不能置顶，但可以取消遗留置顶。重复置顶同一消息不改变 pinned_at/pinned_by；pin/unpin 只写 room 事件与审计，不推进 head、不制造未读、不创建投递。文件消息只展示消息预览，不延长文件 TTL、不改变文件可见性。成功结果只确认本次请求生效，当前集合请重读 network_room_get.pinned_messages。',
+    roomMessagePinSchema,
+    roomMessagePinResultSchema,
+    async (input) => {
+      requireActor(principal);
+      return roomMessagePin(db, principal, input);
+    },
+    { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   );
 
   register(

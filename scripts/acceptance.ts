@@ -60,6 +60,7 @@ import { runGroupInviteAcceptance } from './lib/group-invite-acceptance';
 import { runGroupInviteLinkAcceptance } from './lib/group-invite-link-acceptance';
 import { runGroupHistoryAcceptance } from './lib/group-history-acceptance';
 import { runGroupPolicyAcceptance } from './lib/group-policy-acceptance';
+import { runGroupMessageModerationAcceptance } from './lib/group-message-moderation-acceptance';
 import { runMessageReliabilityAcceptance } from './lib/m02-acceptance';
 import { runMessageTaskAcceptance } from './lib/message-task-acceptance';
 import {
@@ -1393,6 +1394,7 @@ async function main(): Promise<void> {
     await runGroupInviteLinkAcceptance();
     await runGroupHistoryAcceptance({ hasDrive });
     await runGroupPolicyAcceptance({ hasDrive });
+    await runGroupMessageModerationAcceptance();
     await runMessageReliabilityAcceptance();
     await runMessageTaskAcceptance();
 

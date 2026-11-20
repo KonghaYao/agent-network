@@ -3,7 +3,7 @@
  *
  * 运行前需要本地服务（默认 `AGENTNET_URL=http://127.0.0.1:8792`）。
  * 检查：
- * - `tools/list` 为 114 个唯一工具；
+ * - `tools/list` 为 143 个唯一工具；
  * - README/CLAUDE/功能矩阵/代码索引/技能/CLI/Harness 只引用已注册工具；
  * - `public/skills` 不再包含 `.sh`，文档不再出现旧 shell 脚本名；
  * - Harness 指南不再把长期 token 二维码或隐式 @ 当作默认路径；
@@ -77,8 +77,8 @@ checkEqual('tools/list HTTP 状态', toolsResponse.status, 200);
 const tools =
   (toolsResponse.body.result as { tools?: Array<{ name?: string }> } | undefined)?.tools ?? [];
 const toolSet = new Set(tools.map((tool) => tool.name).filter((name): name is string => !!name));
-checkEqual('tools/list 工具数为 114', toolSet.size, 114);
-checkEqual('tools/list 无重复名称', tools.length, 114);
+checkEqual('tools/list 工具数为 143', toolSet.size, 143);
+checkEqual('tools/list 无重复名称', tools.length, 143);
 
 const unknown: string[] = [];
 for (const file of DOC_FILES) {

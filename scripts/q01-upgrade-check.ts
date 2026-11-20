@@ -8,7 +8,8 @@
  * 0042 删除旧任务表/列后普通业务行仍可读；0043 只把存量群回填为 full；
  * 0044 只把未删除文件回填为 public；0045/0046 只新增 Memory 表与索引；
  * 0047 回填消息 FTS 索引且重复执行不重复写入；0048 只增加 Task 完成两列；
- * 0049 只新增全局排序索引（仅加速读路径）；0050 只增加可空头像 file_id。
+ * 0049 只新增全局排序索引（仅加速读路径）；0050 只增加可空头像 file_id；
+ * 0051 新增置顶表/闸门并重建审计 CHECK，保留全部旧审计行。
  *
  * 运行：`bun scripts/q01-upgrade-check.ts`
  * 该脚本使用临时目录，不访问服务端、不读取或写入 `.data`。
@@ -40,6 +41,7 @@ const NEW_MIGRATIONS = [
   '0048_message_task_completion.sql',
   '0049_message_global_order_index.sql',
   '0050_actor_avatar.sql',
+  '0051_group_message_moderation.sql',
 ];
 const AT = 1_700_000_000_000;
 
@@ -165,17 +167,17 @@ try {
   checkEqual('升级前没有设备行', before.devices, 0);
 
   const appliedNow = migrate(db, SOURCE_MIGRATIONS);
-  checkEqual('恰好应用 0036–0050', appliedNow.join(','), NEW_MIGRATIONS.join(','));
+  checkEqual('恰好应用 0036–0051', appliedNow.join(','), NEW_MIGRATIONS.join(','));
   const expectedMigrations = [
     ...Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(4, '0')),
-    ...Array.from({ length: 34 }, (_, i) => String(i + 17).padStart(4, '0')),
+    ...Array.from({ length: 35 }, (_, i) => String(i + 17).padStart(4, '0')),
   ];
   const actualMigrations = (
     db.prepare('SELECT name FROM schema_migrations ORDER BY name').all() as Array<{ name: string }>
   ).map((row) => row.name);
-  checkEqual('迁移总数为 46', actualMigrations.length, 46);
+  checkEqual('迁移总数为 47', actualMigrations.length, 47);
   check(
-    '迁移序号为 0001–0012、0017–0050',
+    '迁移序号为 0001–0012、0017–0051',
     actualMigrations.every((name, i) => name.startsWith(`${expectedMigrations[i]}_`)),
     actualMigrations,
   );
@@ -255,6 +257,65 @@ try {
         return false;
       }
     })(),
+  );
+  check(
+    '0051 重建后的审计表接受 message_pinned',
+    (() => {
+      try {
+        db!
+          .prepare(
+            `INSERT INTO room_management_audit
+               (audit_id, room_id, action, target_actor_id, previous_role, new_role,
+                previous_status, new_status, expected_revision, resulting_revision,
+                changed_by, request_id, detail_json, created_at)
+             VALUES ('rma_q01_pinned', '${ROOM}', 'message_pinned', NULL, NULL, NULL,
+                     NULL, NULL, NULL, 0, '${HUMAN}', 'req_q01_pinned',
+                     '{"message_id":"msg_q01_legacy"}', ${AT})`,
+          )
+          .run();
+        return true;
+      } catch {
+        return false;
+      }
+    })(),
+  );
+  expectCheckFailure('审计仍拒绝未知 action', db, () => {
+    db!.exec(
+      `INSERT INTO room_management_audit
+         (audit_id, room_id, action, resulting_revision, changed_by, request_id, created_at)
+       VALUES ('rma_q01_unknown', '${ROOM}', 'message_edited', 0, '${HUMAN}', 'req_q01_unknown', ${AT})`,
+    );
+  });
+  checkEqual(
+    '0051 建立 room_pinned_messages',
+    scalar<number>(
+      db,
+      "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'room_pinned_messages'",
+    ),
+    1,
+  );
+  expectCheckFailure('room_pinned_messages 拒绝第 4 个 slot', db, () => {
+    db!.exec(
+      `INSERT INTO room_pinned_messages (room_id, message_id, slot, pinned_by, pinned_at)
+       VALUES ('${ROOM}', 'msg_q01_legacy', 4, '${HUMAN}', ${AT})`,
+    );
+  });
+  expectCheckFailure('guard_room_message_pin_limit 拒绝 x=1', db, () => {
+    db!.exec('INSERT INTO guard_room_message_pin_limit (x) VALUES (1)');
+  });
+  expectCheckFailure('guard_message_recalled 拒绝 x=1', db, () => {
+    db!.exec('INSERT INTO guard_message_recalled (x) VALUES (1)');
+  });
+  expectCheckFailure('guard_room_message_unavailable 拒绝 x=1', db, () => {
+    db!.exec('INSERT INTO guard_room_message_unavailable (x) VALUES (1)');
+  });
+  checkEqual(
+    '升级后旧审计行仍保留',
+    scalar<number>(
+      db,
+      "SELECT COUNT(*) FROM room_management_audit WHERE audit_id = 'rma_q01_legacy'",
+    ),
+    1,
   );
 
   for (const table of [

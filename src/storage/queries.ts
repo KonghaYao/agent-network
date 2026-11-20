@@ -38,6 +38,7 @@ import type {
   RoomMemberRow,
   RoomOwnerTransferRow,
   RoomRow,
+  PinnedMessageListRow,
 } from './rows';
 
 export interface D1Like extends D1Queryable {
@@ -1084,8 +1085,62 @@ export async function getMessageSenderSummary(
   return toD1(db, statement).first<MessageSenderSummaryRow>();
 }
 
-/** 消息级投递状态聚合；调用方自己按 message_id 分组。 */
-export interface DeliveryStateRow {
+export interface RoomPinnedMessageQuery {
+  /** 当前查看者的历史下界（含）；`full` 时为 0。 */
+  fromSeq: number;
+  /** 解散归档上界（含）；未归档为 null。 */
+  toSeq: number | null;
+  limit: number;
+}
+
+/**
+ * 读取当前查看者可见的房间置顶消息。
+ *
+ * 预览与发送者永远取当前 `messages`/`actors` 行，不复制 pin 时快照；
+ * 已撤回消息（`body_bytes = 0`）由 SQL 直接排除，避免墓碑出现在置顶区。
+ * 排序固定为 `pinned_at DESC, message_id ASC`，只返回最多 `limit` 条，
+ * 不泄露被历史边界隐藏的条数。
+ */
+export async function listRoomPinnedMessages(
+  db: D1Like,
+  roomId: string,
+  query: RoomPinnedMessageQuery,
+): Promise<PinnedMessageListRow[]> {
+  const conditions: SQL[] = [
+    eq(schema.roomPinnedMessages.room_id, roomId),
+    gt(schema.messages.body_bytes, 0),
+    gte(schema.messages.created_seq, query.fromSeq),
+  ];
+  if (query.toSeq !== null) {
+    conditions.push(lte(schema.messages.created_seq, query.toSeq));
+  }
+  const statement = orm(db)
+    .select({
+      message_id: schema.roomPinnedMessages.message_id,
+      preview: schema.messages.preview,
+      sender_id: schema.messages.sender_id,
+      sender_name: sql<string | null>`${schema.actors.name}`.as('sender_name'),
+      sender_kind: sql<string | null>`${schema.actors.kind}`.as('sender_kind'),
+      created_seq: schema.messages.created_seq,
+      pinned_at: schema.roomPinnedMessages.pinned_at,
+    })
+    .from(schema.roomPinnedMessages)
+    .innerJoin(
+      schema.messages,
+      and(
+        eq(schema.messages.message_id, schema.roomPinnedMessages.message_id),
+        eq(schema.messages.room_id, schema.roomPinnedMessages.room_id),
+      ),
+    )
+    .leftJoin(schema.actors, eq(schema.actors.actor_id, schema.messages.sender_id))
+    .where(and(...conditions))
+    .orderBy(desc(schema.roomPinnedMessages.pinned_at), asc(schema.roomPinnedMessages.message_id))
+    .limit(query.limit);
+  const result = await toD1(db, statement).all<PinnedMessageListRow>();
+  return result.results;
+}
+
+/** 消息级投递状态聚合；调用方自己按 message_id 分组。 */export interface DeliveryStateRow {
   message_id: string;
   state: string;
   n: number;

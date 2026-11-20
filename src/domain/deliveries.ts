@@ -328,6 +328,33 @@ async function deliverySender(
   };
 }
 
+/**
+ * 撤回后的源消息不能再被 claim 或 retry 重新入队。
+ *
+ * 只检查源消息仍有正文；已完成/失败等历史投递状态不变。同一 guard 由
+ * claim 与 retry 共用，预检在进入幂等重放前返回 CONFLICT/message_recalled。
+ */
+function messageRecalledGuard(db: D1Database, messageId: string): D1PreparedStatement {
+  return db
+    .prepare(
+      guardSql(
+        'messageRecalled',
+        "NOT EXISTS (SELECT 1 FROM messages WHERE message_id = ? AND body_bytes > 0 AND body <> '')",
+      ),
+    )
+    .bind(messageId);
+}
+
+async function assertDeliverySourceAvailable(db: D1Database, delivery: DeliveryRow): Promise<void> {
+  const message = await getMessage(db, delivery.message_id);
+  if (!message || message.body_bytes === 0 || message.body === '') {
+    throw new BusinessError('CONFLICT', '源消息已撤回，不能继续执行或重新入队', {
+      reason: 'message_recalled',
+      message_id: delivery.message_id,
+    });
+  }
+}
+
 /** Requeueing and claiming must not restore work revoked by room or contact changes. */
 function deliveryExecutionGuards(db: D1Database, delivery: DeliveryRow): D1PreparedStatement[] {
   return [
@@ -347,6 +374,7 @@ function deliveryExecutionGuards(db: D1Database, delivery: DeliveryRow): D1Prepa
       WHERE m.message_id = ? AND b.blocker_actor_id = ?
         AND b.released_at IS NULL AND b.mute_mentions = 1
     )`)).bind(delivery.message_id, delivery.recipient_id),
+    messageRecalledGuard(db, delivery.message_id),
   ];
 }
 
@@ -357,6 +385,7 @@ export async function deliveryClaim(
 ): Promise<DeliveryView> {
   const actor = actorId(principal);
   const delivery = await requireOwnedDelivery(db, principal, input.delivery_id);
+  await assertDeliverySourceAvailable(db, delivery);
 
   const at = nowMs();
   const claimId = crypto.randomUUID();
@@ -812,6 +841,7 @@ export async function deliveryRetry(
   if (!(await canControlDelivery(db, actor, delivery))) {
     throw new BusinessError('NOT_OWNER', '只有请求者或房间 owner 可以重试');
   }
+  await assertDeliverySourceAvailable(db, delivery);
 
   const at = nowMs();
   const eventKey = `retry:${delivery.delivery_id}:${input.request_id}`;

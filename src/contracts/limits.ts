@@ -269,6 +269,8 @@ export const LIMITS = {
   roomJoinRequestsPageMax: 100,
   /** 群名称字符上限，与创建和编辑输入契约一致。 */
   roomTitleMax: 160,
+  /** 每个群最多置顶的消息数；迁移 CHECK 与该运行时阈值必须一致。 */
+  roomPinnedMessagesMax: 3,
   /** 群公告 UTF-8 字节上限。 */
   roomAnnouncementBytes: 4 * 1024,
   /** 群角色审计默认 / 最大条数。 */

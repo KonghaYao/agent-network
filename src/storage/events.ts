@@ -99,6 +99,31 @@ export function outboxStatementIfAbsent(
     .bind(newId('obx'), spec.topic, at, at, spec.eventKey);
 }
 
+/**
+ * 幂等 outbox，且要求事件 metadata 的指定字段等于本次操作标识。
+ *
+ * 撤回事件使用稳定的 `message_recalled:<message_id>` key；重复撤回请求不能
+ * 因为 outbox 已被 GC 就对旧事件补写提示。调用方只传受控的 metadata 键与
+ * 本次 nonce，不拼接用户输入 SQL。
+ */
+export function outboxStatementIfEventMetadata(
+  db: D1Database,
+  spec: OutboxSpec,
+  metadataKey: string,
+  metadataValue: string,
+  at: number,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `INSERT INTO outbox (outbox_id, topic, event_seq, status, attempts, next_attempt_at, created_at)
+       SELECT ?, ?, e.event_seq, 'pending', 0, ?, ?
+         FROM events e
+        WHERE e.event_key = ? AND json_extract(e.metadata, ?) = ?
+       ON CONFLICT(topic, event_seq) DO NOTHING`,
+    )
+    .bind(newId('obx'), spec.topic, at, at, spec.eventKey, `$.${metadataKey}`, metadataValue);
+}
+
 export function roomTopic(roomId: string): string {
   return `room:${roomId}`;
 }
@@ -212,6 +237,34 @@ export function inboxHeadStatementIfEvent(
        WHERE actor_id = ? AND EXISTS (SELECT 1 FROM events WHERE event_key = ?)`,
     )
     .bind(eventKey, pendingDelta, at, actorId, eventKey);
+}
+
+/**
+ * 仅在本次事件已插入时推进 inbox head，并按事件 metadata 的
+ * `previous_state` 受控扣减 `pending_count`。
+ *
+ * 只供“条件取消 pending/claimed 投递”使用：只有 pending 计入待办，claimed
+ * 取消不扣减。delta 从本次事件自身读取，不接受调用方传入的任意 SQL；事件
+ * 不存在时不更新任何列。
+ */
+export function inboxHeadStatementIfEventPreviousState(
+  db: D1Database,
+  actorId: string,
+  eventKey: string,
+  at: number,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `UPDATE actors
+         SET inbox_head_seq = MAX(inbox_head_seq, (SELECT event_seq FROM events WHERE event_key = ?)),
+             pending_count = pending_count + COALESCE((
+               SELECT CASE WHEN json_extract(metadata, '$.previous_state') = 'pending' THEN -1 ELSE 0 END
+                 FROM events WHERE event_key = ?
+             ), 0),
+             updated_at = ?
+       WHERE actor_id = ? AND EXISTS (SELECT 1 FROM events WHERE event_key = ?)`,
+    )
+    .bind(eventKey, eventKey, at, actorId, eventKey);
 }
 
 /** 房间创建时所有参与者的 inbox 事件（含分享入口），重复执行不产生新提示。 */

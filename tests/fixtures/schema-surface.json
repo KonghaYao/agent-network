@@ -46,14 +46,15 @@
     "0047_message_search_fts.sql",
     "0048_message_task_completion.sql",
     "0049_message_global_order_index.sql",
-    "0050_actor_avatar.sql"
+    "0050_actor_avatar.sql",
+    "0051_group_message_moderation.sql"
   ],
-  "migrationsDigest": "7cf44f1718bc3f801eb7e28ef71e8f6c14ca2c06af8587eda29cf3163af7063f",
+  "migrationsDigest": "8cb35f085e2faa8b8ed624cd9450c693b4e47c79cb8583c69f94acb15514d14f",
   "counts": {
-    "tables": 120,
-    "guardTables": 48,
+    "tables": 124,
+    "guardTables": 51,
     "messageSearchTables": 5,
-    "indexes": 220,
+    "indexes": 222,
     "triggers": 7
   },
   "tables": {
@@ -1037,6 +1038,19 @@
       ],
       "sqlDigest": "8604ae719fe0d8636428cee80c6fa0bcf2390e7f194ec556e3be2fdc6d6b4d2c"
     },
+    "guard_message_recalled": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "54ed3e611864030ba82e44f84a1b15c18ef3afa75a11893043a3dcb5304c3902"
+    },
     "guard_not_file_owner": {
       "type": "table",
       "virtual": false,
@@ -1309,6 +1323,32 @@
         "(x=0)"
       ],
       "sqlDigest": "eb90d8f401901589b079f6f2bcc2d81c4e6ed7d102f2f77877976f56ab5a90cc"
+    },
+    "guard_room_message_pin_limit": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "25e37d989b5b73be9424f1ca43b51dc001977de1e1711fc1ab271cc072adebb7"
+    },
+    "guard_room_message_unavailable": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "17e0dfe8c6ae9b42b69e556b948c3ca44f0e49150d6aca4f9390a4a56137de6e"
     },
     "guard_stale_attempt": {
       "type": "table",
@@ -2648,13 +2688,13 @@
         "target_actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none"
       ],
       "checks": [
-        "(action in('member_added','member_removed','member_left','admin_appointed','admin_revoked','owner_transferred','owner_transfer_proposed','owner_transfer_accepted','owner_transfer_rejected','owner_transfer_cancelled','owner_transfer_expired','policy_updated','announcement_updated','invite_created','invite_revoked','join_requested','join_approved','join_rejected','room_dissolved'))",
+        "(action in('member_added','member_removed','member_left','admin_appointed','admin_revoked','owner_transferred','owner_transfer_proposed','owner_transfer_accepted','owner_transfer_rejected','owner_transfer_cancelled','owner_transfer_expired','policy_updated','announcement_updated','invite_created','invite_revoked','join_requested','join_approved','join_rejected','room_dissolved','message_recalled','message_pinned','message_unpinned'))",
         "(new_role is null or new_role in('owner','admin','member'))",
         "(new_status is null or new_status in('active','left','removed'))",
         "(previous_role is null or previous_role in('owner','admin','member'))",
         "(previous_status is null or previous_status in('active','left','removed'))"
       ],
-      "sqlDigest": "52ababe7791b148cdc0a5e54bc86abf615a77082e909f31560bada4a0c2789c8"
+      "sqlDigest": "f1949cbc48af1e902571816ff9aa2caa0e1a484add7222f39fab748e4d18383d"
     },
     "room_members": {
       "type": "table",
@@ -2721,6 +2761,30 @@
         "(version>=1)"
       ],
       "sqlDigest": "97639ab520753ee7246f79f60c4c09ab4779ad6dbe67c0123882b3e5aad4dd3a"
+    },
+    "room_pinned_messages": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "room_id|TEXT|nn=1|d=null|pk=1|h=0",
+        "message_id|TEXT|nn=1|d=null|pk=2|h=0",
+        "slot|INTEGER|nn=1|d=null|pk=0|h=0",
+        "pinned_by|TEXT|nn=1|d=null|pk=0|h=0",
+        "pinned_at|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [
+        "sqlite_autoindex_room_pinned_messages_1|u=1|o=pk|p=0|cols=room_id,message_id|desc=0,0",
+        "sqlite_autoindex_room_pinned_messages_2|u=1|o=u|p=0|cols=room_id,slot|desc=0,0"
+      ],
+      "foreignKeys": [
+        "message_id->messages.message_id|on_update=no action|on_delete=no action|match=none",
+        "pinned_by->actors.actor_id|on_update=no action|on_delete=no action|match=none",
+        "room_id->rooms.room_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(slot>=1 and slot<=3)"
+      ],
+      "sqlDigest": "f9b34f04a8398a22c245ba3536a956e4dcf287922dca0baa5b1c7643c1f4f5a3"
     },
     "room_presence_events": {
       "type": "table",
@@ -2844,5 +2908,5 @@
     "message_search_fts_ai": "c0d538ed07edf48bcc8dfff50d1adf2158b1ef1c75e528640877b7ac08b0fe71",
     "message_search_fts_au": "af71582b06026e26c1b0acb0e15b6d4e504f8b85450ac9351d70042408abbaf7"
   },
-  "digest": "3c7ac0c4e045e419165179a5cf750771288f8755d2c3c62dd9bb92ea296503d2"
+  "digest": "b4c96a7d5c7a334231c0f1533a8d71551c46894c9c02e0f52d3e31518f5ff6c7"
 }

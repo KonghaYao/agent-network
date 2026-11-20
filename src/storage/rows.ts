@@ -309,7 +309,10 @@ export type RoomManagementAction =
   | 'join_requested'
   | 'join_approved'
   | 'join_rejected'
-  | 'room_dissolved';
+  | 'room_dissolved'
+  | 'message_recalled'
+  | 'message_pinned'
+  | 'message_unpinned';
 
 /** 入群申请：pending 不是成员，批准时才在同一事务写入 active 成员。 */
 export interface RoomJoinRequestRow {
@@ -343,8 +346,27 @@ export interface RoomOwnerTransferRow {
   responded_by: string | null;
 }
 
-export interface RoomManagementAuditRow {
-  audit_id: string;
+/** 房间置顶行；最多 3 条由 slot + UNIQUE(room_id, slot) 强制。 */
+export interface RoomPinnedMessageRow {
+  room_id: string;
+  message_id: string;
+  slot: number;
+  pinned_by: string;
+  pinned_at: number;
+}
+
+/** 置顶读取结果：预览永远取当前消息，不使用 pin 时快照。 */
+export interface PinnedMessageListRow {
+  message_id: string;
+  preview: string;
+  sender_id: string;
+  sender_name: string | null;
+  sender_kind: 'human' | 'agent' | null;
+  created_seq: number;
+  pinned_at: number;
+}
+
+export interface RoomManagementAuditRow {  audit_id: string;
   room_id: string;
   action: RoomManagementAction;
   target_actor_id: string | null;

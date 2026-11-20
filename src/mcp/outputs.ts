@@ -115,6 +115,8 @@ const roomCapabilitiesSchema = z.object({
   approve_joins: z.boolean(),
   mention_all: z.boolean(),
   view_role_history: z.boolean(),
+  /** 群主可撤回任意成员消息并置顶；admin 不继承。 */
+  manage_messages: z.boolean(),
 });
 
 export const roomSchema = z.object({
@@ -183,9 +185,24 @@ export const ownerTransferSchema = z.object({
   can_cancel: z.boolean(),
 });
 
+export const pinnedMessageSchema = z.object({
+  message_id: z.string(),
+  /** 当前消息预览；不复制 pin 时快照，也不包含文件元数据。 */
+  preview: z.string(),
+  sender: z.object({
+    actor_id: z.string(),
+    name: z.string().nullable(),
+    kind: z.enum(['human', 'agent']).nullable(),
+  }),
+  created_seq: z.string(),
+  pinned_at: z.string(),
+});
+
 export const roomDetailSchema = z.object({
   room: roomSchema,
   members: z.array(memberSchema),
+  /** 当前查看者可见的房间置顶；direct 与无置顶时为 []。 */
+  pinned_messages: z.array(pinnedMessageSchema),
   /**
    * 历史遗留的 pending 定向邀请；新版“人拉人”直接入群，不再产生新行。
    * 只有群主/管理员可见，不计入 member_count。
@@ -1297,6 +1314,9 @@ export const roomRoleAuditSchema = z.object({
     'join_approved',
     'join_rejected',
     'room_dissolved',
+    'message_recalled',
+    'message_pinned',
+    'message_unpinned',
   ]),
   target_actor_id: z.string().nullable(),
   target_name: z.string().nullable(),
@@ -1317,6 +1337,13 @@ export const roomRoleHistorySchema = z.object({
   items: z.array(roomRoleAuditSchema),
   next_cursor: z.string().nullable(),
   has_more: z.boolean(),
+});
+
+/** 置顶确认只表达本次请求生效，不是置顶集合快照；随后重读 room_get。 */
+export const roomMessagePinResultSchema = z.object({
+  room_id: z.string(),
+  message_id: z.string(),
+  pinned: z.boolean(),
 });
 
 /** 普通成员可见的管理事件摘要；不含 request_id、detail 或版本字段。 */
@@ -1342,6 +1369,9 @@ export const roomNoticeSchema = z.object({
     'join_approved',
     'join_rejected',
     'room_dissolved',
+    'message_recalled',
+    'message_pinned',
+    'message_unpinned',
   ]),
   target_actor_id: z.string().nullable(),
   changed_by: z.string(),
