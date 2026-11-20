@@ -1,3 +1,4 @@
+import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 
 import {
@@ -395,6 +396,36 @@ test.describe('会话历史搜索 UI', () => {
     await expect(target).toHaveAttribute('data-search-active', 'true');
   });
 
+  test('搜索弹窗无 critical/serious axe 违规', async ({ page }) => {
+    await openRoom(page, directRoomId);
+    await openSearch(page);
+    await searchNow(page, token('multi'));
+    await expect(page.locator('#message-search-results .message-search-result')).toHaveCount(3, {
+      timeout: 10_000,
+    });
+
+    const results = await new AxeBuilder({ page })
+      .include('#message-search-dialog')
+      .withTags(['wcag2a', 'wcag2aa'])
+      .analyze();
+    const serious = results.violations.filter(
+      (item) => item.impact === 'critical' || item.impact === 'serious',
+    );
+    if (serious.length > 0) {
+      console.log(
+        'AXE #message-search-dialog',
+        JSON.stringify(
+          serious.map((item) => ({
+            id: item.id,
+            impact: item.impact,
+            nodes: item.nodes.map((node) => node.target),
+          })),
+        ),
+      );
+    }
+    expect(serious.map((item) => `${item.id}(${item.impact})`)).toEqual([]);
+  });
+
   test('组合输入期间 Enter 不提交搜索', async ({ page }) => {
     let searches = 0;
     page.on('request', (request) => {
@@ -407,16 +438,34 @@ test.describe('会话历史搜索 UI', () => {
     await expect(row).toHaveCount(1, { timeout: 10_000 });
     const before = searches;
 
-    await page.locator('#message-search-input').evaluate((input) => {
-      input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '' }));
+    // 点击提交后焦点在提交按钮上，必须显式回到输入框；
+    // 否则 Enter 落在 BODY，输入框的 keydown 处理根本不会执行。
+    const input = page.locator('#message-search-input');
+    await input.focus();
+    await expect(input).toBeFocused();
+    await input.evaluate((element) => {
+      const win = window as Window & { __searchInputKeydowns?: number };
+      win.__searchInputKeydowns = 0;
+      element.addEventListener('keydown', () => {
+        win.__searchInputKeydowns = (win.__searchInputKeydowns ?? 0) + 1;
+      });
+    });
+
+    await input.evaluate((element) => {
+      element.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '' }));
     });
     await page.keyboard.press('Enter');
     await page.waitForTimeout(500);
+    expect(
+      await page.evaluate(
+        () => (window as Window & { __searchInputKeydowns?: number }).__searchInputKeydowns,
+      ),
+    ).toBe(1);
     expect(searches).toBe(before);
     await expect(page.locator('#message-search-dialog')).toBeVisible();
 
-    await page.locator('#message-search-input').evaluate((input) => {
-      input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '' }));
+    await input.evaluate((element) => {
+      element.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '' }));
     });
     await expect(row).toHaveCount(1, { timeout: 10_000 });
   });

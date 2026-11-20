@@ -892,6 +892,14 @@ body .memory-drawer {
   opacity: 0.6;
 }
 
+/*
+ * Lenso 未选中标签用 label-secondary（#7f7f85）压在 #e3e3e9 轨道上，
+ * 对比度 3.11:1 低于 4.5:1；搜索弹窗内统一改用主文本色。
+ */
+#message-search-dialog [data-lenso-slot='segmented-control-label'] {
+  color: var(--wx-text) !important;
+}
+
 .message-search-help {
   margin: 0;
   font-size: 12px;

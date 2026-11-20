@@ -364,11 +364,6 @@ export function MessageSearchDialog({
         ? '没有匹配的任务'
         : '没有找到匹配消息';
 
-  const activeResultId =
-    selectedIndex >= 0 && selectedIndex < resultCount
-      ? `message-search-result-${selectedIndex}`
-      : undefined;
-
   return (
     <LensoBackendProvider backend={backend}>
       <Modal
@@ -405,7 +400,6 @@ export function MessageSearchDialog({
               placeholder={scope === 'all' ? '搜索全部会话记录' : '搜索完整聊天记录'}
               value={query}
               aria-controls="message-search-results"
-              aria-activedescendant={activeResultId}
               onChange={(event) => {
                 setQuery(event.target.value);
                 setLocateError('');
@@ -474,7 +468,7 @@ export function MessageSearchDialog({
         <div
           id="message-search-results"
           className="message-search-results"
-          role="listbox"
+          role="group"
           aria-label="搜索结果"
           ref={resultsRef}
           onKeyDown={(event) => {
@@ -500,9 +494,6 @@ export function MessageSearchDialog({
                   className={`task-search-result${selectedIndex === index ? ' is-active' : ''}`}
                   style={SEARCH_RESULT_STYLE}
                   key={entry.task.root_message_id}
-                  id={`message-search-result-${index}`}
-                  role="option"
-                  aria-selected={selectedIndex === index}
                   data-search-index={index}
                   data-active={selectedIndex === index ? 'true' : 'false'}
                   aria-current={selectedIndex === index ? 'true' : undefined}
@@ -530,9 +521,6 @@ export function MessageSearchDialog({
                 <article
                   className={`message-search-result${selectedIndex === index ? ' is-active' : ''}`}
                   key={`${item.room_id}:${item.message_id}`}
-                  id={`message-search-result-${index}`}
-                  role="option"
-                  aria-selected={selectedIndex === index}
                   data-search-index={index}
                   data-active={selectedIndex === index ? 'true' : 'false'}
                   aria-current={selectedIndex === index ? 'true' : undefined}
