@@ -19,6 +19,7 @@ export const UPDATE_WRITE_BLOCKED_MESSAGE =
 const UPDATE_BLOCKED_TOOLS: ReadonlySet<string> = new Set([
   'network_message_send',
   'network_message_recall',
+  'network_room_message_pin',
   'network_room_file_bind',
   'network_room_file_delete',
   'network_room_create',

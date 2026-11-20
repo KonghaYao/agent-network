@@ -59,6 +59,9 @@ interface TimelineProps {
   onOpenTask: (rootId: string, focusMessageId: string | null) => void;
   onOpenFile: (item: RoomFileItem) => void;
   onRecall: (item: HistoryMessage) => void;
+  onSetPinned: (item: HistoryMessage, pinned: boolean) => void;
+  pinnedMessageIds: ReadonlySet<string>;
+  moderationBusy?: boolean;
   onForward: (item: HistoryMessage) => void;
 }
 
@@ -90,6 +93,9 @@ export function Timeline({
   onOpenTask,
   onOpenFile,
   onRecall,
+  onSetPinned,
+  pinnedMessageIds,
+  moderationBusy = false,
   onForward,
 }: TimelineProps) {
   const listRef = useRef<HTMLOListElement>(null);
@@ -300,6 +306,9 @@ export function Timeline({
           onOpenTask={onOpenTask}
           onOpenFile={onOpenFile}
           onRecall={onRecall}
+          onSetPinned={onSetPinned}
+          pinnedMessageIds={pinnedMessageIds}
+          moderationBusy={moderationBusy}
           onForward={onForward}
         />,
       );

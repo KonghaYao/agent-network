@@ -123,6 +123,8 @@ export interface RoomView {
     manage_announcement?: boolean;
     manage_policy?: boolean;
     approve_joins?: boolean;
+    /** 群 owner 的消息管理；admin 不继承，旧服务端缺失时按 false。 */
+    manage_messages?: boolean;
     [key: string]: boolean | undefined;
   } | null;
   can_leave?: boolean;
@@ -138,7 +140,23 @@ export interface RoomView {
 export interface RoomDetail {
   room: RoomView;
   members: RoomMember[];
+  /** 群置顶消息；旧服务端缺失或 direct 房间按空数组处理。 */
+  pinned_messages?: PinnedMessage[];
   owner_transfer?: OwnerTransferView | null;
+}
+
+/** 群置顶消息的只读投影；预览取当前消息，不缓存正文。 */
+export interface PinnedMessage {
+  message_id: string;
+  preview: string;
+  sender: {
+    actor_id: string;
+    name: string | null;
+    kind: ActorKind | null;
+  };
+  created_seq: string;
+  /** 毫秒时间戳字符串，不是 ISO 时间。 */
+  pinned_at: string;
 }
 
 /** 群主转让提议；`can_*` 由服务端按调用者身份计算。 */
@@ -316,6 +334,25 @@ export function fullTime(value: string | number | null | undefined): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+/**
+ * 置顶区只展示安全纯文本：不渲染 Markdown/HTML，也不把附件 URL 原样露出。
+ *
+ * 服务端 preview 是截断后的正文，可能含图片/链接；置顶行没有文件卡片，
+ * 因此图片与同源文件链接折叠成可读标记。
+ */
+export function pinnedPreviewText(preview: string): string {
+  const compact = preview
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '[图片]')
+    .replace(/\[([^\]]*)\]\(([^)]*)\)/g, (_match, label: string, url: string) =>
+      /\/f\//.test(url) ? '[文件]' : label,
+    )
+    .replace(/(?:https?:\/\/[^\s/]+\/f\/|\/f\/)[^\s)]+/g, '[文件]')
+    .replace(/<[^>]+>/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return compact.length > 160 ? `${compact.slice(0, 160)}…` : compact;
 }
 
 export function isAgentMessage(

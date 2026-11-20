@@ -53,6 +53,9 @@ interface ChatMessageProps {
   onOpenTask: (rootId: string, focusMessageId: string | null) => void;
   onOpenFile: (item: RoomFileItem) => void;
   onRecall: (item: HistoryMessage) => void;
+  onSetPinned: (item: HistoryMessage, pinned: boolean) => void;
+  pinnedMessageIds: ReadonlySet<string>;
+  moderationBusy?: boolean;
   onForward: (item: HistoryMessage) => void;
 }
 
@@ -196,12 +199,20 @@ function useMessageActions(
   onStatus: (message: string) => void,
   onToggleTask: (item: HistoryMessage) => void,
   onRecall: (item: HistoryMessage) => void,
+  onSetPinned: (item: HistoryMessage, pinned: boolean) => void,
+  pinnedMessageIds: ReadonlySet<string>,
+  moderationBusy: boolean,
   onForward: (item: HistoryMessage) => void,
   memoryTarget: AgentMemoryTarget | null,
 ): MessageAction[] {
   const writeBlocked = useUpdateWriteBlocked();
   const truncated = item.body_bytes > messageBodyBytes(item.preview);
   const mine = item.sender_id === identityId;
+  const canModerate =
+    room.kind === 'group' && !room.read_only && room.capabilities?.manage_messages === true;
+  const pinned = pinnedMessageIds.has(item.message_id);
+  const pinFull = pinnedMessageIds.size >= LIMITS.roomPinnedMessagesMax;
+  const moderationDisabled = writeBlocked || moderationBusy;
   const copy = async () => {
     try {
       const text = truncated ? await readFullMessage(item.message_id) : item.preview;
@@ -241,12 +252,25 @@ function useMessageActions(
         }),
     });
   }
-  if (identityKind === 'human' && mine && !room.read_only) {
+  const canSelfRecall = identityKind === 'human' && mine && !room.read_only;
+  if (canModerate || canSelfRecall) {
     actions.push({
       id: 'message-action-recall',
       label: '撤回',
-      disabled: writeBlocked,
+      disabled: moderationDisabled,
       run: () => onRecall(item),
+    });
+  }
+  if (canModerate) {
+    actions.push({
+      id: pinned ? 'message-action-unpin' : 'message-action-pin',
+      label: pinned
+        ? '取消置顶'
+        : pinFull
+          ? '置顶（最多置顶 3 条）'
+          : '置顶',
+      disabled: moderationDisabled || (!pinned && pinFull),
+      run: () => onSetPinned(item, !pinned),
     });
   }
   return actions;
@@ -287,6 +311,9 @@ function MessageActions({
   onStatus,
   onToggleTask,
   onRecall,
+  onSetPinned,
+  pinnedMessageIds,
+  moderationBusy,
   onForward,
   memoryTarget,
 }: {
@@ -298,6 +325,9 @@ function MessageActions({
   onStatus: (message: string) => void;
   onToggleTask: (item: HistoryMessage) => void;
   onRecall: (item: HistoryMessage) => void;
+  onSetPinned: (item: HistoryMessage, pinned: boolean) => void;
+  pinnedMessageIds: ReadonlySet<string>;
+  moderationBusy?: boolean;
   onForward: (item: HistoryMessage) => void;
   memoryTarget: AgentMemoryTarget | null;
 }) {
@@ -310,6 +340,9 @@ function MessageActions({
     onStatus,
     onToggleTask,
     onRecall,
+    onSetPinned,
+    pinnedMessageIds,
+    moderationBusy === true,
     onForward,
     memoryTarget,
   );
@@ -343,6 +376,9 @@ function MessageContextMenu({
   onStatus,
   onToggleTask,
   onRecall,
+  onSetPinned,
+  pinnedMessageIds,
+  moderationBusy,
   onForward,
   memoryTarget,
   children,
@@ -355,6 +391,9 @@ function MessageContextMenu({
   onStatus: (message: string) => void;
   onToggleTask: (item: HistoryMessage) => void;
   onRecall: (item: HistoryMessage) => void;
+  onSetPinned: (item: HistoryMessage, pinned: boolean) => void;
+  pinnedMessageIds: ReadonlySet<string>;
+  moderationBusy?: boolean;
   onForward: (item: HistoryMessage) => void;
   memoryTarget: AgentMemoryTarget | null;
   children: ReactNode;
@@ -368,6 +407,9 @@ function MessageContextMenu({
     onStatus,
     onToggleTask,
     onRecall,
+    onSetPinned,
+    pinnedMessageIds,
+    moderationBusy === true,
     onForward,
     memoryTarget,
   );
@@ -397,6 +439,9 @@ export const ChatMessage = memo(function ChatMessage({
   onOpenTask,
   onOpenFile,
   onRecall,
+  onSetPinned,
+  pinnedMessageIds,
+  moderationBusy = false,
   onForward,
 }: ChatMessageProps) {
   const [fullBody, setFullBody] = useState<string | null>(null);
@@ -517,6 +562,9 @@ export const ChatMessage = memo(function ChatMessage({
         onStatus={onStatus}
         onToggleTask={onToggleTask}
         onRecall={onRecall}
+        onSetPinned={onSetPinned}
+        pinnedMessageIds={pinnedMessageIds}
+        moderationBusy={moderationBusy}
         onForward={onForward}
         memoryTarget={memoryTarget}
       >
@@ -614,6 +662,9 @@ export const ChatMessage = memo(function ChatMessage({
                 onStatus={onStatus}
                 onToggleTask={onToggleTask}
                 onRecall={onRecall}
+                onSetPinned={onSetPinned}
+                pinnedMessageIds={pinnedMessageIds}
+                moderationBusy={moderationBusy}
                 onForward={onForward}
                 memoryTarget={memoryTarget}
               />

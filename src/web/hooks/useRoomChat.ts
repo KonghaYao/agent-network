@@ -64,6 +64,11 @@ export interface HistoryCatchUpView {
   notice: string | null;
 }
 
+export interface ModerationRefresh {
+  messageId?: string;
+  pinsOnly?: boolean;
+}
+
 interface HistoryCache {
   items: HistoryItem[];
   nextOlder: string | null;
@@ -744,46 +749,55 @@ export function useRoomChat(roomId: string) {
     }
   }, [roomId]);
 
-  const flushRefresh = useCallback(() => {
+  const refreshChainRef = useRef<Promise<void>>(Promise.resolve());
+  const runPendingRefresh = useCallback(async (): Promise<void> => {
     refreshTimerRef.current = null;
     const pending = pendingRefreshRef.current;
     pendingRefreshRef.current = emptyPendingRefresh();
+    const jobs: Promise<unknown>[] = [];
     if (pending.rooms) {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.rooms(actorId) });
+      jobs.push(queryClient.invalidateQueries({ queryKey: queryKeys.rooms(actorId) }));
     }
     if (pending.detail) {
       // exact：不能命中同前缀的 history / files / task-summary。
-      void queryClient.invalidateQueries({ queryKey: detailKey, exact: true });
+      jobs.push(queryClient.invalidateQueries({ queryKey: detailKey, exact: true }));
     }
     if (pending.history) {
-      void queryClient.invalidateQueries({ queryKey: historyKey, exact: true });
+      jobs.push(queryClient.invalidateQueries({ queryKey: historyKey, exact: true }));
     }
     // 文件面板可见时才存在活动查询；不可见时仅标脏，不额外发请求。
     if (pending.files) {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.roomFiles(roomId), exact: true });
+      jobs.push(
+        queryClient.invalidateQueries({ queryKey: queryKeys.roomFiles(roomId), exact: true }),
+      );
     }
     if (pending.taskSummaries && !pending.tasks && !pending.taskReset) {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.taskSummaries(roomId) });
+      jobs.push(queryClient.invalidateQueries({ queryKey: queryKeys.taskSummaries(roomId) }));
     }
     if (pending.taskReset) {
       // 丢弃旧代次下的列表与 Trace 预览；活动查询会重新鉴权后重读。
-      void resetRoomTasks(queryClient, roomId);
+      jobs.push(resetRoomTasks(queryClient, roomId));
     } else if (pending.tasks) {
-      void invalidateRoomTasks(queryClient, roomId);
+      jobs.push(invalidateRoomTasks(queryClient, roomId));
     }
     if (pending.contacts) {
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.contactRequests(actorId),
-      });
+      jobs.push(
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.contactRequests(actorId),
+        }),
+      );
     }
     if (pending.contactBadge) {
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.contactRequestBadge(actorId),
-      });
+      jobs.push(
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.contactRequestBadge(actorId),
+        }),
+      );
     }
     for (const messageId of pending.messageIds) {
-      void refreshVisibleMessage(messageId);
+      jobs.push(refreshVisibleMessage(messageId));
     }
+    await Promise.all(jobs);
   }, [
     actorId,
     detailKey,
@@ -792,6 +806,40 @@ export function useRoomChat(roomId: string) {
     refreshVisibleMessage,
     roomId,
   ]);
+
+  /** SSE、管理操作共用同一串行 drain；后一次读取执行时合并最新 pending。 */
+  const flushRefresh = useCallback((): Promise<void> => {
+    const next = refreshChainRef.current.then(() => runPendingRefresh());
+    refreshChainRef.current = next.catch(() => undefined);
+    return next;
+  }, [runPendingRefresh]);
+  /**
+   * 群管理操作后的定向刷新，与 SSE 共用同一 pending 合并器。
+   *
+   * - 置顶只失效 detail；不重读历史、Task 或会话排序；
+   * - 撤回同时失效 detail/history/列表，并按消息锚点重读旧窗口；
+   * - 若已有防抖刷新在排队，先取消并合并到本次，避免两个 refresh 互相覆盖。
+   */
+  const refreshModeration = useCallback(
+    async ({ messageId, pinsOnly = false }: ModerationRefresh = {}): Promise<void> => {
+      if (!token) return;
+      const pending = pendingRefreshRef.current;
+      pending.detail = true;
+      if (!pinsOnly) {
+        pending.history = true;
+        pending.rooms = true;
+        pending.tasks = true;
+        pending.taskSummaries = true;
+        if (messageId) pending.messageIds.add(messageId);
+      }
+      if (refreshTimerRef.current) {
+        clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
+      await flushRefresh();
+    },
+    [flushRefresh, token],
+  );
 
   /**
    * SSE 只给“某处变了”的提示；300ms 窗口内按房间与查询类别合并，
@@ -840,7 +888,7 @@ export function useRoomChat(roomId: string) {
         markPendingRefresh(pending, event, roomId, humanTimeline);
       }
       if (refreshTimerRef.current) return;
-      refreshTimerRef.current = setTimeout(flushRefresh, LIMITS.webRefreshDebounceMs);
+      refreshTimerRef.current = setTimeout(() => void flushRefresh(), LIMITS.webRefreshDebounceMs);
     },
     [flushRefresh, humanTimeline, roomId, token],
   );
@@ -922,12 +970,14 @@ export function useRoomChat(roomId: string) {
     catchUp: history?.catchUp ?? null,
     load,
     refresh,
+    refreshModeration,
     loadOlder,
     markRead,
   } satisfies RoomChatState & {
     streamError: string | null;
     load: () => Promise<void>;
     refresh: () => Promise<void>;
+    refreshModeration: (options?: ModerationRefresh) => Promise<void>;
     loadOlder: () => Promise<void>;
     markRead: (throughSeq: string) => Promise<void>;
   };

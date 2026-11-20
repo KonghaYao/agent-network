@@ -1,5 +1,4 @@
-import { Tooltip } from '../app/lenso-tooltip';
-import { Alert, Button, LENSO_SKELETON_FILL, Skeleton, Toolbar } from '../app/lenso-controls';
+import { Alert, Button } from '../app/lenso-controls';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   lazy,
@@ -16,17 +15,16 @@ import { useDropzone } from 'react-dropzone';
 import { AppShell } from '../app/AppShell';
 import { Link } from '../app/router';
 import { ChatDialogsMount } from '../features/chat/ChatDialogsMount';
+import { ChatHeader } from '../features/chat/ChatHeader';
 import { Composer, type ComposerReply, type ComposerSendInput } from '../features/chat/Composer';
 import { Timeline } from '../features/chat/Timeline';
 import { AppSidebar } from '../features/layout/AppSidebar';
+import { FilesPaneFallback } from '../features/panels/FilesPaneFallback';
 import { LazyFilePreviewDialog } from '../features/panels/LazyFilePreviewDialog';
-import { AnnouncementPopover } from '../features/overlays/AnnouncementPopover';
-import { confirmDialog } from '../features/overlays/confirm';
-import { RoomMenu, type RoomOverlay } from '../features/overlays/RoomMenu';
+import type { RoomOverlay } from '../features/overlays/RoomMenu';
 import { RoomTaskDock } from '../features/tasks/RoomTaskDock';
 import { useRoomTaskController } from '../features/tasks/useRoomTaskController';
 import { useTaskAskProgress } from '../features/tasks/useTaskAskProgress';
-import { AccountMenu } from '../features/sidebar/AccountMenu';
 import { openAgentMemory } from '../features/memory/memory-store';
 import { useChatSearchNavigation } from '../features/search/useChatSearchNavigation';
 import { useIsMobile } from '../hooks/useIsMobile';
@@ -36,6 +34,7 @@ import { useRoomFiles } from '../hooks/useRoomFiles';
 import { useRoomMonitor } from '../hooks/useRoomMonitor';
 import { useRoomPreferences } from '../hooks/useRoomPreferences';
 import { useRoomMenuActions, type AgentManagementView } from '../hooks/useRoomMenuActions';
+import { useRoomMessageModeration } from '../hooks/useRoomMessageModeration';
 import { useSendQueue } from '../hooks/useSendQueue';
 import {
   buildSendPlan,
@@ -45,11 +44,10 @@ import {
   senderName,
   type HistoryMessage,
 } from '../lib/chat';
-import { groupColorFor, groupColorStyle } from '../lib/group-colors';
+import { groupColorFor } from '../lib/group-colors';
 import { filePreviewKind, type RoomFileItem } from '../lib/files-ui';
-import { callTool, type McpError } from '../lib/mcp-client';
+import { callTool } from '../lib/mcp-client';
 import { queryKeys } from '../lib/query-keys';
-import { newRequestId } from '../lib/request-id';
 import { SCOPE_RESET_EVENT, type ScopeResetDetail } from '../lib/scope-reset';
 import { outboxUpdateBusy, setUpdateBusy } from '../pwa/update-busy';
 import { useRecoveryState } from '../pwa/recovery';
@@ -63,36 +61,8 @@ const MonitorPane = lazy(() =>
 );
 
 /**
- * 文件栏 chunk 到达前的同宽骨架。
- *
- * `FilesPane` 是 lazy chunk，若 Suspense 用 `fallback={null}`，聊天区会先
- * 占满宽度，chunk 到达后再被 360px 文件栏挤窄。这里复用最终文件栏的根
- * class 与加载骨架，使首帧就按最终宽度布局；chunk 到达后只替换内容。
- * 骨架不占用 `#files-pane` id：Suspense 切换时 React 会短暂保留旧占位
- * DOM，两个同名 id 会破坏 `getElementById` 与测试的 strict 定位。
+ * 文件栏 chunk 到达前的同宽骨架由独立组件承接，避免 ChatPage 继续膨胀。
  */
-function FilesPaneFallback() {
-  return (
-    <aside className="files-pane" aria-label="房间文件" aria-busy="true">
-      <header className="files-head">
-        <h2>文件</h2>
-      </header>
-      <ul className="files-list" aria-label="文件列表">
-        {Array.from({ length: 3 }, (_, index) => (
-          <li className="file-skeleton" aria-hidden="true" key={index}>
-            <span className="skeleton-avatar">
-              <Skeleton style={LENSO_SKELETON_FILL} />
-            </span>
-            <span className="file-skeleton-lines">
-              <span />
-              <span />
-            </span>
-          </li>
-        ))}
-      </ul>
-    </aside>
-  );
-}
 
 const FILES_OPEN_KEY = 'agent-network-files-open';
 const MONITOR_OPEN_KEY = 'agent-network-monitor-open';
@@ -130,10 +100,6 @@ function onlineLabel(online: boolean | null): string {
   if (online === true) return '在线';
   if (online === false) return '离线';
   return '未知';
-}
-
-function failureText(error: unknown): string {
-  return (error as McpError).message || String(error);
 }
 
 /**
@@ -384,37 +350,44 @@ export function ChatPage({ roomId }: ChatPageProps) {
     closeOverlays: () => setOverlay(null),
   });
 
-  const onRecall = useCallback(
-    async (item: HistoryMessage) => {
-      if (!token || !room) return;
-      const confirmed = await confirmDialog({
-        title: '撤回消息',
-        message: '撤回这条消息？仅支持两分钟内的普通消息，已触发的 Agent 工作需单独取消。',
-        confirmText: '撤回',
-        danger: true,
-      });
-      if (!confirmed) return;
-      try {
-        await callTool(
-          'network_message_recall',
-          { request_id: newRequestId('web_recall'), message_id: item.message_id },
-          { token },
-        );
-        setStatus('消息已撤回');
-        if (taskTrace?.rootId === item.message_id) closeTrace();
-        if (reply?.messageId === item.message_id) setReply(null);
-        setSearchOpen(false);
-        setForwardItem((current) =>
-          current?.message_id === item.message_id ? null : current,
-        );
-        invalidateTasks();
-        await queryClient.invalidateQueries({ queryKey: queryKeys.room(room.room_id) });
-      } catch (error) {
-        setStatus(`撤回失败：${failureText(error)}`);
-      }
+  const agentManagement =
+    peer?.kind === 'agent'
+      ? {
+          canManage: roomActions.canManageAgent === true,
+          disabled: management.data?.disabled === true,
+          canTransfer:
+            management.data?.can_transfer === true ||
+            management.data?.pending_transfer?.can_accept === true ||
+            management.data?.pending_transfer?.can_cancel === true ||
+            room?.peer_can_manage === true,
+        }
+      : null;
+
+  const onRecalled = useCallback(
+    (item: HistoryMessage) => {
+      if (taskTrace?.rootId === item.message_id) closeTrace();
+      if (reply?.messageId === item.message_id) setReply(null);
+      setSearchOpen(false);
+      setForwardItem((current) =>
+        current?.message_id === item.message_id ? null : current,
+      );
+      invalidateTasks();
     },
-    [closeTrace, invalidateTasks, queryClient, reply, room, taskTrace, token],
+    [closeTrace, invalidateTasks, reply, taskTrace],
   );
+
+  const moderation = useRoomMessageModeration({
+    room,
+    pinnedMessages: chat.detail?.pinned_messages ?? [],
+    identityId: identity?.actor_id ?? null,
+    token,
+    onStatus: setStatus,
+    onRecalled,
+    refreshModeration: chat.refreshModeration,
+  });
+
+  const onRecall = moderation.recall;
+  const onSetPinned = moderation.setPinned;
 
   const onJumpToMessage = useCallback((messageId: string) => {
     for (const node of document.querySelectorAll<HTMLElement>('[data-message-id]')) {
@@ -688,158 +661,47 @@ export function ChatPage({ roomId }: ChatPageProps) {
         main={
           <>
             <section className="chat-pane" aria-label="聊天区">
-              <header
-                ref={chatHeadRef}
-                className={`chat-head${loadingShell ? ' chat-head--loading' : ''}`}
-                aria-busy={loadingShell}
-              >
-                <Link className="back" id="back" to="/" aria-label="返回会话列表">
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M15 6l-6 6 6 6" />
-                  </svg>
-                </Link>
-                <div className={`chat-id${loadingShell ? ' chat-id--loading' : ''}`}>
-                  <div className="title-row">
-                    {groupColor && !loadingShell ? (
-                      <span
-                        className="group-color-dot"
-                        data-group-color={groupColor.index}
-                        style={groupColorStyle(groupColor)}
-                        aria-hidden="true"
-                      />
-                    ) : null}
-                    <h2 id="title">{title}</h2>
-                  </div>
-                  <p className="muted" id="subtitle" hidden={loadingShell || !subtitle}>
-                    {subtitle}
-                  </p>
-                  {loadingShell ? (
-                    <>
-                      <span className="chat-skeleton-line chat-skeleton-line--title" aria-hidden="true" />
-                      <span className="chat-skeleton-line chat-skeleton-line--subtitle" aria-hidden="true" />
-                    </>
-                  ) : null}
-                </div>
-                {loadingShell ? (
-                  <div className="chat-head-actions chat-head-actions--skeleton" aria-hidden="true">
-                    <Toolbar style={{ display: 'contents' }}>
-                    {['search', 'monitor', 'files', 'account', 'menu'].map((part) => (
-                      <span key={part} className={`head-skeleton head-skeleton--${part}`} />
-                    ))}
-                    </Toolbar>
-                  </div>
-                ) : room ? (
-                  <div className="chat-head-actions">
-                    <Toolbar aria-label="会话操作" style={{ display: 'contents' }}>
-                    {peer?.kind === 'agent' ? (
-                      <Button
-                        className="link-btn" variant="borderless" size="sm"
-                        id="rename"
-                        type="button"
-                        onClick={() => roomActions.setRenameAgentOpen(true)}
-                      >
-                        改名
-                      </Button>
-                    ) : null}
-                    <Tooltip as={Button}
-                      className="link-btn" variant="borderless" size="sm"
-                      id="message-search-button"
-                      type="button"
-                      aria-label="搜索聊天记录"
-                      hint="搜索聊天记录"
-                      onClick={() => setSearchOpen(true)}
-                    >
-                      搜索
-                    </Tooltip>
-                    {room.kind === 'group' ? (
-                      <Button
-                        ref={membersButtonRef}
-                        className="link-btn" variant="borderless" size="sm"
-                        id="members-button"
-                        type="button"
-                        onClick={() => setOverlay('members')}
-                      >
-                        群成员
-                      </Button>
-                    ) : null}
-                    <Tooltip as={Button}
-                      className={`monitor-toggle${monitorVisible ? ' active' : ''}`} variant="borderless" size="sm"
-                      id="monitor-toggle"
-                      type="button"
-                      aria-controls="monitor-pane"
-                      aria-expanded={monitorVisible}
-                      aria-label="打开网页监控"
-                      hint="网页监控"
-                      onClick={toggleMonitor}
-                    >
-                      <span>网页</span>
-                    </Tooltip>
-                    <Button
-                      className={`files-toggle${filesVisible ? ' active' : ''}`} variant="borderless" size="sm"
-                      id="files-toggle"
-                      type="button"
-                      aria-controls="files-pane"
-                      aria-expanded={filesVisible}
-                      onClick={toggleFiles}
-                    >
-                      文件
-                    </Button>
-                    {/* 桌面账号区在侧栏；移动端侧栏隐藏，才在聊天头部提供入口。 */}
-                    {identity && mobile ? <AccountMenu me={identity} /> : null}
-                    {room.announcement ? (
-                      <AnnouncementPopover
-                        roomId={room.room_id}
-                        announcement={room.announcement}
-                        canEdit={
-                          !room.read_only && room.capabilities?.manage_announcement === true
-                        }
-                        onEdit={() => setOverlay('announcement')}
-                      />
-                    ) : null}
-                    <RoomMenu
-                      toggleRef={roomMenuToggleRef}
-                      room={room}
-                      peerName={peer?.name ?? null}
-                      peerKind={peer?.kind ?? null}
-                      preference={roomPreferences.preference(room.room_id)}
-                      blocked={blocked}
-                      agent={
-                        peer?.kind === 'agent'
-                          ? {
-                              canManage: roomActions.canManageAgent === true,
-                              disabled: management.data?.disabled === true,
-                              canTransfer:
-                                management.data?.can_transfer === true ||
-                                management.data?.pending_transfer?.can_accept === true ||
-                                management.data?.pending_transfer?.can_cancel === true ||
-                                room.peer_can_manage === true,
-                              canArchive: roomActions.canManageAgent === true,
-                            }
-                          : null
-                      }
-                      onOpen={setOverlay}
-                      onViewMemory={
-                        peer?.kind === 'agent'
-                          ? () =>
-                              openAgentMemory(
-                                { actor_id: peer.actor_id, name: peer.name },
-                                { returnFocus: () => roomMenuToggleRef.current },
-                              )
-                          : null
-                      }
-                      onTogglePreference={roomActions.onTogglePreference}
-                      onArchive={() => void roomActions.onArchive()}
-                      onCopyPrompt={() => void roomActions.onCopyPrompt()}
-                      onToggleBlock={() => void roomActions.onToggleBlock()}
-                      onDeleteFriend={() => void roomActions.onDeleteFriend()}
-                      onToggleAgentDisabled={() => void roomActions.onToggleAgentDisabled()}
-                      onReissueToken={() => void roomActions.onReissueToken()}
-                      onDissolve={() => void roomActions.onDissolve()}
-                    />
-                    </Toolbar>
-                  </div>
-                ) : null}
-              </header>
+              <ChatHeader
+                headerRef={chatHeadRef}
+                loading={loadingShell}
+                title={title}
+                subtitle={subtitle}
+                groupColor={groupColor}
+                room={room}
+                peer={peer}
+                identity={identity}
+                mobile={mobile}
+                filesVisible={filesVisible}
+                monitorVisible={monitorVisible}
+                membersButtonRef={membersButtonRef}
+                roomMenuToggleRef={roomMenuToggleRef}
+                preference={roomPreferences.preference(roomId)}
+                blocked={blocked}
+                agentManagement={agentManagement}
+                onRenameAgent={() => roomActions.setRenameAgentOpen(true)}
+                onSearch={() => setSearchOpen(true)}
+                onOpenMembers={() => setOverlay('members')}
+                onToggleMonitor={toggleMonitor}
+                onToggleFiles={toggleFiles}
+                onTogglePreference={roomActions.onTogglePreference}
+                onArchive={() => void roomActions.onArchive()}
+                onCopyPrompt={() => void roomActions.onCopyPrompt()}
+                onToggleBlock={() => void roomActions.onToggleBlock()}
+                onDeleteFriend={() => void roomActions.onDeleteFriend()}
+                onToggleAgentDisabled={() => void roomActions.onToggleAgentDisabled()}
+                onReissueToken={() => void roomActions.onReissueToken()}
+                onDissolve={() => void roomActions.onDissolve()}
+                onViewMemory={
+                  peer?.kind === 'agent'
+                    ? () =>
+                        openAgentMemory(
+                          { actor_id: peer.actor_id, name: peer.name },
+                          { returnFocus: () => roomMenuToggleRef.current },
+                        )
+                    : null
+                }
+                onOpenOverlay={setOverlay}
+              />
               {room?.read_only ? (
                 <Alert
                   id="room-archive-banner"
@@ -955,6 +817,9 @@ export function ChatPage({ roomId }: ChatPageProps) {
                     onOpenTask={openTrace}
                     onOpenFile={openFilePreview}
                     onRecall={(item) => void onRecall(item)}
+                    onSetPinned={(item, pinned) => void onSetPinned(item, pinned)}
+                    pinnedMessageIds={moderation.pinnedMessageIds}
+                    moderationBusy={moderation.busy}
                     onForward={onForward}
                     searchNavigation={{
                       activeMessageId: navState.activeMessageId,
