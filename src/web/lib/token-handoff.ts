@@ -6,6 +6,8 @@
  * 后立即从地址栏清除，不写日志、不进入 DOM 文本。
  */
 
+import { pairingChallengeFromHash } from './pairing-qr';
+
 export const TOKEN_KEY = 'agent-network-token';
 export const LOGGED_OUT_KEY = 'agent-network-logged-out';
 export const DEVICE_ID_KEY = 'agent-network-device-id-v1';
@@ -98,6 +100,25 @@ export function sessionRemove(key: string): void {
   }
 }
 
+/** 本机是否已有历史身份（退出后仍保留，用于区分“从未有账号”）。 */
+export function rememberedIdentityCount(): number {
+  try {
+    let count = 0;
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index);
+      if (key?.startsWith(IDENTITY_PREFIX)) count += 1;
+    }
+    return count;
+  } catch {
+    return 0;
+  }
+}
+
+/** 显式退出状态；与“从未有账号”区分，退出后不自动进入。 */
+export function hasLoggedOutState(): boolean {
+  return storageGet(LOGGED_OUT_KEY) !== null;
+}
+
 /** 把当前身份写进本机身份列表，供退出后显式切换。 */
 export function rememberIdentity(identity: RememberedIdentity, token: string): boolean {
   if (!identity.actor_id || !token) return false;
@@ -153,13 +174,7 @@ export function normalizeChallenge(value: string): string {
 export function takePairingChallenge(): string {
   if (typeof window === 'undefined') return '';
   const hash = window.location.hash || '';
-  if (!hash.startsWith('#c=')) return '';
-  let value = '';
-  try {
-    value = decodeURIComponent(hash.slice(3));
-  } catch {
-    value = '';
-  }
+  const value = pairingChallengeFromHash(hash);
   try {
     window.history.replaceState(null, '', window.location.pathname + window.location.search);
   } catch {

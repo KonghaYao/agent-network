@@ -272,6 +272,72 @@ body.page-pair .field {
   font-size: 13px;
 }
 
+body.page-pair .pair-scan-actions {
+  margin: 0 0 12px;
+}
+
+body.page-pair .pair-scan-actions button {
+  width: 100%;
+  height: 42px;
+}
+
+body.page-pair .pair-scanner {
+  margin: 0 0 14px;
+  padding: 10px;
+  border: 1px solid var(--lenso-control-border);
+  border-radius: 8px;
+  background: var(--wx-panel, #f7f7f7);
+}
+
+body.page-pair .pair-scanner-frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  max-height: min(52dvh, 360px);
+  overflow: hidden;
+  border-radius: 6px;
+  background: #000;
+}
+
+body.page-pair .pair-scanner-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+body.page-pair #pair-scanner-status {
+  margin: 8px 0 0;
+  color: var(--wx-muted, #666);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+body.page-pair .pair-scanner[data-state='error'] #pair-scanner-status {
+  color: var(--wx-danger, #e5484d);
+}
+
+body.page-pair .pair-scanner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+body.page-pair .pair-scanner-button {
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--lenso-control-border);
+  border-radius: 4px;
+  background: var(--lenso-control-field-fill);
+  color: var(--spa-text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
 body.page-pair .field input:not([data-lenso-slot]) {
   width: 100%;
   height: 42px;

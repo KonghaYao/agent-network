@@ -88,3 +88,9 @@ and `index.ts` (vendor entry).
 | `@radix-ui/react-select` | MIT | Upstream `Select` primitive. |
 | `tailwindcss` (dev) | MIT | Scoped utility generation. |
 | `@tailwindcss/vite` (dev) | MIT | Vite integration for the scoped utility generation. |
+
+### PWA pairing QR decoder
+
+| Package | License | Role |
+| --- | --- | --- |
+| `jsqr` | Apache-2.0 | 只在原生 `BarcodeDetector` 不支持 `qr_code` 时按需加载，用于手机配对页的本地二维码解码；不请求外部服务，不进入入口 chunk。许可证全文见 `LICENSES/Apache-2.0.txt`。 |

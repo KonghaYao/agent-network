@@ -258,7 +258,7 @@ test.describe('SPA Share / Join / Pair', () => {
     }
   });
 
-  test('pair page consumes the fragment, waits for approval, then switches identity', async ({
+  test('pair page consumes the fragment, waits for approval, then auto-enters on an empty device', async ({
     browser,
   }) => {
     const created = await callTool<PairingCreated>(
@@ -302,9 +302,8 @@ test.describe('SPA Share / Join / Pair', () => {
         pairing_id: item.pairing_id,
       });
 
-      await expect(page.locator('#pair-switch')).toBeVisible({ timeout: 15_000 });
-      await page.locator('#pair-switch').click();
-      await page.waitForURL(`${base}/`);
+      await expect(page.locator('#pair-switch')).toHaveCount(0);
+      await page.waitForURL(`${base}/`, { timeout: 15_000 });
       await expect(page.locator('body[data-spa-route="home"]')).toBeVisible();
       await expect(page.locator('#account-name')).toHaveText(ownerName);
       const pairedToken = await page.evaluate(() =>

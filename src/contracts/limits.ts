@@ -479,6 +479,12 @@ export const LIMITS = {
   webLongMessageListThreshold: 200,
   /** 未压缩应用入口的硬上限（字节）；发布构建与测量脚本共用。 */
   webEntryHardLimitBytes: 972_800,
+  /** 手机扫码帧循环间隔（毫秒）；串行解码，失败不提示。 */
+  webPairingScanIntervalMs: 120,
+  /** 软件解码前把相机帧缩到的最大边长（像素），限制弱机 CPU。 */
+  webPairingScanMaxDimension: 640,
+  /** 已登录设备未批准时的受控兑换轮询间隔（毫秒）。 */
+  webPairingRedeemPollMs: 2_000,
   /** 发布资源保留窗口（毫秒）：最近 7 天内启用的 build 全部保留。 */
   webReleaseRetentionMs: 7 * 24 * 60 * 60_000,
   /** 无论窗口如何都保留最近 N 个不同 buildId。 */

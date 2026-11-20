@@ -380,7 +380,7 @@ test('独立窗口无账号时主按钮直接进入配对页', async ({ browser 
     await expect(page.locator('#install-guide-primary')).toHaveText('扫描电脑二维码');
     await expect(page.locator('#install-guide-code')).toBeVisible();
     await page.locator('#install-guide-primary').click();
-    await expect(page).toHaveURL(`${base}/pair`);
+    await expect(page).toHaveURL(`${base}/pair?scan=1`);
   } finally {
     await context.close();
   }

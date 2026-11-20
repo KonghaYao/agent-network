@@ -25,7 +25,8 @@ type MessageKind = '' | 'info' | 'error';
  * - Android Chrome 有 `beforeinstallprompt`：用户点击主按钮后才唤起系统确认；
  * - iOS Safari/Chrome：展示分享菜单 → 添加到主屏幕步骤；
  * - 其他浏览器：提示用系统浏览器打开，仍可显式连接已有账号；
- * - 独立窗口且无账号：主按钮直接进入 `/pair`（扫码流程在 2b 接入）。
+ * - 独立窗口且无账号：主按钮直接打开 `/pair?scan=1` 启动扫码，
+ *   下方保留“输入配对码”进入同一配对页。
  */
 export function InstallGuideDialog({ open, onOpenChange }: InstallGuideDialogProps) {
   const prompt = useSyncExternalStore(
@@ -59,7 +60,7 @@ export function InstallGuideDialog({ open, onOpenChange }: InstallGuideDialogPro
     if (busy) return;
     if (standalone) {
       onOpenChange(false);
-      navigate('/pair');
+      navigate('/pair?scan=1');
       return;
     }
     if (installed) {

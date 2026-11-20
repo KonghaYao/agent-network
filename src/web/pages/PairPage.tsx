@@ -1,19 +1,27 @@
 import { Button, Input, Label } from '../app/lenso-controls';
 import { useEffect, useRef, useState } from 'react';
 
+import { LIMITS } from '../../contracts/limits';
+import { PairScanner } from '../features/pairing/PairScanner';
 import { callTool, type McpError } from '../lib/mcp-client';
+import { resolvePairingAttempt, type PairingAttempt } from '../lib/pairing-attempt';
+import { isPairingChallenge, parsePairingQr } from '../lib/pairing-qr';
 import {
+  IDENTITY_PREFIX,
   LOGGED_OUT_KEY,
   PAIR_TOKEN_PREFIX,
   TOKEN_KEY,
   currentToken,
   deviceId,
   deviceLabel,
+  hasLoggedOutState,
   newRequestId,
   normalizeChallenge,
   pairSessionToken,
+  rememberedIdentityCount,
   rememberIdentity,
   sessionRemove,
+  storageGet,
   storageRemove,
   storageSet,
   takePairingChallenge,
@@ -43,12 +51,26 @@ interface PairingMe extends PairingIdentity {
   name: string;
 }
 
+type PairingPhase = 'idle' | 'joining' | 'awaiting' | 'redeeming' | 'ready' | 'error';
+
+type AccountBaseline = 'empty' | 'existing' | 'unknown';
+
 let cachedChallenge: string | null = null;
 
 /** 只在 PairPage 首次渲染时读取并清除 `#c=`，StrictMode 双调用也得到同一值。 */
 function initialPairingChallenge(): string {
   if (cachedChallenge === null) cachedChallenge = takePairingChallenge();
   return cachedChallenge;
+}
+
+/** standalone 安装引导主按钮进入 `/pair?scan=1`，首次挂载直接打开扫描。 */
+function initialScanRequested(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return new URLSearchParams(window.location.search).get('scan') === '1';
+  } catch {
+    return false;
+  }
 }
 
 function nextStepFor(reason: unknown): string {
@@ -73,9 +95,14 @@ function failureText(error: unknown): string {
 /**
  * `/pair` 新设备配对页。
  *
- * challenge 只在 `#c=` 中出现，读取后立即清除；本地 token 在配对成功前
- * 不注册。页面轮询 redeem 直到已登录设备 approve，成功后显式显示切换按钮，
- * 原身份保留在本机身份列表。token 与 challenge 都不写入 URL 文本或日志。
+ * 短码输入、`/pair#c=` 深链与 App 内扫码共用同一套状态机和请求上下文：
+ * 同一挑战只 join 一次，等待批准与网络重试复用原 join/redeem request_id。
+ * challenge 只在 `#c=` 或扫码结果中出现，读取后立即清除 fragment；本地
+ * token 在配对成功前不注册。
+ *
+ * 兑换成功后先用兑换 token 调 `network_me` 核对目标 actor。只有开始时
+ * 确认“从未有账号”、期间 token/退出状态/身份列表未变化，且落盘与读回
+ * 全部成功时才自动进入；其余情况保留显式切换，绝不覆盖晚到的新身份。
  */
 export function PairPage() {
   const [challenge, setChallenge] = useState(() => initialPairingChallenge().toUpperCase());
@@ -85,23 +112,43 @@ export function PairPage() {
   const [confirmCode, setConfirmCode] = useState('—');
   const [status, setStatusState] = useState('');
   const [error, setError] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [startDisabled, setStartDisabled] = useState(false);
+  const [phase, setPhaseState] = useState<PairingPhase>('idle');
+  const [scanOpen, setScanOpen] = useState(false);
   const [switchVisible, setSwitchVisible] = useState(false);
+  const [switchBusy, setSwitchBusy] = useState(false);
 
   const mounted = useRef(true);
-  const busyRef = useRef(false);
+  const phaseRef = useRef<PairingPhase>('idle');
   const generation = useRef(0);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pairing = useRef<PairingView | null>(null);
+  const joiningRef = useRef(false);
+  const redeemingRef = useRef(false);
+  const switchingRef = useRef(false);
+  const attemptRef = useRef<PairingAttempt | null>(null);
   const targetIdentity = useRef<PairingIdentity | null>(null);
   const currentIdentity = useRef<PairingMe | null>(null);
-  const redeemRequestId = useRef<string | null>(null);
-  const localToken = useRef<string | null>(null);
   const credentialReady = useRef(false);
-  const pairingChallenge = useRef<string | null>(null);
+  const accountBaseline = useRef<AccountBaseline>('unknown');
+  const baselineReady = useRef(false);
+  const baselineToken = useRef<string | null>(null);
+  const baselineLoggedOut = useRef(false);
+  const baselineIdentityCount = useRef(0);
+  const initialChallenge = useRef(challenge);
+  const scanRequested = useRef(initialScanRequested());
+
+  const busy = phase === 'joining' || phase === 'redeeming';
+  const startDisabled =
+    busy || phase === 'awaiting' || phase === 'ready' || switchBusy;
+  const scanDisabled =
+    scanOpen || busy || phase === 'awaiting' || phase === 'ready' || switchBusy;
+
+  function changePhase(next: PairingPhase) {
+    phaseRef.current = next;
+    if (mounted.current) setPhaseState(next);
+  }
 
   function setStatus(text: string, isError: boolean) {
+    if (!mounted.current) return;
     setStatusState(text);
     setError(isError);
   }
@@ -117,31 +164,59 @@ export function PairPage() {
     mounted.current = true;
     async function loadCurrentIdentity() {
       const token = currentToken();
+      const loggedOut = hasLoggedOutState();
+      const identityCount = rememberedIdentityCount();
+      baselineToken.current = token;
+      baselineLoggedOut.current = loggedOut;
+      baselineIdentityCount.current = identityCount;
+
       if (!token) {
-        if (!mounted.current) return;
-        setOriginalLabel('未登录（配对成功后将新建当前身份）');
-        setCurrentLabel('这台设备尚未登录');
+        baselineReady.current = true;
+        if (loggedOut || identityCount > 0) {
+          accountBaseline.current = 'existing';
+          setOriginalLabel(
+            loggedOut
+              ? '已退出登录；配对成功后需确认切换'
+              : '本机已有登录记录；配对成功后需确认切换',
+          );
+          setCurrentLabel(loggedOut ? '这台设备已退出登录' : '这台设备已有登录记录');
+        } else {
+          accountBaseline.current = 'empty';
+          setOriginalLabel('未登录（配对成功后将自动进入）');
+          setCurrentLabel('这台设备尚未登录');
+        }
         return;
       }
+
       try {
         const me = await callTool<PairingMe>('network_me', {}, { token });
         if (!mounted.current) return;
         currentIdentity.current = me;
+        accountBaseline.current = 'existing';
+        baselineReady.current = true;
         setOriginalLabel(`${me.name || '未命名'}（${me.actor_id}）`);
         setCurrentLabel(`当前身份：${me.name || '未命名'}`);
         rememberIdentity(me, token);
       } catch (failure) {
         if (!mounted.current) return;
         currentIdentity.current = null;
-        setOriginalLabel('当前身份凭据已失效');
-        setCurrentLabel('当前身份凭据已失效；不会自动创建替代身份');
+        baselineReady.current = true;
         const code = (failure as McpError).code;
         if (code === 'CREDENTIAL_INVALID' || code === 'UNAUTHORIZED') {
-          setStatus('当前 token 已失效；仍可完成配对，但成功后会用新身份替换失效凭据。', true);
+          accountBaseline.current = 'existing';
+          setOriginalLabel('当前身份凭据已失效');
+          setCurrentLabel('当前身份凭据已失效；不会自动创建替代身份');
+          setStatus('当前 token 已失效；仍可完成配对，但成功后需确认切换。', true);
+        } else {
+          accountBaseline.current = 'unknown';
+          setOriginalLabel('暂时无法核对当前身份');
+          setCurrentLabel('暂时无法核对当前身份；配对完成后需确认切换');
+          setStatus('读取当前身份失败；配对完成后不会自动切换，请手动确认。', true);
         }
       }
     }
     void loadCurrentIdentity();
+    if (scanRequested.current && !initialChallenge.current) setScanOpen(true);
     return () => {
       mounted.current = false;
       // 允许下一次从新的 `#c=` 重新接管；StrictMode 的 effect 重放不会
@@ -153,83 +228,238 @@ export function PairPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function scheduleRedeem() {
-    stopPolling();
-    pollTimer.current = setTimeout(() => {
-      void redeem();
-    }, 2000);
+  function accountStateUnchanged(): boolean {
+    return (
+      currentToken() === baselineToken.current &&
+      hasLoggedOutState() === baselineLoggedOut.current &&
+      rememberedIdentityCount() === baselineIdentityCount.current
+    );
   }
 
-  async function redeem() {
-    if (!pairing.current || !localToken.current || !redeemRequestId.current || credentialReady.current) {
+  function restorePreviousToken(previousToken: string | null): void {
+    if (previousToken) storageSet(TOKEN_KEY, previousToken);
+    else storageRemove(TOKEN_KEY);
+  }
+
+  /**
+   * 写入 token 与身份列表并逐项读回。任何一步失败都恢复原 token 与退出
+   * 标记，移除本次写入的身份，不留下半初始化状态。
+   */
+  function persistIdentity(identity: PairingMe, attempt: PairingAttempt): boolean {
+    const previousToken = currentToken();
+    const previousLoggedOut = storageGet(LOGGED_OUT_KEY);
+    if (!storageSet(TOKEN_KEY, attempt.token) || currentToken() !== attempt.token) {
+      restorePreviousToken(previousToken);
+      setStatus('浏览器无法保存身份；请允许本地存储后重试。', true);
+      return false;
+    }
+    if (currentIdentity.current && previousToken) {
+      rememberIdentity(currentIdentity.current, previousToken);
+    }
+    const savedTarget =
+      rememberIdentity(identity, attempt.token) &&
+      storageGet(IDENTITY_PREFIX + identity.actor_id) !== null;
+    storageRemove(LOGGED_OUT_KEY);
+    const clearedLoggedOut = storageGet(LOGGED_OUT_KEY) === null;
+    if (!savedTarget || !clearedLoggedOut) {
+      storageRemove(IDENTITY_PREFIX + identity.actor_id);
+      restorePreviousToken(previousToken);
+      if (previousLoggedOut !== null) storageSet(LOGGED_OUT_KEY, previousLoggedOut);
+      setStatus('浏览器无法保存身份列表；请允许本地存储后重试。', true);
+      return false;
+    }
+    sessionRemove(PAIR_TOKEN_PREFIX + attempt.challenge);
+    try {
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    } catch {
+      // 忽略地址栏清理失败。
+    }
+    return true;
+  }
+
+  function enterHome(): void {
+    window.location.replace('/');
+  }
+
+  async function finishRedemption(
+    redeemed: PairingRedeemResult,
+    attempt: PairingAttempt,
+    requestGeneration: number,
+  ): Promise<void> {
+    let me: PairingMe;
+    try {
+      me = await callTool<PairingMe>('network_me', {}, { token: attempt.token });
+    } catch (failure) {
+      if (requestGeneration !== generation.current || !mounted.current) return;
+      credentialReady.current = true;
+      targetIdentity.current = redeemed;
+      changePhase('ready');
+      setSwitchVisible(true);
+      setStatus(
+        `已获得独立凭据，但暂时无法核对目标身份：${failureText(failure)}。请点击“切换到此身份并进入”重试。`,
+        true,
+      );
       return;
     }
-    const requestGeneration = generation.current;
-    const token = localToken.current;
-    const challengeValue = pairingChallenge.current;
-    const request = redeemRequestId.current;
+    if (requestGeneration !== generation.current || !mounted.current) return;
+    if (me.actor_id !== redeemed.actor_id) {
+      credentialReady.current = false;
+      stopPolling();
+      changePhase('error');
+      setStatus('目标身份核对失败：兑换结果与当前凭据不一致。请重新扫码或换码。', true);
+      setSwitchVisible(false);
+      return;
+    }
+
+    credentialReady.current = true;
+    targetIdentity.current = me;
+    setTargetLabel(`${me.name || '未命名'}（${me.actor_id}）`);
+    const autoEnter =
+      baselineReady.current &&
+      accountBaseline.current === 'empty' &&
+      accountStateUnchanged();
+    if (autoEnter) {
+      if (persistIdentity(me, attempt)) {
+        enterHome();
+        return;
+      }
+      changePhase('ready');
+      setSwitchVisible(true);
+      return;
+    }
+
+    changePhase('ready');
+    setSwitchVisible(true);
+    setStatus(
+      '已获得独立凭据。确认后切换到此身份并进入；原身份会保留在本机身份列表。',
+      false,
+    );
+  }
+
+  async function redeem(requestGeneration = generation.current) {
+    const attempt = attemptRef.current;
+    if (
+      !attempt ||
+      !attempt.joined ||
+      credentialReady.current ||
+      redeemingRef.current ||
+      requestGeneration !== generation.current
+    ) {
+      return;
+    }
+    redeemingRef.current = true;
+    if (phaseRef.current !== 'awaiting') {
+      changePhase('redeeming');
+      setStatus('正在兑换独立凭据；若电脑尚未确认，会继续等待。', false);
+    }
     try {
       const redeemed = await callTool<PairingRedeemResult>(
         'network_device_pairing_redeem',
-        { request_id: request, challenge: challengeValue, device_id: deviceId() },
-        { token },
+        {
+          request_id: attempt.redeemRequestId,
+          challenge: attempt.challenge,
+          device_id: attempt.deviceId,
+        },
+        { token: attempt.token },
       );
       if (requestGeneration !== generation.current || !mounted.current) return;
-      targetIdentity.current = redeemed;
-      credentialReady.current = true;
       stopPolling();
-      setStatus('已获得独立凭据。确认后切换到此身份并进入；原身份会保留在本机身份列表。', false);
-      setSwitchVisible(true);
-      setStartDisabled(true);
+      await finishRedemption(redeemed, attempt, requestGeneration);
     } catch (failure) {
       if (requestGeneration !== generation.current || !mounted.current) return;
       const reason = failureReason(failure);
       if (reason === 'not_approved') {
         setStatus('等待已登录设备确认。请在另一台设备打开“配对设备”并核对确认码。', false);
-        scheduleRedeem();
+        changePhase('awaiting');
+        scheduleRedeem(requestGeneration);
         return;
       }
       stopPolling();
+      changePhase('error');
       setStatus(`兑换失败：${failureText(failure)} ${nextStepFor(reason)}`, true);
-      setStartDisabled(false);
       setSwitchVisible(false);
+    } finally {
+      redeemingRef.current = false;
     }
   }
 
-  async function startPairing() {
-    if (busyRef.current) return;
-    const normalized = normalizeChallenge(challenge);
-    if (!/^[0-9A-HJKMNP-TV-Z]{12}$/u.test(normalized)) {
-      setStatus('配对码必须是 12 位（不含 I/L/O/U）；请扫描二维码或让已登录设备重新生成。', true);
+  function scheduleRedeem(requestGeneration: number) {
+    stopPolling();
+    pollTimer.current = setTimeout(() => {
+      pollTimer.current = null;
+      void redeem(requestGeneration);
+    }, LIMITS.webPairingRedeemPollMs);
+  }
+
+  function resetAttemptView(): void {
+    credentialReady.current = false;
+    targetIdentity.current = null;
+    setConfirmCode('—');
+    setTargetLabel('尚未验证');
+    setSwitchVisible(false);
+  }
+
+  async function startPairing(parsedChallenge?: string) {
+    const normalized = normalizeChallenge(parsedChallenge ?? challenge);
+    if (
+      phaseRef.current === 'joining' ||
+      phaseRef.current === 'redeeming' ||
+      phaseRef.current === 'awaiting' ||
+      phaseRef.current === 'ready' ||
+      joiningRef.current ||
+      redeemingRef.current ||
+      switchingRef.current
+    ) {
       return;
     }
+    if (!isPairingChallenge(normalized)) {
+      setStatus(
+        '配对码必须是 12 位（不含 I/L/O/U）；请扫描二维码或让已登录设备重新生成。',
+        true,
+      );
+      return;
+    }
+
+    const resolved = resolvePairingAttempt(attemptRef.current, normalized, () => ({
+      token: pairSessionToken(normalized),
+      joinRequestId: newRequestId('pair_join'),
+      redeemRequestId: newRequestId('pair_redeem'),
+      deviceId: deviceId(),
+      deviceLabel: deviceLabel(),
+      platform: (navigator.platform || 'web').slice(0, 60),
+    }));
+    const attempt = resolved.attempt;
+    attemptRef.current = attempt;
     const requestGeneration = ++generation.current;
-    pairingChallenge.current = normalized;
-    credentialReady.current = false;
-    busyRef.current = true;
-    setBusy(true);
-    setStartDisabled(false);
-    setSwitchVisible(false);
-    targetIdentity.current = null;
-    pairing.current = null;
     stopPolling();
+    setChallenge(attempt.challenge);
+    setScanOpen(false);
+    if (!resolved.reused) resetAttemptView();
+
+    if (attempt.joined) {
+      changePhase('awaiting');
+      setStatus('正在向已登录设备重试兑换…', false);
+      await redeem(requestGeneration);
+      return;
+    }
+
+    joiningRef.current = true;
+    changePhase('joining');
     setStatus('正在向已登录设备发起配对请求…', false);
-    const token = pairSessionToken(normalized);
-    localToken.current = token;
     try {
       const joined = await callTool<PairingJoinResult>(
         'network_device_pairing_join',
         {
-          request_id: newRequestId('pair_join'),
-          challenge: normalized,
-          device_id: deviceId(),
-          device_label: deviceLabel(),
-          platform: (navigator.platform || 'web').slice(0, 60),
+          request_id: attempt.joinRequestId,
+          challenge: attempt.challenge,
+          device_id: attempt.deviceId,
+          device_label: attempt.deviceLabel,
+          platform: attempt.platform,
         },
-        { token },
+        { token: attempt.token },
       );
       if (requestGeneration !== generation.current || !mounted.current) return;
-      pairing.current = joined.pairing;
+      attempt.joined = true;
       targetIdentity.current = joined.actor;
       setConfirmCode(joined.pairing.confirm_code || '—');
       setTargetLabel(`${joined.actor.name || '未命名'}（${joined.actor.actor_id}）`);
@@ -239,52 +469,76 @@ export function PairPage() {
           : '这台设备尚未登录',
       );
       setStatus('已发起配对。请让已登录设备核对设备名称与确认码后点击“确认新设备”。', false);
-      redeemRequestId.current = newRequestId('pair_redeem');
-      scheduleRedeem();
+      changePhase('awaiting');
+      scheduleRedeem(requestGeneration);
     } catch (failure) {
       if (requestGeneration !== generation.current || !mounted.current) return;
+      changePhase('error');
       setStatus(`配对失败：${failureText(failure)} ${nextStepFor(failureReason(failure))}`, true);
     } finally {
-      if (requestGeneration === generation.current) {
-        busyRef.current = false;
-        if (mounted.current) setBusy(false);
-      }
+      joiningRef.current = false;
     }
   }
 
-  function switchIdentity() {
-    if (!credentialReady.current || !targetIdentity.current || !localToken.current) return;
-    const previousToken = currentToken();
-    const token = localToken.current;
-    if (!storageSet(TOKEN_KEY, token)) {
-      setStatus('浏览器无法保存身份；请允许本地存储后重新配对。', true);
+  function handleScanned(rawValue: string): void {
+    setScanOpen(false);
+    const parsed = parsePairingQr(rawValue, window.location.origin);
+    if (!parsed.ok) {
+      changePhase('error');
+      setStatus(`无法使用这个二维码：${parsed.message} 请重新扫描。`, true);
       return;
     }
-    if (currentIdentity.current && previousToken) {
-      rememberIdentity(currentIdentity.current, previousToken);
-    }
-    if (!rememberIdentity(targetIdentity.current, token)) {
-      if (previousToken) storageSet(TOKEN_KEY, previousToken);
-      else storageRemove(TOKEN_KEY);
-      setStatus('浏览器无法保存身份列表；请允许本地存储后重试。', true);
-      return;
-    }
-    try {
-      window.localStorage.removeItem(LOGGED_OUT_KEY);
-    } catch {
-      // 忽略；首页仍会按当前 token 读取身份。
-    }
-    if (pairingChallenge.current) sessionRemove(PAIR_TOKEN_PREFIX + pairingChallenge.current);
-    try {
-      window.history.replaceState(null, '', window.location.pathname + window.location.search);
-    } catch {
-      // 忽略。
-    }
-    window.location.replace('/');
+    setChallenge(parsed.challenge);
+    void startPairing(parsed.challenge);
   }
+
+  async function switchIdentity() {
+    const attempt = attemptRef.current;
+    const target = targetIdentity.current;
+    if (
+      !credentialReady.current ||
+      !attempt ||
+      !target ||
+      switchingRef.current
+    ) {
+      return;
+    }
+    switchingRef.current = true;
+    setSwitchBusy(true);
+    setStatus('正在核对目标身份并保存凭据…', false);
+    try {
+      const me = await callTool<PairingMe>('network_me', {}, { token: attempt.token });
+      if (!mounted.current) return;
+      if (me.actor_id !== target.actor_id) {
+        setStatus('目标身份核对失败：当前凭据与配对目标不一致，请重新配对。', true);
+        return;
+      }
+      targetIdentity.current = me;
+      if (!persistIdentity(me, attempt)) return;
+      enterHome();
+    } catch (failure) {
+      if (!mounted.current) return;
+      setStatus(`切换失败：${failureText(failure)}`, true);
+    } finally {
+      switchingRef.current = false;
+      if (mounted.current) setSwitchBusy(false);
+    }
+  }
+
+  const startLabel = busy
+    ? phase === 'redeeming'
+      ? '正在兑换…'
+      : '正在配对…'
+    : phase === 'awaiting'
+      ? '等待电脑确认…'
+      : phase === 'ready'
+        ? '已获得凭据'
+        : phase === 'error' && confirmCode !== '—'
+          ? '重试兑换'
+          : '开始配对';
 
   return (
-    <main>
+    <main data-pair-phase={phase}>
       <div className="share-head">
         <div className="share-avatar" aria-hidden="true">
           链
@@ -294,7 +548,28 @@ export function PairPage() {
           {currentLabel}
         </p>
       </div>
-      <p className="share-lead">扫描二维码或输入 12 位配对码，然后在已登录设备上确认。</p>
+      <p className="share-lead">
+        扫描电脑上的二维码，或输入 12 位配对码，然后在已登录设备上确认。
+      </p>
+      <div className="pair-scan-actions">
+        <Button
+          className="primary"
+          id="pair-scan"
+          type="button"
+          disabled={scanDisabled}
+          onClick={() => setScanOpen(true)}
+        >
+          扫描电脑二维码
+        </Button>
+      </div>
+      {scanOpen ? (
+        <PairScanner
+          onDecoded={handleScanned}
+          onCancel={() => {
+            setScanOpen(false);
+          }}
+        />
+      ) : null}
       <div className="field">
         <Label htmlFor="pair-challenge">12 位配对码</Label>
         <Input
@@ -309,33 +584,36 @@ export function PairPage() {
           onKeyDown={(event) => {
             if (event.key !== 'Enter') return;
             event.preventDefault();
-            if (switchVisible) switchIdentity();
+            if (switchVisible) void switchIdentity();
             else void startPairing();
           }}
         />
       </div>
       <p className="pair-hint" id="pair-hint">
-        挑战 5 分钟内有效，用后即失效。
+        挑战 5 分钟内有效，用后即失效。相机权限被拒绝时仍可使用短码。
       </p>
       <div className="row share-actions">
         <Button
           className="primary"
           id="pair-start"
           type="button"
-          disabled={busy || startDisabled}
+          disabled={startDisabled}
           onClick={() => {
             void startPairing();
           }}
         >
-          开始配对
+          {startLabel}
         </Button>
         <Button
           id="pair-switch"
           type="button"
           hidden={!switchVisible}
-          onClick={switchIdentity}
+          disabled={switchBusy}
+          onClick={() => {
+            void switchIdentity();
+          }}
         >
-          切换到此身份并进入
+          {switchBusy ? '正在切换…' : '切换到此身份并进入'}
         </Button>
       </div>
       <dl className="pair-identities">
