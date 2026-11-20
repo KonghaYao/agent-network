@@ -31,6 +31,8 @@ let directOnline = '';
 let directHuman = '';
 let groupId = '';
 let groupTitle = '';
+let imageAgentName = '';
+let textAgentName = '';
 
 async function loginWithFilter(page: Page, token: string, filter: string) {
   await page.addInitScript(({ credential, roomFilter }) => {
@@ -47,6 +49,8 @@ test.beforeAll(async () => {
   nameB = `验收 B ${suffix}`;
   agentOfflineName = `离线 Agent ${suffix}`;
   const agentOnlineName = `在线 Agent ${suffix}`;
+  imageAgentName = `Claude 头像 ${suffix}`;
+  textAgentName = `首字头像 ${suffix}`;
   groupTitle = `Presence 群 ${suffix}`;
 
   tokenA = crypto.randomUUID();
@@ -76,6 +80,12 @@ test.beforeAll(async () => {
   const online = await callTool<AgentCreated>(base, tokenA, 'network_agent_create', {
     request_id: requestId('presence_agent'), name: agentOnlineName,
   });
+  const imageAgent = await callTool<AgentCreated>(base, tokenA, 'network_agent_create', {
+    request_id: requestId('presence_agent'), name: imageAgentName,
+  });
+  const textAgent = await callTool<AgentCreated>(base, tokenA, 'network_agent_create', {
+    request_id: requestId('presence_agent'), name: textAgentName,
+  });
   // 任意已认证 Agent 请求都会把持久化 presence 置为 online；不发消息、不建流。
   await callTool(base, online.token, 'network_rooms_list', { limit: 1 });
 
@@ -98,7 +108,12 @@ test.beforeAll(async () => {
   });
   const group = await callTool<{ room: { room_id: string } }>(base, tokenA, 'network_room_create', {
     request_id: requestId('presence_group'), kind: 'group', title: groupTitle,
-    members: [offline.actor_id, online.actor_id],
+    members: [
+      offline.actor_id,
+      online.actor_id,
+      imageAgent.actor_id,
+      textAgent.actor_id,
+    ],
   });
   groupId = group.room.room_id;
 });
@@ -204,4 +219,106 @@ test('群成员弹窗只灰明确离线的 Agent', async ({ page }) => {
     'offline',
   );
   await expect(page.locator('#members-contacts [data-presence="offline"]')).toHaveCount(0);
+});
+
+test('群成员图片头像与首字头像尺寸、圆角一致且图片满铺', async ({ page }) => {
+  await loginWithFilter(page, tokenA, 'group');
+  await page.goto(`${base}/c/${groupId}`);
+  await page.locator('#members-button').click();
+  await expect(page.locator('#members-modal')).toBeVisible();
+
+  const current = page.locator('#members-current');
+  const imageAvatar = current
+    .locator('.spa-member')
+    .filter({ hasText: imageAgentName })
+    .locator('.member-avatar');
+  const textAvatar = current
+    .locator('.spa-member')
+    .filter({ hasText: textAgentName })
+    .locator('.member-avatar');
+  await expect(imageAvatar).toBeVisible();
+  await expect(textAvatar).toBeVisible();
+  const image = imageAvatar.locator('img.avatar-img');
+  await expect(image).toHaveCount(1);
+  await expect.poll(
+    () => image.evaluate((element) => (element as HTMLImageElement).naturalWidth),
+    { timeout: 10_000 },
+  ).toBeGreaterThan(0);
+
+  const [imageStyle, textStyle] = await Promise.all([
+    imageAvatar.evaluate((element) => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return {
+        width: rect.width,
+        height: rect.height,
+        radius: style.borderTopLeftRadius,
+        background: style.backgroundColor,
+        backgroundImage: style.backgroundImage,
+        padding: style.padding,
+      };
+    }),
+    textAvatar.evaluate((element) => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return {
+        width: rect.width,
+        height: rect.height,
+        radius: style.borderTopLeftRadius,
+        background: style.backgroundColor,
+      };
+    }),
+  ]);
+  expect(imageStyle.width).toBeGreaterThan(0);
+  expect(Math.abs(imageStyle.width - textStyle.width)).toBeLessThanOrEqual(0.5);
+  expect(Math.abs(imageStyle.height - textStyle.height)).toBeLessThanOrEqual(0.5);
+  expect(imageStyle.radius).toBe(textStyle.radius);
+  // 图片头像不再有浅色托盘：容器透明、无内边距，首字色块只用于回退。
+  expect(imageStyle.background).toBe('rgba(0, 0, 0, 0)');
+  expect(imageStyle.backgroundImage).toBe('none');
+  expect(imageStyle.padding).toBe('0px');
+
+  const imageMetrics = await image.evaluate((element) => {
+    const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return {
+      width: rect.width,
+      height: rect.height,
+      radius: style.borderTopLeftRadius,
+      objectFit: style.objectFit,
+      background: style.backgroundColor,
+    };
+  });
+  expect(imageMetrics.objectFit).toBe('cover');
+  expect(imageMetrics.radius).toBe(imageStyle.radius);
+  expect(imageMetrics.background).toBe('rgba(0, 0, 0, 0)');
+  expect(Math.abs(imageMetrics.width - imageStyle.width)).toBeLessThanOrEqual(0.5);
+  expect(Math.abs(imageMetrics.height - imageStyle.height)).toBeLessThanOrEqual(0.5);
+});
+
+test('群成员图片头像 404 时回退首字且不出现白底', async ({ page }) => {
+  await page.route('**/agent-icons/claude-color.svg', (route) =>
+    route.fulfill({ status: 404, body: '' }),
+  );
+  await loginWithFilter(page, tokenA, 'group');
+  await page.goto(`${base}/c/${groupId}`);
+  await page.locator('#members-button').click();
+  await expect(page.locator('#members-modal')).toBeVisible();
+
+  const avatar = page
+    .locator('#members-current .spa-member')
+    .filter({ hasText: imageAgentName })
+    .locator('.member-avatar');
+  await expect(avatar).toBeVisible();
+  await expect(avatar.locator('img.avatar-img')).toHaveCount(0);
+  await expect(avatar).toContainText('C');
+  await expect(avatar).not.toHaveClass(/avatar-icon/u);
+
+  const style = await avatar.evaluate((element) => {
+    const computed = getComputedStyle(element);
+    return { background: computed.backgroundColor, backgroundImage: computed.backgroundImage };
+  });
+  expect(style.backgroundImage).toBe('none');
+  expect(style.background).not.toBe('rgb(255, 255, 255)');
+  expect(style.background).not.toBe('rgba(0, 0, 0, 0)');
 });
