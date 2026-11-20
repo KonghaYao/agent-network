@@ -284,6 +284,86 @@ test('合并 online/visibility/ACK 为单轮恢复，并在离线时只标离线
   console.log(JSON.stringify({ probe: 'offline-conversation', bannerWhileOffline: true }));
 });
 
+test('同身份重连 ACK 先清空 Task 与 Trace，再重读回填', async ({ page }) => {
+  const base = await baseUrl();
+  const fixture = await createComponentRoom(base);
+  const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+  const sent = await callTool<{ message: { message_id: string } }>(
+    base,
+    fixture.tokenA,
+    'network_message_send',
+    {
+      request_id: requestId('e2e_ack_task'),
+      client_message_id: requestId('e2e_ack_task_client'),
+      room_id: fixture.roomId,
+      body: `重连前后都可见的 Task ${suffix}`,
+      invoke: [],
+    },
+  );
+  const rootId = sent.message.message_id;
+  await callTool(base, fixture.tokenA, 'network_task_mark', {
+    request_id: requestId('e2e_ack_mark'),
+    room_id: fixture.roomId,
+    message_id: rootId,
+  });
+
+  let holdReads = false;
+  let heldLists = 0;
+  let heldTraces = 0;
+  const releases: (() => void)[] = [];
+  await page.route('**/mcp', async (route) => {
+    const name = route.request().headers()['mcp-name'];
+    if (!holdReads || (name !== 'network_task_list' && name !== 'network_task_trace')) {
+      await route.continue();
+      return;
+    }
+    if (name === 'network_task_list') heldLists += 1;
+    else heldTraces += 1;
+    await new Promise<void>((release) => releases.push(release));
+    await route.continue();
+  });
+
+  await login(page, base, fixture.tokenA);
+  await openRoom(page, base, fixture.tokenA, fixture.roomId, fixture.roomTitle);
+  await expandTaskDock(page);
+  await expect(taskItem(page, rootId)).toHaveCount(1, { timeout: 15_000 });
+  await openTaskTrace(page, rootId);
+  await expect(page.locator('#task-trace-items .task-trace-item')).toHaveCount(1, {
+    timeout: 15_000,
+  });
+
+  holdReads = true;
+  await page.evaluate(() => {
+    (
+      window as unknown as { __agentNetworkRecovery?: { trigger: (reason: string) => void } }
+    ).__agentNetworkRecovery?.trigger('stream-ack');
+  });
+  await expect.poll(() => heldLists, { timeout: 15_000 }).toBeGreaterThan(0);
+  await expect.poll(() => heldTraces, { timeout: 15_000 }).toBeGreaterThan(0);
+
+  // 重读尚未返回：旧条目必须已被丢弃，而不是 invalidate 后继续显示。
+  await expect(page.locator('#task-dock-count')).toHaveText('…');
+  await expect(page.locator('#task-dock .task-dock-item')).toHaveCount(0);
+  await expect(page.locator('#task-trace-items .task-trace-item')).toHaveCount(0);
+  const itemsWhileHeld = await page.locator('#task-dock .task-dock-item').count();
+
+  holdReads = false;
+  const held = releases.splice(0);
+  for (const release of held) release();
+  await expect(taskItem(page, rootId)).toHaveCount(1, { timeout: 15_000 });
+  await expect(page.locator('#task-dock-count')).toHaveText('1');
+  await expect(page.locator('#task-trace-items .task-trace-item')).toHaveCount(1, {
+    timeout: 15_000,
+  });
+  console.log(JSON.stringify({
+    probe: 'ack-task-reset',
+    heldLists,
+    heldTraces,
+    itemsWhileHeld,
+    reloadedItems: await page.locator('#task-dock .task-dock-item').count(),
+  }));
+});
+
 test('21 页缺口分批追平并显示进度，已读不超过展示水位', async ({ page }) => {
   const base = await baseUrl();
   const fixture = await createComponentRoom(base);
@@ -1096,6 +1176,25 @@ test('切号后释放旧身份的 Trace 分页不并入新身份缓存', async (
 test('撤权后遮住旧视图、关闭预览并释放 object URL；晚到历史响应不复活', async ({ page }) => {
   const base = await baseUrl();
   const fixture = await createComponentRoom(base);
+  const taskBody = `REVOKE-PRIVATE-TASK ${crypto.randomUUID().slice(0, 8)}`;
+  const taskSent = await callTool<{ message: { message_id: string } }>(
+    base,
+    fixture.tokenB,
+    'network_message_send',
+    {
+      request_id: requestId('e2e_revoke_task'),
+      client_message_id: requestId('e2e_revoke_task_client'),
+      room_id: fixture.roomId,
+      body: taskBody,
+      invoke: [],
+    },
+  );
+  const taskRootId = taskSent.message.message_id;
+  await callTool(base, fixture.tokenB, 'network_task_mark', {
+    request_id: requestId('e2e_revoke_mark'),
+    room_id: fixture.roomId,
+    message_id: taskRootId,
+  });
   const outsiderToken = crypto.randomUUID();
   await callTool(base, outsiderToken, 'network_register', {
     request_id: requestId('e2e_reg'),
@@ -1183,6 +1282,18 @@ test('撤权后遮住旧视图、关闭预览并释放 object URL；晚到历史
   await page.locator('.file-item[data-file-id="probe-file"] .file-action').first().click();
   await expect(page.locator('#file-preview')).toBeVisible();
   await expect(page.locator('#file-preview-body')).toContainText('preview secret');
+  // 先关闭预览弹窗，避免它拦截 dock/Trace 的点击；释放 object URL 的探针不受影响。
+  await page.locator('#file-preview-close').click();
+  await expect(page.locator('#file-preview')).toHaveCount(0);
+
+  // 撤权前先让 Task dock 与 Trace 都持有旧身份的私有条目。
+  await expandTaskDock(page);
+  await expect(taskItem(page, taskRootId)).toHaveCount(1, { timeout: 15_000 });
+  await openTaskTrace(page, taskRootId);
+  await expect(page.locator('#task-trace-items .task-trace-item')).toHaveCount(1, {
+    timeout: 15_000,
+  });
+  await expect(page.locator('#task-trace-items')).toContainText(taskBody);
 
   const blobUrl = await page.evaluate(() => {
     const original = URL.revokeObjectURL.bind(URL);
@@ -1211,6 +1322,14 @@ test('撤权后遮住旧视图、关闭预览并释放 object URL；晚到历史
   await expect(page.locator('#recovery-mask')).toBeVisible({ timeout: 15_000 });
   await expect(page.locator('#messages')).toBeHidden();
   await expect(page.locator('#file-preview')).toHaveCount(0);
+  // 旧身份的 Task/Trace 不能留在遮罩后的 DOM 或可见文本里。
+  await expect(page.locator('#task-dock .task-dock-item')).toHaveCount(0);
+  await expect(page.locator('#task-trace-items .task-trace-item')).toHaveCount(0);
+  await expect(page.getByText(taskBody)).toHaveCount(0);
+  const taskItemsAfterRevoke = await page.locator('#task-dock .task-dock-item').count();
+  const traceItemsAfterRevoke = await page
+    .locator('#task-trace-items .task-trace-item')
+    .count();
   await expect
     .poll(() =>
       page.evaluate(() => (window as unknown as { __revokedObjectUrls: string[] }).__revokedObjectUrls),
@@ -1282,6 +1401,8 @@ test('撤权后遮住旧视图、关闭预览并释放 object URL；晚到历史
     previewCount: await page.locator('#file-preview').count(),
     revokedObjectUrls: revokedUrls.length,
     lateContentCount: await page.getByText('LATE-PRIVATE-CONTENT').count(),
+    taskItemsAfterRevoke,
+    traceItemsAfterRevoke,
     streamOpens,
     streamAborts,
   }));
