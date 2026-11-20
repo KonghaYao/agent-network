@@ -136,22 +136,30 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, preview, onO
     setPaneSize({ width: Math.max(minimum, Math.min(maximum, width)), wide });
   };
 
-  // 窗口变化时重算两组上限，并按当前模式把右栏夹回新上限。
+  // 侧栏宽度、窗口尺寸变化时重算两组上限，并按当前模式把右栏夹回新上限。
+  // 只监听窗口不够：左侧会话栏拖宽后必须立即夹紧右栏。
+  const syncLimits = useCallback(() => {
+    const next = readPaneLimits();
+    const minimum = readCssPixels('--app-pane-min') ?? 280;
+    setLimits(next);
+    setPaneSize((current) => {
+      if (current === null) return current;
+      const maximum = current.wide ? next.extended : next.normal;
+      return { ...current, width: Math.max(minimum, Math.min(maximum, current.width)) };
+    });
+  }, []);
+
   useEffect(() => {
-    const syncLimits = () => {
-      const next = readPaneLimits();
-      const minimum = readCssPixels('--app-pane-min') ?? 280;
-      setLimits(next);
-      setPaneSize((current) => {
-        if (current === null) return current;
-        const maximum = current.wide ? next.extended : next.normal;
-        return { ...current, width: Math.max(minimum, Math.min(maximum, current.width)) };
-      });
-    };
     syncLimits();
     window.addEventListener('resize', syncLimits);
-    return () => window.removeEventListener('resize', syncLimits);
-  }, []);
+    const sidebar = document.querySelector<HTMLElement>('.sidebar');
+    const observer = sidebar ? new ResizeObserver(syncLimits) : null;
+    if (sidebar && observer) observer.observe(sidebar);
+    return () => {
+      window.removeEventListener('resize', syncLimits);
+      observer?.disconnect();
+    };
+  }, [syncLimits]);
 
   // 全屏是页面内覆盖，不是浏览器 Fullscreen API；退出时只移除覆盖，宽度与聊天状态不变。
   useEffect(() => {

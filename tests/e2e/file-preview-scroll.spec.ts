@@ -441,6 +441,155 @@ test.describe('file preview scroll', () => {
     expect(await paneWidth()).toBeCloseTo(280, 0);
   });
 
+  test('left sidebar resizer adjusts width with pointer and keyboard', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${base}/c/${roomId}`);
+    await expect(page.locator('#files-pane')).toBeVisible();
+
+    const handle = page.locator('#sidebar-resizer');
+    await expect(handle).toBeVisible();
+    await expect(handle).toHaveAttribute('role', 'separator');
+    await expect(handle).toHaveAttribute('aria-orientation', 'vertical');
+    await expect(handle).toHaveAttribute('aria-controls', 'sidebar');
+    await expect(handle).toHaveAttribute('aria-valuemin', '240');
+    await expect(handle).toHaveAttribute('aria-valuemax', '480');
+    await expect(handle).toHaveAttribute('aria-valuenow', '300');
+
+    const geometry = await page.evaluate(() => {
+      const sidebar = document.querySelector<HTMLElement>('#sidebar')!.getBoundingClientRect();
+      const resizer = document.querySelector<HTMLElement>('#sidebar-resizer')!.getBoundingClientRect();
+      const chat = document.querySelector<HTMLElement>('.chat-pane')!.getBoundingClientRect();
+      return {
+        sidebarWidth: sidebar.width,
+        sidebarHeight: sidebar.height,
+        resizerWidth: resizer.width,
+        resizerHeight: resizer.height,
+        resizerLeft: resizer.left,
+        resizerRight: resizer.right,
+        sidebarLeft: sidebar.left,
+        chatLeft: chat.left,
+      };
+    });
+    expect(geometry.sidebarWidth).toBeCloseTo(300, 0);
+    expect(geometry.resizerWidth).toBeCloseTo(8, 0);
+    expect(geometry.resizerHeight).toBeCloseTo(geometry.sidebarHeight, 0);
+    expect(geometry.resizerLeft).toBeGreaterThanOrEqual(geometry.sidebarLeft + geometry.sidebarWidth - 9);
+    // 命中区完全收在侧栏内，聊天区从侧栏右缘之后开始。
+    expect(geometry.resizerRight).toBeLessThanOrEqual(geometry.chatLeft + 0.5);
+    expect(geometry.chatLeft).toBeGreaterThanOrEqual(geometry.sidebarLeft + geometry.sidebarWidth - 1);
+
+    const sidebarWidth = () =>
+      page.locator('#sidebar').evaluate((element) => element.getBoundingClientRect().width);
+
+    const dragSidebar = async (deltaX: number) => {
+      const box = await handle.boundingBox();
+      if (!box) throw new Error('侧栏手柄不可见');
+      const x = box.x + box.width / 2;
+      const y = box.y + box.height / 2;
+      await page.mouse.move(x, y);
+      await page.mouse.down();
+      await page.mouse.move(x + deltaX, y, { steps: 20 });
+      await page.mouse.up();
+    };
+
+    // 300 → 480：右缘拖到上限。
+    await dragSidebar(200);
+    await expect.poll(sidebarWidth).toBeCloseTo(480, 0);
+    await expect(handle).toHaveAttribute('aria-valuenow', '480');
+
+    // 480 → 240：继续拖过下限时停在下限。
+    await dragSidebar(-300);
+    await expect.poll(sidebarWidth).toBeCloseTo(240, 0);
+    await expect(handle).toHaveAttribute('aria-valuenow', '240');
+
+    await handle.focus();
+    await page.keyboard.press('ArrowRight');
+    await expect.poll(sidebarWidth).toBeCloseTo(250, 0);
+    await expect(handle).toHaveAttribute('aria-valuenow', '250');
+    await page.keyboard.press('ArrowLeft');
+    await expect.poll(sidebarWidth).toBeCloseTo(240, 0);
+    await expect(handle).toHaveAttribute('aria-valuenow', '240');
+    // 下限外的按键不再改变宽度与 aria。
+    await page.keyboard.press('ArrowLeft');
+    await expect(handle).toHaveAttribute('aria-valuenow', '240');
+    expect(await sidebarWidth()).toBeCloseTo(240, 0);
+
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth,
+    );
+    expect(overflow).toBeLessThanOrEqual(1);
+  });
+
+  test('right pane max follows sidebar width changes immediately', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${base}/c/${roomId}`);
+    await expect(page.locator('#files-pane')).toBeVisible();
+
+    const sidebarHandle = page.locator('#sidebar-resizer');
+    const paneHandle = page.locator('#files-resizer');
+    const sidebarWidth = () =>
+      page.locator('#sidebar').evaluate((element) => element.getBoundingClientRect().width);
+    const paneWidth = () =>
+      page.locator('#files-pane').evaluate((element) => element.getBoundingClientRect().width);
+    const chatDisplay = () =>
+      page.evaluate(() => getComputedStyle(document.querySelector<HTMLElement>('.chat-pane')!).display);
+
+    await expect(paneHandle).toHaveAttribute('aria-valuemax', '700');
+
+    // 先把右栏推到侧栏 300 时的普通上限 700。
+    await paneHandle.focus();
+    for (let step = 0; step < 34; step += 1) await page.keyboard.press('ArrowLeft');
+    await expect(paneHandle).toHaveAttribute('aria-valuenow', '700');
+    await expect.poll(paneWidth).toBeCloseTo(700, 0);
+    expect(await chatDisplay()).not.toBe('none');
+
+    // 侧栏 300 → 480：右栏普通上限从 700 收到 1280 - 480 - 280 = 520，
+    // 当前 700 已超过新上限，必须立即夹到 520（普通模式不自动转入扩展）。
+    await sidebarHandle.focus();
+    for (let step = 0; step < 18; step += 1) await page.keyboard.press('ArrowRight');
+    await expect(sidebarHandle).toHaveAttribute('aria-valuenow', '480');
+    await expect.poll(sidebarWidth).toBeCloseTo(480, 0);
+    await expect(paneHandle).toHaveAttribute('aria-valuemax', '520');
+    await expect.poll(paneWidth).toBeCloseTo(520, 0);
+    await expect(paneHandle).toHaveAttribute('aria-valuenow', '520');
+    expect(await chatDisplay()).not.toBe('none');
+
+    const wideState = await page.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      innerWidth: window.innerWidth,
+      chatRight: document.querySelector<HTMLElement>('.chat-pane')!.getBoundingClientRect().right,
+      paneLeft: document.querySelector<HTMLElement>('#files-pane')!.getBoundingClientRect().left,
+    }));
+    expect(wideState.scrollWidth).toBe(wideState.innerWidth);
+    expect(wideState.chatRight).toBeLessThanOrEqual(wideState.paneLeft + 0.5);
+
+    // 侧栏保持 480 时拖动右栏收窄：普通上限仍是 520，不改变聊天可见状态。
+    const paneBox = await paneHandle.boundingBox();
+    if (!paneBox) throw new Error('右栏手柄不可见');
+    const paneY = paneBox.y + paneBox.height / 2;
+    await page.mouse.move(paneBox.x + paneBox.width / 2, paneY);
+    await page.mouse.down();
+    await page.mouse.move(paneBox.x + paneBox.width / 2 + 30, paneY, { steps: 10 });
+    await page.mouse.up();
+    await expect.poll(paneWidth).toBeCloseTo(490, 0);
+    expect(await paneWidth()).toBeLessThanOrEqual(520);
+    await expect(paneHandle).toHaveAttribute('aria-valuemax', '520');
+    expect(await chatDisplay()).not.toBe('none');
+    // 键盘推回普通上限，供后续侧栏缩回时保留 520。
+    await paneHandle.focus();
+    for (let step = 0; step < 3; step += 1) await page.keyboard.press('ArrowLeft');
+    await expect(paneHandle).toHaveAttribute('aria-valuenow', '520');
+
+    // 侧栏缩回 300：上限立即恢复 700，右栏宽度保持 520 不丢弃。
+    await sidebarHandle.focus();
+    for (let step = 0; step < 18; step += 1) await page.keyboard.press('ArrowLeft');
+    await expect(sidebarHandle).toHaveAttribute('aria-valuenow', '300');
+    await expect.poll(sidebarWidth).toBeCloseTo(300, 0);
+    await expect(paneHandle).toHaveAttribute('aria-valuemax', '700');
+    expect(await paneWidth()).toBeCloseTo(520, 0);
+    expect(await chatDisplay()).not.toBe('none');
+  });
+
   test('right pane widens past the normal max by collapsing chat, and clamps after resize', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto(`${base}/c/${roomId}`);
@@ -595,6 +744,7 @@ test.describe('file preview scroll', () => {
     expect(rect!.width).toBeCloseTo(1280, 0);
     expect(rect!.height).toBeCloseTo(800, 0);
     await expect(page.locator('.sidebar')).toBeHidden();
+    await expect(page.locator('#sidebar-resizer')).toBeHidden();
     await expect(page.locator('.chat-pane')).toBeHidden();
     await expect(page.locator('#files-resizer')).toBeHidden();
     await expect(page.locator('.files-head')).toBeHidden();
@@ -615,6 +765,7 @@ test.describe('file preview scroll', () => {
     await expect(button).toBeFocused();
     await expect(page.locator('#file-preview-pane')).toBeVisible();
     await expect(page.locator('.sidebar')).toBeVisible();
+    await expect(page.locator('#sidebar-resizer')).toBeVisible();
     await expect(page.locator('.chat-pane')).toBeVisible();
     await expect(page.locator('#files-resizer')).toBeVisible();
     const restored = await pane.boundingBox();
@@ -877,7 +1028,7 @@ test.describe('file preview scroll', () => {
       await page.locator('#files-toggle').click();
       await expect(page.locator('#files-pane')).toBeVisible();
 
-      await expect(page.locator('#files-resizer, .spa-resizer, .pane-resizer').filter({ visible: true })).toHaveCount(0);
+      await expect(page.locator('#files-resizer, .spa-resizer, .pane-resizer, #sidebar-resizer').filter({ visible: true })).toHaveCount(0);
       await expect(page.locator('.chat-pane, .sidebar').filter({ visible: true })).toHaveCount(0);
       const paneBox = await page.locator('#files-pane').boundingBox();
       expect(paneBox?.x).toBe(0);
@@ -899,7 +1050,7 @@ test.describe('file preview scroll', () => {
       await expect(page.locator('#file-preview[role="dialog"]')).toBeVisible();
       await expect(page.locator('#file-preview-pane')).toHaveCount(0);
       await expect(page.locator('#file-preview-fullscreen')).toHaveCount(0);
-      await expect(page.locator('#files-resizer, .spa-resizer, .pane-resizer').filter({ visible: true })).toHaveCount(0);
+      await expect(page.locator('#files-resizer, .spa-resizer, .pane-resizer, #sidebar-resizer').filter({ visible: true })).toHaveCount(0);
       await expect(page.locator('.chat-pane, .sidebar').filter({ visible: true })).toHaveCount(0);
       const body = page.locator('#file-preview-body');
       const geometry = await previewGeometry(page);

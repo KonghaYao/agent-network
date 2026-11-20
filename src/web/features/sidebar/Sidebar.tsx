@@ -12,9 +12,10 @@ import {
   Skeleton,
   Toolbar,
 } from '../../app/lenso-controls';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import { Link } from '../../app/router';
+import { useMediaQuery } from '../../hooks/useMediaQuery';
 import type { RoomPreferenceMap } from '../../lib/room-preferences';
 import type { WebIdentity } from '../../lib/identity';
 import {
@@ -22,6 +23,7 @@ import {
   type RoomFilter,
   type RoomSummary,
 } from '../../lib/rooms';
+import { useUiPrefStore } from '../../stores/ui';
 import { ContactRequestsButton } from './ContactRequestsButton';
 import { LoggedOutStart } from './LoggedOutStart';
 import { RoomRow } from './RoomRow';
@@ -64,6 +66,23 @@ const FILTERS: { value: RoomFilter; label: string }[] = [
 ];
 
 const EMPTY_UNREAD_COUNTS: Record<RoomFilter, number> = { friend: 0, agent: 0, group: 0 };
+
+const SIDEBAR_MIN_FALLBACK = 240;
+const SIDEBAR_MAX_FALLBACK = 480;
+const SIDEBAR_DEFAULT_WIDTH = 300;
+
+/** 读取 tokens.css 的像素变量；非浏览器环境返回 undefined。 */
+function readCssPixels(name: string): number | undefined {
+  if (typeof document === 'undefined') return undefined;
+  const value = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue(name));
+  return Number.isFinite(value) ? value : undefined;
+}
+
+function clampSidebarWidth(width: number): number {
+  const minimum = readCssPixels('--app-sidebar-min') ?? SIDEBAR_MIN_FALLBACK;
+  const maximum = readCssPixels('--app-sidebar-max') ?? SIDEBAR_MAX_FALLBACK;
+  return Math.max(minimum, Math.min(maximum, width));
+}
 
 /**
  * 44px 命中区只负责把焦点交给真实输入框。
@@ -122,6 +141,32 @@ export function Sidebar(props: SidebarProps) {
   const showRetry = status === 'error' && rooms.length === 0;
   const filterLabel = FILTERS.find((entry) => entry.value === filter)?.label ?? '好友';
 
+  // 左侧栏只在大屏三栏出现手柄；平板抽屉与移动端单栏不渲染。
+  const desktop = useMediaQuery('(min-width: 1200px)');
+  const sidebarWidth = useUiPrefStore((state) => state.sidebarWidth);
+  const setSidebarWidth = useUiPrefStore((state) => state.setSidebarWidth);
+  const asideRef = useRef<HTMLElement>(null);
+  const resizerRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{ x: number; width: number } | null>(null);
+  const widthRef = useRef(sidebarWidth);
+
+  // 拖动期间直接写 CSS 变量，避免每个 pointermove 都重渲染整张会话列表；
+  // 根节点变量同时供右栏读取侧栏宽度与初始比例计算。
+  const applySidebarWidth = (width: number): number => {
+    const next = clampSidebarWidth(width);
+    widthRef.current = next;
+    asideRef.current?.style.setProperty('--app-sidebar-width', `${next}px`);
+    document.documentElement.style.setProperty('--app-sidebar-width', `${next}px`);
+    resizerRef.current?.setAttribute('aria-valuenow', String(Math.round(next)));
+    return next;
+  };
+
+  useLayoutEffect(() => {
+    widthRef.current = sidebarWidth;
+    asideRef.current?.style.setProperty('--app-sidebar-width', `${sidebarWidth}px`);
+    document.documentElement.style.setProperty('--app-sidebar-width', `${sidebarWidth}px`);
+  }, [sidebarWidth]);
+
   // 防抖后只播报变化后的汇总，避免消息连续到达时反复打断读屏。
   const [filterAnnouncement, setFilterAnnouncement] = useState('');
   const announcedCounts = useRef('');
@@ -166,7 +211,72 @@ export function Sidebar(props: SidebarProps) {
   );
 
   return (
-    <aside className="sidebar" aria-label="会话列表">
+    <aside
+      ref={asideRef}
+      id="sidebar"
+      className="sidebar"
+      aria-label="会话列表"
+    >
+      {desktop ? (
+        <div
+          ref={resizerRef}
+          id="sidebar-resizer"
+          className="sidebar-resizer"
+          role="separator"
+          tabIndex={0}
+          aria-label="调整会话栏宽度"
+          aria-orientation="vertical"
+          aria-controls="sidebar"
+          aria-valuemin={readCssPixels('--app-sidebar-min') ?? SIDEBAR_MIN_FALLBACK}
+          aria-valuemax={readCssPixels('--app-sidebar-max') ?? SIDEBAR_MAX_FALLBACK}
+          aria-valuenow={Math.round(sidebarWidth)}
+          onPointerDown={(event) => {
+            if (event.button !== 0) return;
+            event.preventDefault();
+            event.currentTarget.focus();
+            event.currentTarget.setPointerCapture(event.pointerId);
+            dragRef.current = {
+              x: event.clientX,
+              width: asideRef.current?.getBoundingClientRect().width ?? widthRef.current,
+            };
+          }}
+          onPointerMove={(event) => {
+            const start = dragRef.current;
+            if (!start) return;
+            applySidebarWidth(start.width + event.clientX - start.x);
+          }}
+          onPointerUp={(event) => {
+            if (!dragRef.current) return;
+            dragRef.current = null;
+            setSidebarWidth(widthRef.current);
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+              event.currentTarget.releasePointerCapture(event.pointerId);
+            }
+          }}
+          onPointerCancel={(event) => {
+            if (!dragRef.current) return;
+            dragRef.current = null;
+            setSidebarWidth(widthRef.current);
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+              event.currentTarget.releasePointerCapture(event.pointerId);
+            }
+          }}
+          onLostPointerCapture={() => {
+            if (!dragRef.current) return;
+            dragRef.current = null;
+            setSidebarWidth(widthRef.current);
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+            event.preventDefault();
+            const delta = event.key === 'ArrowRight' ? 10 : -10;
+            setSidebarWidth(applySidebarWidth(widthRef.current + delta));
+          }}
+          onDoubleClick={() => {
+            setSidebarWidth(applySidebarWidth(SIDEBAR_DEFAULT_WIDTH));
+          }}
+        />
+      ) : null}
       <header className="sidebar-head">
         <div className="brand-row">
           <Toolbar aria-label="品牌与会话操作" style={{ display: 'contents' }}>

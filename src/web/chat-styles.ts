@@ -84,10 +84,21 @@ export const APP_STYLE = `
   button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible,
   summary:focus-visible { outline: 2px solid var(--wx-green); outline-offset: 2px; }
 
-  .sidebar { flex: 0 0 var(--app-sidebar-width); width: var(--app-sidebar-width);
+  .sidebar { position: relative; flex: 0 0 var(--app-sidebar-width); width: var(--app-sidebar-width);
     min-width: var(--app-sidebar-min); max-width: var(--app-sidebar-max);
     display: flex; flex-direction: column; min-height: 0;
     background: var(--wx-sidebar); border-right: 1px solid var(--wx-line); }
+  /* 会话栏手柄收在侧栏内部右缘：8px 命中区不进入聊天区，也不覆盖
+     聊天滚动条；仅 >=1200 由 React 渲染，平板抽屉与移动端没有节点。 */
+  .sidebar-resizer { position: absolute; top: 0; right: 0; bottom: 0; width: 8px;
+    z-index: var(--app-z-drop); cursor: col-resize; touch-action: none; }
+  .sidebar-resizer::before { content: ""; position: absolute; top: 0; right: 0; bottom: 0;
+    width: 1px; background: transparent; transition: background-color .12s, width .12s; }
+  .sidebar-resizer:hover::before, .sidebar-resizer:focus-visible::before,
+  .sidebar-resizer:active::before {
+    width: 2px; background: var(--wx-green); }
+  .sidebar-resizer:focus-visible { outline: 2px solid var(--wx-green);
+    outline-offset: -2px; }
   .sidebar-head { flex: 0 0 auto; padding: 16px 12px 10px; }
   .brand-row { display: flex; align-items: center; justify-content: space-between;
     gap: 8px; padding: 0 4px 12px; }

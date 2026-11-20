@@ -8,10 +8,10 @@
   --spa-muted: var(--app-muted);
   --spa-accent: var(--lenso-tint);
 
-  /* 布局宽度单源：SplitLayout 在运行时读取像素值，CSS 直接引用变量。 */
+  /* 布局宽度单源：侧栏拖拽与右栏上限都读取这些像素值。 */
   --app-sidebar-width: 300px;
-  --app-sidebar-min: 280px;
-  --app-sidebar-max: 320px;
+  --app-sidebar-min: 240px;
+  --app-sidebar-max: 480px;
   /* 桌面右栏：文件 360、监控 420；窄屏文件栏保留原有 300 初始值。 */
   --app-pane-width: 360px;
   --app-pane-width-inline: 300px;
