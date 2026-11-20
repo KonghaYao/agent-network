@@ -8,7 +8,14 @@ import { useEffect, useRef, useState } from 'react';
  * 可见提示，不影响消息与文件卡片。
  */
 
-const MARKDOWN_URL = '/assets/chat-markdown.js';
+/**
+ * 发布构建注入本版本自己的哈希 URL；开发构建为空，回退到固定别名。
+ * 固定别名在迁移时冻结到基线，不会跟随新发布改变。
+ */
+const MARKDOWN_URL =
+  typeof __WEB_MARKDOWN_URL__ === 'string' && __WEB_MARKDOWN_URL__.length > 0
+    ? __WEB_MARKDOWN_URL__
+    : '/assets/chat-markdown.js';
 
 interface MarkdownHandle {
   update(text: string, options?: { mentions?: string[]; preview?: boolean }): void;

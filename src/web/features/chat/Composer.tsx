@@ -47,7 +47,14 @@ import type { SendOutcome } from '../../hooks/useSendQueue';
 
 const DRAFT_PREFIX = 'agent-network-draft-v1:';
 const MAX_TEXTAREA_HEIGHT = 96;
-const DRAWBOARD_ASSET_URL = '/assets/chat-drawboard.js';
+/**
+ * 发布构建注入本版本自己的哈希 URL；开发构建为空，回退到固定别名。
+ * 绝不在打开画板时读取服务器“最新”模块，避免旧页混用新 API。
+ */
+const DRAWBOARD_ASSET_URL =
+  typeof __WEB_DRAWBOARD_URL__ === 'string' && __WEB_DRAWBOARD_URL__.length > 0
+    ? __WEB_DRAWBOARD_URL__
+    : '/assets/chat-drawboard.js';
 
 interface DrawboardModule {
   openDrawboard(options: { onInsert: (file: File) => void }): void;

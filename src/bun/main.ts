@@ -32,6 +32,7 @@ import { AgentPresenceTimeline } from '../realtime/presence-timeline';
 import { buildDrawboardBundle } from '../web/drawboard-bundle';
 import { buildMarkdownBundle } from '../web/markdown-bundle';
 import { loadSpaManifest } from '../web/spa-manifest';
+import { loadCurrentWebRelease, resolveWebReleaseMode } from '../web/web-release';
 import { buildCliBundle } from './cli-bundle';
 import { createD1 } from './d1';
 import { resolveFileTicketSecret } from './file-ticket-secret';
@@ -387,11 +388,32 @@ if (process.env.DRIVE_DISABLED !== '1') {
   );
 }
 
-const [markdownBundle, drawboardBundle, cliBundle] = await Promise.all([
-  buildMarkdownBundle(),
-  buildDrawboardBundle(),
-  buildCliBundle(),
-]);
+// 发布模式只在显式设置 WEB_RELEASES_ROOT 时启用；未设置时始终读取 dist/web。
+// 仓库里残留的 dist/web-releases/current 不得悄悄改变启动行为。
+// 指针存在但发布描述/资源校验失败必须启动失败，不能退回旧 dist。
+const releaseMode = resolveWebReleaseMode(
+  process.env.WEB_RELEASES_ROOT,
+  resolve(import.meta.dir, '../../dist/web-releases'),
+);
+const releasesRoot = releaseMode.root;
+const releaseRequested = releaseMode.enabled;
+const webRelease = releaseRequested ? await loadCurrentWebRelease(releasesRoot) : null;
+if (releaseRequested && !webRelease) {
+  throw new Error(`WEB_RELEASES_ROOT 已启用但没有可用发布: ${releasesRoot}/current`);
+}
+
+const [markdownBundle, drawboardBundle, cliBundle] = webRelease
+  ? [null, null, await buildCliBundle()]
+  : await Promise.all([
+      buildMarkdownBundle(),
+      buildDrawboardBundle(),
+      buildCliBundle(),
+    ]);
+if (webRelease) {
+  console.log(
+    `web release ready: ${webRelease.manifest.buildId} (deployment ${webRelease.deploymentId}, ${webRelease.manifest.assets.length} assets)`,
+  );
+}
 if (markdownBundle) {
   console.log(
     `markdown asset ready: ${(markdownBundle.code.length / 1024).toFixed(0)} KiB (v${markdownBundle.version})`,
@@ -409,16 +431,26 @@ if (cliBundle) {
 }
 
 // 4B-6：legacy 壳已删除，Vite manifest 是页面路由的必需产物。
-// 缺失时仍然启动（/mcp、/health、/static 与下载不受影响），页面路由返回 503。
+// 发布模式不再读取 dist/web；缺失时仍然启动（/mcp、/health、/static 与下载不受影响），
+// 页面路由返回 503。
 const spaDistDir = resolve(
   process.env.WEB_DIST_DIR ?? resolve(import.meta.dir, '../../dist/web'),
 );
-const spaManifest = await loadSpaManifest(spaDistDir);
-console.log(
-  spaManifest
-    ? `web spa manifest ready (${spaDistDir})`
-    : `web spa manifest unavailable; page routes return 503 until \`bun run build:web\` (${spaDistDir})`,
-);
+const spaManifest = webRelease
+  ? {
+      entry: webRelease.manifest.entry,
+      css: webRelease.manifest.css,
+      buildId: webRelease.manifest.buildId,
+      webContract: webRelease.manifest.webContract,
+    }
+  : await loadSpaManifest(spaDistDir);
+if (!webRelease) {
+  console.log(
+    spaManifest
+      ? `web spa manifest ready (${spaDistDir})`
+      : `web spa manifest unavailable; page routes return 503 until \`bun run build:web\` (${spaDistDir})`,
+  );
+}
 
 const app = createApp(env, {
   mount,
@@ -430,6 +462,7 @@ const app = createApp(env, {
   clientAssetVersion: cliBundle?.version ?? null,
   spaManifest,
   spaDistDir,
+  webRelease,
 });
 
 const server = Bun.serve({

@@ -477,6 +477,16 @@ export const LIMITS = {
    * 短会话保持原生滚动高度估算，避免引入滚动条跳动。
    */
   webLongMessageListThreshold: 200,
+  /** 未压缩应用入口的硬上限（字节）；发布构建与测量脚本共用。 */
+  webEntryHardLimitBytes: 972_800,
+  /** 发布资源保留窗口（毫秒）：最近 7 天内启用的 build 全部保留。 */
+  webReleaseRetentionMs: 7 * 24 * 60 * 60_000,
+  /** 无论窗口如何都保留最近 N 个不同 buildId。 */
+  webReleaseRetainedBuilds: 2,
+  /** 清理脚本的额外隔离期；避免刚上传但尚未被任何发布引用的文件被误删。 */
+  webReleaseGcGraceMs: 24 * 60 * 60_000,
+  /** 固定兼容别名的缓存时长（秒）；别名字节永不自动指向最新。 */
+  webAliasCacheMaxAgeSeconds: 300,
   /** MCP Events 默认订阅寿命（毫秒）。 */
   eventsSubscriptionTtlMs: 24 * 60 * 60_000,
   /** MCP Events 最小授权寿命（毫秒）。 */
