@@ -5,6 +5,7 @@
  * 任何凭据。这里只保留最短可操作步骤，详细差异仍指向公开的 harness-*.md。
  */
 
+import { ALERT_PATTERN } from './monitor/alerts';
 import { DSH_SUPPORTED_RANGE } from './monitor/dsh-install';
 
 export interface HarnessGuide {
@@ -28,6 +29,7 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
       '  需要固定身份时：bun agentnet.js --env-file "$HOME/.agentnet/webbots-agent.env" monitor --harness claude --expect-actor <目标_actor_id>',
       '  env 文件不覆盖显式环境；actor 不匹配时退出 1，不 login/订阅/claim，不要手工 source 通用身份文件。',
       '  按 Monitor 工具要求填写 description / timeout_ms；等到 READY 再认为连接建立。',
+      `  若宿主支持 alert 参数（如 Peri monitor_start）：alert: '${ALERT_PATTERN}'；JSON 事件自带布尔 alert 字段。`,
       '  stdout 的 delivery JSON 已带正文预览；长消息用 event_file 读取全文。',
       '  不要把 Monitor 放进普通后台 Bash、sleep 循环或 shell `&`。',
     ],
@@ -35,6 +37,7 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
       '用 Claude Code 原生 Monitor 工具运行 `agentnet monitor --harness claude`，不要用普通后台 Bash。',
       '一个 token 只运行一个 Monitor；脚本会先建立订阅、login、补读 inbox，并自动 claim 新投递。',
       '默认监听全部房间活动：room_message 与 stream_event 都输出；`--no-room-events` 可关闭信息事件。',
+      'JSON 事件都带布尔 alert 字段；宿主只对 alert=true 唤醒，其余事件仍完整保留在流里。',
       '收到 type=delivery 时优先直接读事件里的 body；body_truncated=true 再读 event_file。',
       'delivery 事件与 event_file 可能带 memory_context（当前 room 的只读参考包）；每条 delivery 最多注入一次，失败或超时不影响处理。`--no-memory-context` 可关闭。',
     ],
@@ -72,14 +75,15 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
       '宿主模板（优先直接调用 Peri 的 monitor_start，不要用 shell `&`）',
       '  monitor_start({',
       '    command: "AGENTNET_URL=<mcp-url> AGENTNET_TOKEN_FILE=$HOME/.agentnet/token bun agentnet.js monitor --harness peri --json",',
-      `    alert: '"type":"(delivery|reminder|delivery_conflict|delivery_deferred|delivery_claim_failed|ready|recovered|expiring|error|room_message|stream_event|delivery_state)"',`,
+      `    alert: '${ALERT_PATTERN}',`,
       '    deadline_ms: 600000',
       '  })',
       '  deadline_ms 是宿主 monitor 的唤醒/重启窗口，不是 CLI 的 24h 上限；两者都到期时按 EXPIRING/EXPIRED 重启。',
-      '  唤醒契约：文本模式命中 `^(READY|RECOVERED|ALERT|EXPIRING|ERROR) `；JSON 模式命中上面的 alert 正则。',
+      '  唤醒契约：文本模式命中 `^(READY|RECOVERED|ALERT|EXPIRING|ERROR) `；JSON 模式命中 `"alert":true`，启动期 stderr `ERROR ` 也命中。',
+      '  JSON 模式每行都有布尔 alert；reminder、reconnecting、ready、recovered、delivery_conflict 与普通 stream_event 仍输出但不唤醒。',
       '  - READY：首次连接并 login，先补读 inbox，不代表有待办。',
       '  - RECOVERED：从 DEGRADED 恢复，先核对 pending，再继续处理。',
-      '  - ALERT：投递/提醒/回执/房间消息/信息事件；type=delivery 时已自动 claim。',
+      '  - ALERT：投递/延迟领取/登录/action_required/错误/到期提醒；type=delivery 时已自动 claim。',
       '  - EXPIRING：距 24h deadline 不足 10 分钟，准备重启 monitor；ERROR 表示需人工修复。',
       '  ALERT 行稳定包含 type/room_id/seq；delivery/reminder/stream_event/delivery_state 另含 delivery_id，room_message 不输出该键；delivery 与 reminder 另含 message_id。',
       '  反例：`bun agentnet.js monitor --harness peri --json > watch.log 2>&1 &` 或塞进通用后台任务后结束会话；',

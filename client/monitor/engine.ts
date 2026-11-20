@@ -25,6 +25,7 @@ import { setTimeout as sleepPromise } from 'node:timers/promises';
 
 import { LIMITS } from '../../src/contracts/limits';
 import { asArray, asNumber, asRecord, asString } from '../output';
+import { isAlertEvent } from './alerts';
 import {
   BODY_PREVIEW_CHARS,
   claimNoticeEvent,
@@ -576,18 +577,17 @@ export class MonitorEngine {
       this.diagnostics(textLine);
       return;
     }
-    this.stdout(
-      JSON.stringify({
-        type,
-        kind: eventKind(type),
-        event_kind: eventKind(type),
-        seq: null,
-        delivery_id: null,
-        room_id: null,
-        message_id: null,
-        ...fields,
-      }),
-    );
+    const event = {
+      type,
+      kind: eventKind(type),
+      event_kind: eventKind(type),
+      seq: null,
+      delivery_id: null,
+      room_id: null,
+      message_id: null,
+      ...fields,
+    };
+    this.stdout(JSON.stringify({ ...event, alert: isAlertEvent(event) }));
   }
 
   private reportStop(error: unknown): number {
@@ -1710,18 +1710,17 @@ export class MonitorEngine {
     if (this.json) {
       const type = asString(event.type);
       const providedKind = asString(event.kind);
-      this.stdout(
-        JSON.stringify({
-          ...event,
-          type,
-          event_kind: eventKind(type),
-          kind: providedKind.length > 0 ? providedKind : eventKind(type),
-          seq: event.seq ?? null,
-          delivery_id: event.delivery_id ?? null,
-          room_id: event.room_id ?? null,
-          message_id: event.message_id ?? null,
-        }),
-      );
+      const enriched = {
+        ...event,
+        type,
+        event_kind: eventKind(type),
+        kind: providedKind.length > 0 ? providedKind : eventKind(type),
+        seq: event.seq ?? null,
+        delivery_id: event.delivery_id ?? null,
+        room_id: event.room_id ?? null,
+        message_id: event.message_id ?? null,
+      };
+      this.stdout(JSON.stringify({ ...enriched, alert: isAlertEvent(event) }));
       return;
     }
     this.stdout(`${this.prefix}${JSON.stringify(event)}`);
