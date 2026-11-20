@@ -3,14 +3,13 @@ import { Button, Checkbox, FieldError, SearchInput, Select } from '../../app/len
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 
-import { accountAvatarFor } from '../../lib/agent-avatar';
 import { useContacts } from '../../hooks/useContacts';
 import type { OwnerTransferView, RoomMember, RoomView } from '../../lib/chat';
 import { callTool, type McpError } from '../../lib/mcp-client';
 import { queryKeys } from '../../lib/query-keys';
 import { newRequestId } from '../../lib/request-id';
-import { avatarColor, firstChar } from '../../lib/rooms';
 import { isOfflineAgent } from '../../lib/presence';
+import { ActorAvatar } from '../avatar/ActorAvatar';
 import { AgentAvatarMenu } from '../memory/AgentAvatarMenu';
 import { confirmDialog } from './confirm';
 import { GroupInvitesPanel } from './GroupInvitesPanel';
@@ -23,39 +22,29 @@ const ROLE_LABEL: Record<RoomMember['role'], string> = {
   member: '成员',
 };
 
-/** 成员/候选行头像；品牌图标加载失败时保留首字。 */
+/** 成员/候选行头像；上传头像优先，品牌图标加载失败时保留首字。 */
 function MemberAvatar({
   name,
   kind,
+  avatarUrl,
   className,
   offline = false,
 }: {
   name: string;
   kind: RoomMember['kind'];
+  avatarUrl?: string | null;
   className: string;
   offline?: boolean;
 }) {
-  const [failed, setFailed] = useState(false);
-  const spec = accountAvatarFor(name, kind);
-  const showImage = spec !== null && !failed;
   return (
-    <span
-      className={`avatar ${className}${showImage ? ' avatar-icon' : ''}`.trim()}
-      aria-hidden="true"
-      data-presence={offline ? 'offline' : undefined}
-      style={showImage ? undefined : { background: avatarColor(name) }}
-    >
-      {firstChar(name)}
-      {showImage ? (
-        <img
-          className="avatar-img"
-          src={spec.src}
-          alt=""
-          decoding="async"
-          onError={() => setFailed(true)}
-        />
-      ) : null}
-    </span>
+    <ActorAvatar
+      className={`avatar ${className}`.trim()}
+      name={name}
+      avatarUrl={avatarUrl}
+      kind={kind}
+      brandFallback
+      offline={offline}
+    />
   );
 }
 
@@ -436,6 +425,7 @@ export function MembersDialog({
                         <MemberAvatar
                           name={member.name}
                           kind={member.kind}
+                          avatarUrl={member.avatar_url}
                           className="member-avatar"
                           offline={offline}
                         />
@@ -444,6 +434,7 @@ export function MembersDialog({
                       <MemberAvatar
                         name={member.name}
                         kind={member.kind}
+                        avatarUrl={member.avatar_url}
                         className="member-avatar"
                         offline={offline}
                       />
@@ -633,6 +624,7 @@ export function MembersDialog({
                       <MemberAvatar
                         name={contact.name}
                         kind={contact.kind}
+                        avatarUrl={contact.avatar_url}
                         className="contact-avatar"
                       />
                       <span className="contact-name">{contact.name}</span>

@@ -1,5 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
+import { useEffect } from 'react';
 
+import { rememberActorAvatars } from '../lib/actor-avatars';
 import { ensureWebSession, type WebSession } from '../lib/identity';
 import type { McpError } from '../lib/mcp-client';
 import { queryKeys } from '../lib/query-keys';
@@ -55,6 +57,18 @@ export function useWebSession(): SessionState {
     gcTime: Infinity,
     retry: false,
   });
+
+  const identity = query.data?.identity;
+  useEffect(() => {
+    if (!identity) return;
+    rememberActorAvatars([
+      {
+        actor_id: identity.actor_id,
+        name: identity.name,
+        avatar_url: identity.avatar_url ?? null,
+      },
+    ]);
+  }, [identity]);
 
   if (query.data) {
     return { session: query.data, status: 'ready', error: null };

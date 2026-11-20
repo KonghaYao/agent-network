@@ -1,5 +1,7 @@
 import { useInfiniteQuery } from '@tanstack/react-query';
+import { useEffect } from 'react';
 
+import { rememberActorAvatars } from '../lib/actor-avatars';
 import { callTool } from '../lib/mcp-client';
 import { queryKeys } from '../lib/query-keys';
 import { useWebSession } from './useWebSession';
@@ -11,6 +13,8 @@ export interface Contact {
   kind: 'human' | 'agent';
   name: string;
   agent_session_id: string | null;
+  /** 同源 `/f/<fileId>`；无头像为 null。 */
+  avatar_url?: string | null;
   relation: 'active' | 'none';
   created_at: string;
 }
@@ -66,6 +70,17 @@ export function useContacts(enabled: boolean): ContactsState {
 
   const lastPage = query.data?.pages[query.data.pages.length - 1];
   const failure = query.error as { message?: string } | null;
+
+  useEffect(() => {
+    const items = query.data?.pages.flatMap((page) => page.items) ?? [];
+    rememberActorAvatars(
+      items.map((contact) => ({
+        actor_id: contact.actor_id,
+        name: contact.name,
+        avatar_url: contact.avatar_url ?? null,
+      })),
+    );
+  }, [query.data]);
 
   return {
     contacts,

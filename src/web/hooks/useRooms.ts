@@ -1,6 +1,7 @@
 import { useInfiniteQuery } from '@tanstack/react-query';
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 
+import { rememberActorAvatars } from '../lib/actor-avatars';
 import { callTool } from '../lib/mcp-client';
 import { queryKeys } from '../lib/query-keys';
 import { summarizeRoom, type RoomSummary, type RoomsPage } from '../lib/rooms';
@@ -65,6 +66,19 @@ export function useRooms(enabled = true): RoomsState {
 
   const lastPage = query.data?.pages[query.data.pages.length - 1];
   const failure = query.error as { message?: string } | null;
+
+  // direct 对端资料进入 actor 头像缓存；消息与 Task 摘要据此补图。
+  useEffect(() => {
+    rememberActorAvatars(
+      rooms
+        .filter((room) => room.peer_actor_id)
+        .map((room) => ({
+          actor_id: room.peer_actor_id!,
+          name: room.name,
+          avatar_url: room.peer_avatar_url ?? null,
+        })),
+    );
+  }, [rooms]);
 
   return {
     rooms,

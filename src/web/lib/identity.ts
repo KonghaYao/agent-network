@@ -24,6 +24,8 @@ export interface WebIdentity {
   pending_count: number;
   inbox_head_seq: string;
   created_at: string;
+  /** 同源 `/f/<fileId>`；无头像为 null 或字段缺失。 */
+  avatar_url?: string | null;
 }
 
 export interface WebSession {
@@ -214,6 +216,12 @@ export function ensureWebSession(): Promise<WebSession> {
       pending = null;
     });
   return pending;
+}
+
+/** 资料更新后就地修正默认身份缓存；刷新页面后 `network_me` 仍是权威来源。 */
+export function patchCachedIdentity(patch: Partial<WebIdentity>): void {
+  if (!cached) return;
+  cached = { ...cached, identity: { ...cached.identity, ...patch } };
 }
 
 /** 身份/token 变化后清空缓存；SPA Home 目前不主动切换身份。 */

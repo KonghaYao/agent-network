@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef } from 'react';
 
 import { LIMITS } from '../../contracts/limits';
 import { useActorStream, type ActorStreamEvent } from '../app/mcp/useActorStream';
+import { rememberActorAvatars } from '../lib/actor-avatars';
 import {
   mergeTimelineItems,
   nextOlderCursor,
@@ -277,6 +278,19 @@ export function useRoomChat(roomId: string) {
     queryFn: ({ signal }) =>
       callTool<RoomDetail>('network_room_get', { room_id: roomId }, { token: token ?? undefined, signal }),
   });
+
+  // 群成员/直聊对端资料进入 actor 头像缓存，供消息与 Task 摘要补图。
+  useEffect(() => {
+    const members = detailQuery.data?.members;
+    if (!members) return;
+    rememberActorAvatars(
+      members.map((member) => ({
+        actor_id: member.actor_id,
+        name: member.name,
+        avatar_url: member.avatar_url ?? null,
+      })),
+    );
+  }, [detailQuery.data?.members]);
 
   const historyQuery = useQuery<HistoryCache>({
     queryKey: historyKey,

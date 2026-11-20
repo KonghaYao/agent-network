@@ -33,6 +33,8 @@ export interface HistoryMessage {
   delivery_claimed_at: string | null;
   delivery_updated_at: string | null;
   sender_kind: ActorKind | null;
+  /** 发送者同源头像；旧响应或未知 actor 为 null/缺失。 */
+  sender_avatar_url?: string | null;
 }
 
 export interface PresenceItem {
@@ -76,6 +78,8 @@ export interface RoomMember {
   role: 'owner' | 'admin' | 'member';
   role_revision?: number;
   online: boolean | null;
+  /** 同源 `/f/<fileId>`；旧服务端缺失时按无头像处理。 */
+  avatar_url?: string | null;
   /** 服务端按调用者角色计算的成员操作；旧响应缺失时按不可操作处理。 */
   actions?: {
     can_remove: boolean;

@@ -1,5 +1,5 @@
 import { Tooltip } from '../../app/lenso-tooltip';
-import { Avatar, Button, Menu, LENSO_AVATAR_FILL } from '../../app/lenso-controls';
+import { Button, Menu } from '../../app/lenso-controls';
 import { ContextMenu, ContextMenuItem } from '../../app/lenso-context-menu';
 import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
@@ -18,9 +18,10 @@ import {
 import { copyText, extractFileCards } from '../../lib/files';
 import type { RoomFileItem } from '../../lib/files-ui';
 import { readFullMessage } from '../../lib/message-body';
-import { avatarColor, firstChar } from '../../lib/rooms';
+import { useActorAvatarRecord } from '../../lib/actor-avatars';
 import { useUpdateWriteBlocked } from '../../pwa/update-store';
 import { openAgentMemory, type AgentMemoryTarget } from '../memory/memory-store';
+import { ActorAvatar } from '../avatar/ActorAvatar';
 import { HumanBody } from './MessageBody';
 import { MarkdownIsland } from './MarkdownIsland';
 import { TaskSummaryBar } from '../tasks/TaskSummaryBar';
@@ -410,6 +411,12 @@ export const ChatMessage = memo(function ChatMessage({
   const mine = item.sender_id === identityId;
   const agent = isAgentMessage(item, members);
   const name = senderName(item.sender_id, members, identityName, identityId);
+  const cachedSender = useActorAvatarRecord(item.sender_id);
+  const senderAvatarUrl =
+    item.sender_avatar_url ??
+    cachedSender?.avatar_url ??
+    members.get(item.sender_id)?.avatar_url ??
+    null;
   const truncated = item.body_bytes > messageBodyBytes(item.preview);
   const longBody = item.body_bytes >= LIMITS.webLongMessageCollapseBytes;
   const autoEligible =
@@ -522,13 +529,11 @@ export const ChatMessage = memo(function ChatMessage({
           data-message-preview={item.preview}
           ref={rowRef}
         >
-          <span
+          <ActorAvatar
             className="msg-avatar"
-            aria-hidden="true"
-            style={{ background: avatarColor(mine ? identityName : name) }}
-          >
-            <Avatar style={LENSO_AVATAR_FILL}>{firstChar(mine ? identityName : name)}</Avatar>
-          </span>
+            name={mine ? identityName : name}
+            avatarUrl={senderAvatarUrl}
+          />
           <div className="msg-content">
             {!mine && room.kind === 'group' ? <div className="msg-sender">{name}</div> : null}
             <Tooltip as="div"

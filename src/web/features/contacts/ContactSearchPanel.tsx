@@ -8,12 +8,14 @@ import { queryKeys } from '../../lib/query-keys';
 import { newRequestId } from '../../lib/request-id';
 import { friendInviteUpdateBusy, setUpdateBusy } from '../../pwa/update-busy';
 import { useUpdateWriteBlocked } from '../../pwa/update-store';
+import { ActorAvatar } from '../avatar/ActorAvatar';
 
 interface SearchActor {
   actor_id: string;
   kind: 'human' | 'agent';
   name: string;
   agent_session_id?: string | null;
+  avatar_url?: string | null;
 }
 
 interface SearchItem {
@@ -216,6 +218,15 @@ export function ContactSearchPanel({
           const active = item.relation === 'active';
           return (
             <li className="contact-search-item" key={item.actor.actor_id}>
+              <ActorAvatar
+                className="contact-search-avatar"
+                name={item.actor.name}
+                avatarUrl={item.actor.avatar_url}
+                kind={item.actor.kind}
+                brandFallback
+                size={24}
+                radius={5}
+              />
               <div className="contact-search-main">
                 <p className="contact-search-heading">
                   <strong className="contact-search-name">{item.actor.name}</strong>

@@ -18,6 +18,7 @@ export interface AgentSummary {
   archived_at: string | null;
   archived_by: string | null;
   disabled: boolean;
+  avatar_url?: string | null;
 }
 
 interface AgentsGetResult {
@@ -28,6 +29,7 @@ interface AgentsGetResult {
 export interface ArchivedAgent {
   actor_id: string;
   name: string;
+  avatar_url: string | null;
   archived_at: number;
 }
 
@@ -76,6 +78,16 @@ export function useArchivedAgents(enabled: boolean): ArchivedAgentsState {
     return map;
   }, [rooms.rooms]);
 
+  const avatars = useMemo(() => {
+    const map = new Map<string, string | null>();
+    for (const room of rooms.rooms) {
+      if (room.peer_actor_id && !map.has(room.peer_actor_id)) {
+        map.set(room.peer_actor_id, room.peer_avatar_url ?? null);
+      }
+    }
+    return map;
+  }, [rooms.rooms]);
+
   const query = useQuery({
     queryKey: queryKeys.archivedAgents(actorId, ids),
     enabled: enabled && Boolean(token) && ids.length > 0,
@@ -95,6 +107,7 @@ export function useArchivedAgents(enabled: boolean): ArchivedAgentsState {
       archived.push({
         actor_id: item.actor_id,
         name: item.name || names.get(item.actor_id) || 'Agent',
+        avatar_url: item.avatar_url ?? avatars.get(item.actor_id) ?? null,
         archived_at: Number(item.archived_at) || 0,
       });
     }
@@ -102,7 +115,7 @@ export function useArchivedAgents(enabled: boolean): ArchivedAgentsState {
       if (right.archived_at !== left.archived_at) return right.archived_at - left.archived_at;
       return left.name.localeCompare(right.name);
     });
-  }, [names, query.data]);
+  }, [names, avatars, query.data]);
 
   const roomsFetching = useIsFetching({
     queryKey: queryKeys.rooms(actorId),

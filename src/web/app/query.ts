@@ -1,5 +1,7 @@
 import { QueryClient } from '@tanstack/react-query';
 
+import { clearActorAvatars } from '../lib/actor-avatars';
+
 /**
  * 服务端状态缓存。
  *
@@ -25,4 +27,5 @@ export const queryClient = new QueryClient({
 /** 退出登录/切换身份：丢弃上一个 actor 的缓存。 */
 export function clearQueryCache(): void {
   queryClient.clear();
+  clearActorAvatars();
 }

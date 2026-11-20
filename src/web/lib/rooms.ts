@@ -15,6 +15,7 @@ export interface RawRoomPeer {
   name: string;
   kind: ActorKind;
   online: boolean | null;
+  avatar_url?: string | null;
 }
 
 export interface RawRoom {
@@ -46,6 +47,8 @@ export interface RoomSummary {
   /** direct 对端 actor_id；归档浮层籍此批量读取管理摘要。 */
   peer_actor_id: string | null;
   peer_online: boolean | null;
+  /** direct 对端头像；群聊与旧服务端为 null。 */
+  peer_avatar_url?: string | null;
   head_seq: string;
   my_last_read_seq: string;
   last_message: { preview: string; created_at: string } | null;
@@ -71,6 +74,7 @@ export function summarizeRoom(entry: RawRoom): RoomSummary {
     peer_kind: peerKind,
     peer_actor_id: peer?.actor_id ?? null,
     peer_online: peerKind === 'agent' ? (peer?.online ?? null) : null,
+    peer_avatar_url: peer?.avatar_url ?? null,
     head_seq: entry.head_seq,
     my_last_read_seq: entry.my_last_read_seq,
     last_message: entry.last_message,

@@ -1,13 +1,12 @@
 import { Tooltip } from '../../app/lenso-tooltip';
 import { lazy, Suspense, useState } from 'react';
 
-import { Avatar, Button, LENSO_AVATAR_FILL } from '../../app/lenso-controls';
+import { Button } from '../../app/lenso-controls';
 import { Link } from '../../app/router';
 import { useWebSession } from '../../hooks/useWebSession';
-import { accountAvatarFor } from '../../lib/agent-avatar';
 import type { WebIdentity } from '../../lib/identity';
 import { openInstallGuide } from '../../pwa/install-guide-store';
-import { avatarColor, firstChar } from '../../lib/rooms';
+import { ActorAvatar } from '../avatar/ActorAvatar';
 import { AgentAvatarMenu } from '../memory/AgentAvatarMenu';
 import { ArchiveAgentsDialog } from '../overlays/ArchiveAgentsDialog';
 import { DeviceHandoffDialog } from '../overlays/DeviceHandoffDialog';
@@ -77,43 +76,20 @@ function LogoutIcon() {
 }
 
 /**
- * 账号头像：首字 + 名称色，命中本地品牌规则时叠加图片。
+ * 账号头像：上传图片优先，其次本地品牌图标，最后名称色首字。
  *
- * 与 legacy 一致，图片加载失败时回退首字，不显示破图。
+ * 图片加载失败时由 `ActorAvatar` 移除图片并回退首字，不显示破图。
  */
 function AccountAvatar({ me }: { me: WebIdentity | null }) {
-  const [failedName, setFailedName] = useState<string | null>(null);
-  const spec = me ? accountAvatarFor(me.name, me.kind) : null;
-  const showImage = spec !== null && failedName !== me?.name;
-  const className = [
-    'account-avatar',
-    showImage ? 'avatar-icon' : '',
-    showImage && spec.mono ? 'avatar-mono' : '',
-  ]
-    .filter(Boolean)
-    .join(' ');
-
   return (
-    <span
-      className={className}
+    <ActorAvatar
       id="account-avatar"
-      aria-hidden="true"
-      data-brand={showImage ? spec.brand : undefined}
-      style={me && !showImage ? { background: avatarColor(me.name) } : undefined}
-    >
-      <Avatar style={LENSO_AVATAR_FILL}>
-        {me ? firstChar(me.name) : '?'}
-      </Avatar>
-      {showImage ? (
-        <img
-          className="avatar-img"
-          src={spec.src}
-          alt=""
-          decoding="async"
-          onError={() => setFailedName(me?.name ?? null)}
-        />
-      ) : null}
-    </span>
+      className="account-avatar"
+      name={me?.name ?? '?'}
+      avatarUrl={me?.avatar_url}
+      kind={me?.kind}
+      brandFallback={Boolean(me)}
+    />
   );
 }
 

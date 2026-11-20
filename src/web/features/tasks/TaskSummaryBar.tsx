@@ -1,6 +1,5 @@
 import { Tooltip } from '../../app/lenso-tooltip';
 import {
-  Avatar,
   AvatarGroup,
   Badge,
   Button,
@@ -12,26 +11,19 @@ import { useQuery } from '@tanstack/react-query';
 import type { CSSProperties } from 'react';
 
 import { useWebSession } from '../../hooks/useWebSession';
+import { useActorAvatarMap } from '../../lib/actor-avatars';
 import { receiptStatus, type HistoryMessage } from '../../lib/chat';
 import { callTool } from '../../lib/mcp-client';
 import { queryKeys } from '../../lib/query-keys';
-import { avatarColor, firstChar } from '../../lib/rooms';
+import { ActorAvatar } from '../avatar/ActorAvatar';
 
 const TASK_AVATAR_GROUP = { '--avatar-group-overlap': '6px' } as CSSProperties;
 
-function taskAvatarStyle(name: string): CSSProperties {
-  return {
-    width: 20,
-    height: 20,
-    boxSizing: 'border-box',
-    borderRadius: '50%',
-    background: avatarColor(name),
-    color: '#fff',
-    fontSize: 11,
-    fontWeight: 500,
-    boxShadow: '0 0 0 2px var(--wx-panel)',
-  };
-}
+const TASK_AVATAR_STYLE: CSSProperties = {
+  color: '#fff',
+  fontWeight: 500,
+  boxShadow: '0 0 0 2px var(--wx-panel)',
+};
 
 export interface TaskSummary {
   root_message_id: string;
@@ -39,7 +31,7 @@ export interface TaskSummary {
   preview: string;
   message_count: number;
   participant_count: number;
-  participants: { actor_id: string; name: string }[];
+  participants: { actor_id: string; name: string; avatar_url?: string | null }[];
 }
 
 interface SummaryPage {
@@ -65,6 +57,7 @@ export function TaskSummaryBar({
 }) {
   const session = useWebSession();
   const token = session.session?.token ?? null;
+  const actorAvatars = useActorAvatarMap();
   const marked = item.task_root_id === item.message_id;
   const summaryQuery = useQuery({
     queryKey: queryKeys.taskSummary(roomId, item.message_id, headSeq),
@@ -107,13 +100,21 @@ export function TaskSummaryBar({
         <span className="task-bar-avatars">
           <AvatarGroup overlap="ring" style={TASK_AVATAR_GROUP}>
             {participants.map((participant) => (
-              <Tooltip as={Avatar}
+              <Tooltip as={ActorAvatar}
                 key={participant.actor_id}
                 hint={participant.name}
-                style={taskAvatarStyle(participant.name)}
-              >
-                {firstChar(participant.name)}
-              </Tooltip>
+                name={participant.name}
+                avatarUrl={
+                  participant.avatar_url ??
+                  actorAvatars.get(participant.actor_id)?.avatar_url ??
+                  null
+                }
+                size={20}
+                shape="circle"
+                fontSize={11}
+                data-lenso-slot="avatar"
+                style={TASK_AVATAR_STYLE}
+              />
             ))}
           </AvatarGroup>
           {more > 0 ? (

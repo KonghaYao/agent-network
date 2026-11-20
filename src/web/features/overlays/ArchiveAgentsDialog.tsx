@@ -10,7 +10,7 @@ import { useWebSession } from '../../hooks/useWebSession';
 import { callTool } from '../../lib/mcp-client';
 import { queryKeys } from '../../lib/query-keys';
 import { newRequestId } from '../../lib/request-id';
-import { avatarColor, firstChar } from '../../lib/rooms';
+import { ActorAvatar } from '../avatar/ActorAvatar';
 import { confirmDialog } from './confirm';
 
 /**
@@ -124,13 +124,12 @@ export function ArchiveAgentsDialog({
                   key={item.actor_id}
                   data-actor-id={item.actor_id}
                 >
-                  <span
+                  <ActorAvatar
                     className="avatar archive-avatar"
-                    style={{ background: avatarColor(item.name) }}
-                    aria-hidden="true"
-                  >
-                    {firstChar(item.name)}
-                  </span>
+                    name={item.name}
+                    avatarUrl={item.avatar_url}
+                    kind="agent"
+                  />
                   <Tooltip as="span" className="archive-name" hint={item.name}>
                     {item.name}
                   </Tooltip>

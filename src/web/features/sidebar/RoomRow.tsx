@@ -5,14 +5,13 @@ import { Link } from '../../app/router';
 import { groupColorFor, groupColorStyle } from '../../lib/group-colors';
 import { isOfflineAgent } from '../../lib/presence';
 import {
-  avatarColor,
-  firstChar,
   groupAvatarLabel,
   isUnread,
   relativeTime,
   type RoomSummary,
 } from '../../lib/rooms';
 import { roomPreference, type RoomPreferenceMap } from '../../lib/room-preferences';
+import { ActorAvatar } from '../avatar/ActorAvatar';
 import { RoomRowMenu } from './RoomRowMenu';
 
 /**
@@ -57,7 +56,11 @@ export function RoomRow({
             {room.kind === 'group' ? (
               <GroupAvatar name={room.name} roomId={room.room_id} />
             ) : (
-              <RoomAvatar name={room.name} offline={offline} />
+              <RoomAvatar
+                name={room.name}
+                avatarUrl={room.peer_avatar_url}
+                offline={offline}
+              />
             )}
             {offline ? (
               <Tooltip as="span"
@@ -102,16 +105,22 @@ export function RoomRow({
   );
 }
 
-function RoomAvatar({ name, offline }: { name: string; offline: boolean }) {
+function RoomAvatar({
+  name,
+  avatarUrl,
+  offline,
+}: {
+  name: string;
+  avatarUrl?: string | null;
+  offline: boolean;
+}) {
   return (
-    <span
+    <ActorAvatar
       className="avatar"
-      aria-hidden="true"
-      data-presence={offline ? 'offline' : undefined}
-      style={{ background: avatarColor(name) }}
-    >
-      <Avatar style={LENSO_AVATAR_FILL}>{firstChar(name)}</Avatar>
-    </span>
+      name={name}
+      avatarUrl={avatarUrl}
+      offline={offline}
+    />
   );
 }
 
