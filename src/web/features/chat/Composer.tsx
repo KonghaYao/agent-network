@@ -318,6 +318,7 @@ export function Composer({
   const updateState = useUpdateState();
   const updateAvailable =
     updateState.phase === 'available' || updateState.phase === 'incompatible';
+  const online = typeof navigator === 'undefined' || navigator.onLine !== false;
   const drawboardOpening = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const textRef = useRef(text);
@@ -1015,7 +1016,7 @@ export function Composer({
               >
                 重试
               </Button>
-              {updateAvailable ? (
+              {updateAvailable && online ? (
                 <Button
                   type="button"
                   id="drawboard-update-retry"

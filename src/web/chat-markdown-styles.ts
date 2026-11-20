@@ -58,6 +58,9 @@ export const MARKDOWN_STYLE = `
   .msg-markdown .md-fallback-note, .bubble .md-unavailable {
     display: block; margin-top: 4px; font-size: 11px; line-height: 1.4;
     color: var(--wx-muted); font-weight: 400; font-style: normal; }
+  .msg-markdown .md-unavailable-actions { display: flex; flex-wrap: wrap;
+    gap: 8px; margin-top: 6px; }
+  .msg-markdown .md-unavailable-actions button { min-height: 32px; }
 
   /* 大段 base64：紧凑区块，默认 3 行预览 + 渐隐；展开后限高滚动。 */
   .msg-base64 { box-sizing: border-box; max-width: 100%; margin: 8px 0;

@@ -37,6 +37,7 @@ import {
   type VersionFetch,
   type WebVersionInfo,
 } from '../src/web/pwa/version';
+import { BOOT_ERROR_MARKUP, BOOT_ERROR_SCRIPT, renderSpaShell } from '../src/web/spa-shell';
 import { check, checkEqual, checksPassed } from './lib/harness';
 
 class MemoryStorage implements SnapshotStorage {
@@ -387,7 +388,36 @@ async function main(): Promise<void> {
   await verifyFetch();
   verifyBusy();
   verifySnapshots();
+  verifyBootShell();
   if (!checksPassed()) process.exit(1);
+}
+
+function verifyBootShell(): void {
+  check('壳级错误页有独立容器', BOOT_ERROR_MARKUP.includes('id="web-boot-error"'));
+  check('壳级错误页有重试按钮', BOOT_ERROR_MARKUP.includes('id="web-boot-retry"'));
+  check('壳级错误页默认隐藏', BOOT_ERROR_MARKUP.includes('hidden'));
+  check('壳级脚本不读取 localStorage', !BOOT_ERROR_SCRIPT.includes('localStorage'));
+  check('壳级脚本不读取 sessionStorage', !BOOT_ERROR_SCRIPT.includes('sessionStorage'));
+  check('壳级脚本不请求网络', !BOOT_ERROR_SCRIPT.includes('fetch('));
+  check('壳级脚本不自动刷新', !/setTimeout|setInterval/u.test(BOOT_ERROR_SCRIPT));
+  check('壳级脚本保留手动重试', BOOT_ERROR_SCRIPT.includes('location.reload()'));
+
+  const html = renderSpaShell('home', {
+    entry: '/static/assets/main-test.js',
+    css: [],
+    buildId: 'sha256:page',
+    webContract: 1,
+  });
+  const root = html.indexOf('<div id="root">');
+  const rootEnd = html.indexOf('</div>', root);
+  const boot = html.indexOf('id="web-boot-error"');
+  const bootScript = html.indexOf('window.__webBootOk');
+  const moduleScript = html.indexOf('<script type="module"');
+  check('错误页在 #root 外', rootEnd > 0 && boot > rootEnd);
+  check('错误脚本先于入口模块', bootScript > 0 && bootScript < moduleScript);
+  check('壳内包含独立错误样式', html.includes('.web-boot-error'));
+  check('入口模块仍由服务端输出', html.includes('src="/static/assets/main-test.js"'));
+  check('错误页不占用 #spa-bootstrap', !BOOT_ERROR_MARKUP.includes('spa-bootstrap'));
 }
 
 await main();

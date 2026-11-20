@@ -34,6 +34,7 @@ let serverLog = '';
 let releaseA = '';
 let releaseB = '';
 let fixture: Awaited<ReturnType<typeof createComponentRoom>>;
+let agentRoomId = '';
 
 function runBun(args: string[]): string {
   const result = spawnSync('bun', args, {
@@ -213,11 +214,40 @@ test.beforeAll(async () => {
   ]);
   releaseB = buildIdFrom(b);
   if (releaseA === releaseB) throw new Error('A/B buildId 相同');
+  console.log(`[pwa-update] A=${releaseA} B=${releaseB}`);
 
   port = await reservePort();
   base = `http://127.0.0.1:${port}`;
   await startServer();
   fixture = await createComponentRoom(base);
+  const agent = await callTool<{ actor_id: string; token: string }>(
+    base,
+    fixture.tokenA,
+    'network_agent_create',
+    {
+      request_id: requestId('pwa_update_agent'),
+      name: `PWA 资源 Agent ${crypto.randomUUID().slice(0, 6)}`,
+    },
+  );
+  const agentRoom = await callTool<{ room: { room_id: string } }>(
+    base,
+    fixture.tokenA,
+    'network_room_create',
+    {
+      request_id: requestId('pwa_update_agent_room'),
+      kind: 'group',
+      title: `PWA 资源群 ${crypto.randomUUID().slice(0, 6)}`,
+      members: [agent.actor_id],
+    },
+  );
+  agentRoomId = agentRoom.room.room_id;
+  await callTool(base, agent.token, 'network_message_send', {
+    request_id: requestId('pwa_update_agent_msg'),
+    client_message_id: requestId('pwa_update_agent_client'),
+    room_id: agentRoomId,
+    body: '**资源加载失败也要保留这条 Markdown 正文**',
+    invoke: [],
+  });
 });
 
 test.afterAll(async () => {
@@ -397,6 +427,111 @@ test('配对等待确认时阻止刷新', async ({ page }) => {
     pairing_id: pairing.pairing_id,
     reason: 'e2e cleanup',
   }).catch(() => undefined);
+});
+
+test('Markdown 加载失败保留正文并可重试/更新后重试', async ({ page }) => {
+  await page.route('**/static/assets/chat-markdown-*', (route) =>
+    route.fulfill({
+      status: 404,
+      headers: { 'content-type': 'text/javascript', 'cache-control': 'no-store' },
+      body: 'not found',
+    }),
+  );
+  await login(page, base, fixture.tokenA);
+  await page.goto(`${base}/c/${agentRoomId}`);
+  await expect(page.locator('.md-unavailable')).toContainText('Markdown 渲染不可用');
+  await expect(page.locator('.md-fallback')).toContainText('资源加载失败也要保留这条 Markdown 正文');
+  await expect(page.locator('#markdown-retry')).toBeVisible();
+
+  await routeVersion(page, fakeVersion());
+  await forceCheck(page);
+  await expect(page.locator('#markdown-update-retry')).toBeVisible();
+});
+
+test('画板加载失败保留草稿并允许取消/更新后重试', async ({ page }) => {
+  await page.route('**/static/assets/chat-drawboard-*', (route) =>
+    route.fulfill({
+      status: 404,
+      headers: { 'content-type': 'text/javascript', 'cache-control': 'no-store' },
+      body: 'not found',
+    }),
+  );
+  await openRoom(page);
+  await page.locator('#body').fill('画板失败前的草稿');
+  await routeVersion(page, fakeVersion());
+  await forceCheck(page);
+  await expect(page.locator('#pwa-update-notice')).toBeVisible();
+
+  await page.locator('#attach-file').click();
+  await page.locator('#attach-menu-draw').click();
+  const dialog = page.locator('[data-drawboard-fallback="error"]');
+  await expect(dialog).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('#drawboard-update-retry')).toBeVisible();
+  await expect(page.locator('#body')).toHaveValue('画板失败前的草稿');
+  await page.locator('#drawboard-error-close').click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator('#body')).toHaveValue('画板失败前的草稿');
+});
+
+test('入口 JS 404 显示独立壳级错误页且不刷新循环', async ({ page }) => {
+  const html = await (await fetch(`${base}/`)).text();
+  const entry = /<script type="module" src="([^"]+)"/u.exec(html)?.[1];
+  expect(entry).toBeTruthy();
+  await page.route(`**${entry!}`, (route) =>
+    route.fulfill({
+      status: 404,
+      headers: { 'content-type': 'text/javascript', 'cache-control': 'no-store' },
+      body: 'not found',
+    }),
+  );
+  let navigations = 0;
+  page.on('framenavigated', () => {
+    navigations += 1;
+  });
+  await page.goto(`${base}/`);
+  const panel = page.locator('#web-boot-error');
+  await expect(panel).toBeVisible({ timeout: 15_000 });
+  await expect(panel).toContainText('资源加载失败');
+  await expect(page.locator('#web-boot-retry')).toBeVisible();
+  expect(await page.locator('#root').evaluate((node) => node.childElementCount)).toBe(0);
+  await page.waitForTimeout(1_000);
+  expect(navigations).toBe(1);
+});
+
+async function failChatPageNavigation(page: Page): Promise<void> {
+  await page.route('**/static/assets/ChatPage-*', (route) => route.abort());
+  await login(page, base, fixture.tokenA);
+  await page.goto(`${base}/`);
+  const link = page.locator(
+    `#room-list a.room-item[href="/c/${encodeURIComponent(fixture.roomId)}"]`,
+  );
+  await expect(link).toBeVisible();
+  await link.click();
+}
+
+test('同版路由 chunk 失败停在重新加载错误页', async ({ page }) => {
+  const build = releaseA;
+  await routeVersion(page, fakeVersion({ buildId: build }));
+  await failChatPageNavigation(page);
+  await expect(page.locator('#route-load-error')).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('#route-load-retry')).toHaveText('重新加载');
+  expect(await pageBuildId(page)).toBe(build);
+});
+
+test('版本不同时路由 chunk 失败提供更新后重试且不自动刷新', async ({ page }) => {
+  await routeVersion(page, fakeVersion());
+  let navigations = 0;
+  page.on('framenavigated', () => {
+    navigations += 1;
+  });
+  await failChatPageNavigation(page);
+  await expect(page.locator('#route-load-error')).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('#route-load-retry')).toHaveText('更新后重试');
+  await page.waitForTimeout(600);
+  const after = navigations;
+  await page.waitForTimeout(400);
+  expect(navigations).toBe(after);
+  expect(await pageBuildId(page)).toBe(releaseA);
 });
 
 test('真实 A/B：旧页提示、点击后加载 B 并恢复草稿', async ({ page }) => {
