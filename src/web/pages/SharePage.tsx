@@ -4,7 +4,9 @@ import { useState } from 'react';
 import type { PublicShareActor } from '../app/bootstrap';
 import { Link, navigate } from '../app/router';
 import { callTool, type McpError } from '../lib/mcp-client';
-import { browserToken, newRequestId } from '../lib/token-handoff';
+import { browserToken, currentToken, newRequestId } from '../lib/token-handoff';
+import { isMobileDevice } from '../pwa/install';
+import { InstallGuideDialog } from '../pwa/InstallGuideDialog';
 
 interface SharePageProps {
   actor: PublicShareActor | null;
@@ -40,10 +42,16 @@ function ValidSharePage({ actor }: { actor: PublicShareActor }) {
   const [error, setError] = useState(false);
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState(false);
+  const [installOpen, setInstallOpen] = useState(false);
   const sessionId = actor.agent_session_id ?? '';
 
   async function addFriend() {
     if (busy || pending) return;
+    // 手机无本地凭据：先展示安装/配对引导，不在引导前注册访客。
+    if (isMobileDevice() && !currentToken()) {
+      setInstallOpen(true);
+      return;
+    }
     setBusy(true);
     setError(false);
     setStatus('正在发送好友申请…');
@@ -107,54 +115,57 @@ function ValidSharePage({ actor }: { actor: PublicShareActor }) {
   }
 
   return (
-    <main>
-      <div className="share-head">
-        <div className="share-avatar" aria-hidden="true">
-          {initialOf(actor.name)}
+    <>
+      <main>
+        <div className="share-head">
+          <div className="share-avatar" aria-hidden="true">
+            {initialOf(actor.name)}
+          </div>
+          <h1>{actor.name}</h1>
+          <p className="muted">WeBots</p>
         </div>
-        <h1>{actor.name}</h1>
-        <p className="muted">WeBots</p>
-      </div>
-      <p className="share-lead">发送好友申请；对方确认后才建立好友关系与单聊。</p>
-      <div className="row share-actions">
-        <Button
-          className="primary"
-          id="add"
-          type="button"
-          disabled={busy || pending}
-          onClick={() => {
-            void addFriend();
-          }}
-        >
-          {pending ? '好友申请待确认' : '发送好友申请'}
-        </Button>
-        <Button
-          id="copy"
-          type="button"
-          onClick={() => {
-            void copyActorId();
-          }}
-        >
-          复制 ID
-        </Button>
-      </div>
-      <p id="status" role="status" data-error={error ? '1' : undefined}>
-        {status}
-      </p>
-      <details>
-        <summary>身份与手动添加</summary>
-        <p>
-          actor_id：<code id="actor-id">{actor.actor_id}</code>
+        <p className="share-lead">发送好友申请；对方确认后才建立好友关系与单聊。</p>
+        <div className="row share-actions">
+          <Button
+            className="primary"
+            id="add"
+            type="button"
+            disabled={busy || pending}
+            onClick={() => {
+              void addFriend();
+            }}
+          >
+            {pending ? '好友申请待确认' : '发送好友申请'}
+          </Button>
+          <Button
+            id="copy"
+            type="button"
+            onClick={() => {
+              void copyActorId();
+            }}
+          >
+            复制 ID
+          </Button>
+        </div>
+        <p id="status" role="status" data-error={error ? '1' : undefined}>
+          {status}
         </p>
-        <p>
-          会话：<code>{sessionId}</code>
-        </p>
-        <pre>{`network_contact_request {
+        <details>
+          <summary>身份与手动添加</summary>
+          <p>
+            actor_id：<code id="actor-id">{actor.actor_id}</code>
+          </p>
+          <p>
+            会话：<code>{sessionId}</code>
+          </p>
+          <pre>{`network_contact_request {
   "request_id": "<唯一 id>",
   "agent_session_id": "${sessionId}"
 }`}</pre>
-      </details>
-    </main>
+        </details>
+      </main>
+      <InstallGuideDialog open={installOpen} onOpenChange={setInstallOpen} />
+    </>
   );
 }
 

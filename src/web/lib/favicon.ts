@@ -10,10 +10,10 @@ import { badgeLabel } from './tab-badge';
 
 const ICON_SIZE = 64;
 const BADGE_COLOR = '#ff383c';
-const BASE_COLOR = '#007aff';
+const BASE_COLOR = '#07C160';
 
 /**
- * 基础图标：Lenso 系统蓝圆角方块 + 白色对话气泡。
+ * 基础图标：WeBots 品牌绿圆角方块 + 白色对话气泡。
  *
  * 同时供服务端 `<link rel="icon">` 与客户端 canvas 底图使用，保证恢复后
  * 的图标与有红点时完全一致。
@@ -69,7 +69,7 @@ function drawFallbackBase(context: CanvasRenderingContext2D): void {
 async function drawBase(context: CanvasRenderingContext2D): Promise<void> {
   try {
     const image = new Image();
-    image.src = BASE_FAVICON_HREF;
+    image.src = baseFavicon(document);
     if (typeof image.decode === 'function') {
       await image.decode();
     } else {

@@ -2,9 +2,11 @@ import { Tooltip } from '../../app/lenso-tooltip';
 import { lazy, Suspense, useState } from 'react';
 
 import { Avatar, Button, LENSO_AVATAR_FILL } from '../../app/lenso-controls';
+import { Link } from '../../app/router';
 import { useWebSession } from '../../hooks/useWebSession';
 import { accountAvatarFor } from '../../lib/agent-avatar';
 import type { WebIdentity } from '../../lib/identity';
+import { openInstallGuide } from '../../pwa/install-guide-store';
 import { avatarColor, firstChar } from '../../lib/rooms';
 import { AgentAvatarMenu } from '../memory/AgentAvatarMenu';
 import { ArchiveAgentsDialog } from '../overlays/ArchiveAgentsDialog';
@@ -185,6 +187,22 @@ export function SidebarAccount({ me }: { me: WebIdentity | null }) {
               </Tooltip>
             ) : null}
           </div>
+          {!me && session.status === 'pairing-required' ? (
+            <div className="account-actions account-guest-actions">
+              <Link className="account-scan" id="account-pair" to="/pair">
+                连接已有账号
+              </Link>
+              <Button
+                className="account-scan"
+                id="account-install-guide"
+                type="button"
+                variant="borderless"
+                onClick={openInstallGuide}
+              >
+                安装 WeBots
+              </Button>
+            </div>
+          ) : null}
           {me ? (
             <div className="account-actions">
               <Button

@@ -8,3 +8,5 @@
 declare const __WEB_MARKDOWN_URL__: string;
 declare const __WEB_DRAWBOARD_URL__: string;
 declare const __WEB_BUILD_NONCE__: string;
+/** 生产构建为 true；开发服务器为 false。 */
+declare const __WEB_PRODUCTION__: boolean;

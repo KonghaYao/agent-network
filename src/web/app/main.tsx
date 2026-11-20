@@ -22,6 +22,9 @@ import { ChatRouteFallback } from './ChatRouteFallback';
 import { HomePage } from '../pages/HomePage';
 import { JoinPage } from '../pages/JoinPage';
 import { SharePage } from '../pages/SharePage';
+import { InstallGuideHost } from '../pwa/InstallGuideHost';
+import { initInstallPrompt } from '../pwa/install';
+import { registerServiceWorker } from '../pwa/register';
 
 /**
  * `/pair` 只在直接访问或从首页跳转时使用；拆出入口 chunk 后，普通会话
@@ -125,11 +128,13 @@ function App({ bootstrap }: { bootstrap: SpaBootstrap | null }) {
       {appRoute ? <TabUnreadBadge baseTitle={baseTitle} /> : null}
       <ConfirmHost />
       <AgentMemoryDialogHost />
+      {appRoute ? <InstallGuideHost appRoute /> : null}
     </>
   );
 }
 
 const bootstrap = readSpaBootstrap();
+initInstallPrompt();
 // 发布构建的 nonce 只用于支持诊断；不参与权限或业务判断。
 if (typeof __WEB_BUILD_NONCE__ === 'string' && __WEB_BUILD_NONCE__.length > 0) {
   document.documentElement.dataset.webBuild = __WEB_BUILD_NONCE__;
@@ -149,3 +154,6 @@ if (root) {
     createRoot(root).render(app);
   }
 }
+
+// 首屏渲染后再等待 load/idle 注册，不与入口脚本、字体和首屏查询竞争。
+registerServiceWorker();

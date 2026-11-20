@@ -794,6 +794,11 @@ export function ChatPage({ roomId }: ChatPageProps) {
                     <Link id="chat-error-back" to="/">
                       返回会话列表
                     </Link>
+                    {!identity ? (
+                      <Link id="chat-error-pair" to="/pair">
+                        连接已有账号
+                      </Link>
+                    ) : null}
                   </div>
                 </Alert>
                 {ready && room && identity ? (
