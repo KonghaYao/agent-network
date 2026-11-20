@@ -236,6 +236,23 @@ export function roomStreamItems(
       }
       return result;
     }
+    case 'message_pinned':
+    case 'message_unpinned': {
+      // 置顶变化只是房间级小提示：不含正文/预览，不推进 head、不制造未读。
+      const changedBy = stringField(metadata, 'changed_by');
+      const change = row.event_type === 'message_pinned' ? 'pinned' : 'unpinned';
+      for (const member of activeRecipients(members, eventSeq)) {
+        const item = withLocation(
+          baseItem(row, 'room.pins', 'room', 'informational'),
+          row,
+          metadata,
+        );
+        item.change = change;
+        if (changedBy) item.changed_by = changedBy;
+        result.push({ actorId: member.actor_id, item });
+      }
+      return result;
+    }
     case MESSAGE_TASK_MARKED_EVENT:
     case MESSAGE_TASK_UNMARKED_EVENT:
     case MESSAGE_TASK_COMPLETED_EVENT: {

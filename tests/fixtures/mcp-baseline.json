@@ -1,8 +1,8 @@
 {
   "version": 1,
   "protocolVersion": "2026-07-28",
-  "toolCount": 142,
-  "toolsetSha256": "17dbb0e80ed7511714458c8b4cf0e15196db40ae4c5677cee58e0953cddbd334",
+  "toolCount": 143,
+  "toolsetSha256": "2de6567ba2e92ce0fa3e125f81f1a89ce2236f743b4f79c78fb82b1d6499e176",
   "instructionsSha256": "ec26290a0a6cbe945cdcad7dc8d860207013de90817b700422d26c8214e577e8",
   "frames": [
     {
@@ -206,9 +206,9 @@
       },
       "response": {
         "result": {
-          "toolCount": 142,
-          "toolset_sha256": "17dbb0e80ed7511714458c8b4cf0e15196db40ae4c5677cee58e0953cddbd334",
-          "listing_sha256": "38c70caf919aff22888ef8145101d9122394fe0a4c1deb23872f81c1eece37ce",
+          "toolCount": 143,
+          "toolset_sha256": "2de6567ba2e92ce0fa3e125f81f1a89ce2236f743b4f79c78fb82b1d6499e176",
+          "listing_sha256": "6aa677c44e2b22ef18be5fb3435d460907f2e7caf0becca84d9b4bd5ce115e05",
           "tools": [
             {
               "name": "network_issue_token",
@@ -444,15 +444,15 @@
             },
             {
               "name": "network_room_create",
-              "digest": "279093389e3659d6c20cd68bd81c11f12469f1eb491adb8e7deacce3cc00b62e"
+              "digest": "30f9f356258a5a1b6cd373cb17d2c5bf3b2bb25511d011568abf9eb37a20ad92"
             },
             {
               "name": "network_rooms_list",
-              "digest": "04eff5704e69f87d2ea186b5db3aae162d9582a2c1b78310242edffe062149f0"
+              "digest": "59fd6d9485008dc86b5b66f8f3204a3e34535787cd4cfe3871f35ca7737a64d6"
             },
             {
               "name": "network_room_get",
-              "digest": "2bebff711f308ddc2d728c6fd06f3b12a28b3b6a6a3ce1ca8e3e76c53a1745de"
+              "digest": "a2678fb7d642874ff07b39d078c1118230c070b0c3ecba6d5de2dadc9a93727b"
             },
             {
               "name": "network_room_invite_get",
@@ -488,47 +488,47 @@
             },
             {
               "name": "network_room_members_update",
-              "digest": "c8fec707bba72d0aa34eb2f22a45a7035591690a5c0e10124e628439b34f3466"
+              "digest": "2eb3bea93373d685c74b103513489882f9ce7386f424812e724d4053e394589d"
             },
             {
               "name": "network_room_role_set",
-              "digest": "72dd9e187a0994656a46898c0331ac4fd85d9668a4c40c645acbeab80ad876c4"
+              "digest": "fdf231bd8d0698e177fdc94fcab71ce6c2127f19f932888de4c1cb31cdbc6ce1"
             },
             {
               "name": "network_room_owner_transfer",
-              "digest": "cb27a8ec55b4d54f48c178a520b97573d1c5903ab7d2ba3767b81464a168d6e3"
+              "digest": "cbc79d9ce30b96628b2914aa65d0fbf7d0ed3706c4e88fd1943e900ec3d0abed"
             },
             {
               "name": "network_room_owner_transfer_propose",
-              "digest": "fe299dae5ca893e0fb2197c89ad7091dedf8783fe5fa7677787a45313d2242c0"
+              "digest": "eaf87b10fb7005b37d875e3c6d14770cc79c4d822da43e6fda39c27e9f96fb76"
             },
             {
               "name": "network_room_owner_transfer_respond",
-              "digest": "7ec8a50834518d88d138d4a5aaca02b605fa57061d7edaadbdf41da2add3cd27"
+              "digest": "975f01dee5f85fdf501191249198381224b741612d9578f0f984e404eb5ba7bb"
             },
             {
               "name": "network_room_owner_transfer_cancel",
-              "digest": "c2470d4256c0683c2a8b9fa8498ca59f3be1565a208436abc7bc75064ca3337c"
+              "digest": "4a72ca4e882c151f30620a4f1ce6979f7df9621a83021e43d473bffcb16adee3"
             },
             {
               "name": "network_room_policy_set",
-              "digest": "433488e9adf916b0fb79f6995653a689c0895481aab2dfa19a4182e5a3b8b42d"
+              "digest": "3f246879a8e1ca301311447f5a8a3862f3e52c52f15f3331f68a148ced139437"
             },
             {
               "name": "network_room_rename",
-              "digest": "76e56f3c2fbca8b98b64f156f1c49f7563dc3109b538da35144c1f9ebf5b6276"
+              "digest": "d474efc401cfca621893c0876b44920278775dc707f5f75961c376886018d57c"
             },
             {
               "name": "network_room_announcement_set",
-              "digest": "fe900b4d14f6b22e62df7efe4dc30cfe31ba3e1f8e3f6936a507fb70b202f1cd"
+              "digest": "934a96561032ad275c8cd04514d8b899631fb8ba60669cd15ba64e1bd971e81f"
             },
             {
               "name": "network_room_role_history",
-              "digest": "64a73bc2c073fd9c0b0b529b913c8b9bbab854c1e7acd00c2699c239a9870bf6"
+              "digest": "c4855abc50251e1f560dc558a69e4b5ea4ba612785e289d352a6656a98faca72"
             },
             {
               "name": "network_room_notice_list",
-              "digest": "1c83d82147f1f18a8f1320b5976276631a29b5502591d6bca64854209d41be46"
+              "digest": "24f1ae430355156a0f80b12a25aedda0c154f23f8b9178c97aee4f3d64eebfbe"
             },
             {
               "name": "network_room_leave_preview",
@@ -540,7 +540,7 @@
             },
             {
               "name": "network_room_dissolve",
-              "digest": "d03983de5c3a4270350bd34e67941262bf5c589f083706be795a0c99bdf9f106"
+              "digest": "30bae1d0794c4a3cf31797ad565b23e9b186087dd18bf86eeca66aec407de1e4"
             },
             {
               "name": "network_message_send",
@@ -548,7 +548,11 @@
             },
             {
               "name": "network_message_recall",
-              "digest": "fe9e79102cf63a2be40025226e1bdcefe316e705072438adcaac492ed9e48d24"
+              "digest": "b1efdc1d514bf91eed794d3bbf8f03a5be8a4a8ad85980c1d661c7be3d460791"
+            },
+            {
+              "name": "network_room_message_pin",
+              "digest": "f8291ee2f749f43301b846440d54b12811448c12154c50ebb569851af12d2ea4"
             },
             {
               "name": "network_message_send_status",
@@ -810,7 +814,7 @@
           "content": [
             {
               "type": "text",
-              "text": "{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"agent_session_id\":\"sess_parity_owner\",\"name\":\"Parity Owner\",\"metadata\":{},\"pending_count\":0,\"inbox_head_seq\":\"0\",\"created_at\":\"<ts>\",\"share_url\":\"<origin>/a/sess_parity_owner\",\"avatar_url\":null,\"resources\":[\"agentnet://stream\"],\"service\":{\"protocol_version\":\"2026-07-28\",\"contract_version\":\"2026-11-13.2\",\"toolset_sha256\":\"17dbb0e80ed7511714458c8b4cf0e15196db40ae4c5677cee58e0953cddbd334\",\"tool_count\":142,\"guide_tool\":\"network_client_guide\",\"files_enabled\":true,\"events_enabled\":false,\"memory\":{\"enabled\":false,\"contract_version\":\"2026-11-10.1\",\"capture\":false,\"engine_status\":\"unavailable\",\"host_modes\":[\"tool_only\"],\"recall_modes\":[\"bootstrap\",\"related\",\"task\",\"lookup\",\"reflect\"],\"tools\":[\"network_memory_admit\",\"network_memory_catchup_get\",\"network_memory_catchup_prepare\",\"network_memory_context_get\",\"network_memory_context_list\",\"network_memory_context_pack\",\"network_memory_correct\",\"network_memory_experience_get\",\"network_memory_experience_list\",\"network_memory_forget\",\"network_memory_get\",\"network_memory_host_bind\",\"network_memory_host_close\",\"network_memory_input_prepare\",\"network_memory_input_status\",\"network_memory_list\",\"network_memory_operation_get\",\"network_memory_put\",\"network_memory_recall\",\"network_memory_status\"],\"supported\":[],\"unsupported\":[\"all\"],\"reason\":\"memory_disabled\"},\"connector_refresh\":\"将当前连接器工具名/描述/输入输出 schema 与实时 tools/list 比对；缺失或摘要不同需刷新目录。服务端无法替宿主刷新缓存。\"}}"
+              "text": "{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"agent_session_id\":\"sess_parity_owner\",\"name\":\"Parity Owner\",\"metadata\":{},\"pending_count\":0,\"inbox_head_seq\":\"0\",\"created_at\":\"<ts>\",\"share_url\":\"<origin>/a/sess_parity_owner\",\"avatar_url\":null,\"resources\":[\"agentnet://stream\"],\"service\":{\"protocol_version\":\"2026-07-28\",\"contract_version\":\"2026-11-13.2\",\"toolset_sha256\":\"2de6567ba2e92ce0fa3e125f81f1a89ce2236f743b4f79c78fb82b1d6499e176\",\"tool_count\":143,\"guide_tool\":\"network_client_guide\",\"files_enabled\":true,\"events_enabled\":false,\"memory\":{\"enabled\":false,\"contract_version\":\"2026-11-10.1\",\"capture\":false,\"engine_status\":\"unavailable\",\"host_modes\":[\"tool_only\"],\"recall_modes\":[\"bootstrap\",\"related\",\"task\",\"lookup\",\"reflect\"],\"tools\":[\"network_memory_admit\",\"network_memory_catchup_get\",\"network_memory_catchup_prepare\",\"network_memory_context_get\",\"network_memory_context_list\",\"network_memory_context_pack\",\"network_memory_correct\",\"network_memory_experience_get\",\"network_memory_experience_list\",\"network_memory_forget\",\"network_memory_get\",\"network_memory_host_bind\",\"network_memory_host_close\",\"network_memory_input_prepare\",\"network_memory_input_status\",\"network_memory_list\",\"network_memory_operation_get\",\"network_memory_put\",\"network_memory_recall\",\"network_memory_status\"],\"supported\":[],\"unsupported\":[\"all\"],\"reason\":\"memory_disabled\"},\"connector_refresh\":\"将当前连接器工具名/描述/输入输出 schema 与实时 tools/list 比对；缺失或摘要不同需刷新目录。服务端无法替宿主刷新缓存。\"}}"
             }
           ],
           "structuredContent": {
@@ -830,8 +834,8 @@
             "service": {
               "protocol_version": "2026-07-28",
               "contract_version": "2026-11-13.2",
-              "toolset_sha256": "17dbb0e80ed7511714458c8b4cf0e15196db40ae4c5677cee58e0953cddbd334",
-              "tool_count": 142,
+              "toolset_sha256": "2de6567ba2e92ce0fa3e125f81f1a89ce2236f743b4f79c78fb82b1d6499e176",
+              "tool_count": 143,
               "guide_tool": "network_client_guide",
               "files_enabled": true,
               "events_enabled": false,
@@ -1019,7 +1023,7 @@
               "resources": [
                 {
                   "uri": "skill://agent-network/agent-network/SKILL.md",
-                  "digest": "sha256:57a745efb7f65aa8d971c410b81f0567791914105b87417a68a1e9cb2a766166"
+                  "digest": "sha256:47be67b40792bba0baf6b0089d7763c26624aafd2781bdcc240ec3c6912240f0"
                 }
               ]
             }
@@ -1063,7 +1067,7 @@
             "resources": [
               {
                 "uri": "skill://agent-network/agent-network/SKILL.md",
-                "digest": "sha256:57a745efb7f65aa8d971c410b81f0567791914105b87417a68a1e9cb2a766166"
+                "digest": "sha256:47be67b40792bba0baf6b0089d7763c26624aafd2781bdcc240ec3c6912240f0"
               }
             ]
           },
@@ -1097,7 +1101,7 @@
             {
               "uri": "skill://agent-network/agent-network/SKILL.md",
               "mimeType": "text/markdown",
-              "text": "<text:sha256:57a745efb7f65aa8:len=46425>"
+              "text": "<text:sha256:47be67b40792bba0:len=47165>"
             }
           ],
           "resultType": "complete",
@@ -1148,7 +1152,7 @@
           "content": [
             {
               "type": "text",
-              "text": "{\"room\":{\"room_id\":\"<rm>\",\"kind\":\"group\",\"owner_id\":\"<agt>\",\"title\":\"Parity Room\",\"head_seq\":\"1\",\"member_seq\":\"0\",\"member_count\":2,\"my_role\":\"owner\",\"my_role_revision\":1,\"my_last_read_seq\":\"1\",\"my_member_generation\":1,\"history_from_seq\":\"0\",\"authorization\":\"<redacted>\",\"policy_revision\":1,\"policies\":{\"member_message\":\"members\",\"member_invite\":\"owner_admin\",\"member_history\":\"full\",\"member_join\":\"open\",\"member_profile\":\"owner_admin\",\"member_mention_all\":\"owner_admin\"},\"announcement\":\"\",\"announcement_revision\":1,\"announcement_updated_at\":null,\"announcement_updated_by\":null,\"capabilities\":{\"send_message\":true,\"invite_members\":true,\"remove_members\":true,\"manage_admins\":true,\"edit_profile\":true,\"manage_announcement\":true,\"manage_policy\":true,\"transfer_owner\":true,\"approve_joins\":true,\"mention_all\":true,\"view_role_history\":true},\"last_message\":null,\"status\":\"active\",\"dissolved_at\":null,\"dissolved_by\":null,\"dissolve_reason\":null,\"archived_head_seq\":null,\"owner_missing\":false,\"read_only\":false,\"can_leave\":false,\"can_dissolve\":true,\"created_at\":\"<ts>\",\"updated_at\":\"<ts>\"},\"members\":[{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"name\":\"Parity Owner\",\"agent_session_id\":\"sess_parity_owner\",\"avatar_url\":null,\"role\":\"owner\",\"role_revision\":1,\"member_generation\":1,\"joined_seq\":\"1\",\"joined_at\":\"<ts>\",\"last_read_seq\":\"0\",\"online\":null,\"actions\":{\"can_remove\":false,\"can_set_admin\":false,\"can_revoke_admin\":false,\"can_transfer_owner\":false}},{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"name\":\"Parity Peer\",\"agent_session_id\":\"sess_parity_peer\",\"avatar_url\":null,\"role\":\"member\",\"role_revision\":1,\"member_generation\":1,\"joined_seq\":\"1\",\"joined_at\":\"<ts>\",\"last_read_seq\":\"0\",\"online\":null,\"actions\":{\"can_remove\":true,\"can_set_admin\":true,\"can_revoke_admin\":false,\"can_transfer_owner\":true}}],\"invited\":[],\"owner_transfer\":null,\"results\":[{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"name\":\"Parity Peer\",\"avatar_url\":null,\"status\":\"active\",\"code\":null,\"message\":null}]}"
+              "text": "{\"room\":{\"room_id\":\"<rm>\",\"kind\":\"group\",\"owner_id\":\"<agt>\",\"title\":\"Parity Room\",\"head_seq\":\"1\",\"member_seq\":\"0\",\"member_count\":2,\"my_role\":\"owner\",\"my_role_revision\":1,\"my_last_read_seq\":\"1\",\"my_member_generation\":1,\"history_from_seq\":\"0\",\"authorization\":\"<redacted>\",\"policy_revision\":1,\"policies\":{\"member_message\":\"members\",\"member_invite\":\"owner_admin\",\"member_history\":\"full\",\"member_join\":\"open\",\"member_profile\":\"owner_admin\",\"member_mention_all\":\"owner_admin\"},\"announcement\":\"\",\"announcement_revision\":1,\"announcement_updated_at\":null,\"announcement_updated_by\":null,\"capabilities\":{\"send_message\":true,\"invite_members\":true,\"remove_members\":true,\"manage_admins\":true,\"edit_profile\":true,\"manage_announcement\":true,\"manage_policy\":true,\"transfer_owner\":true,\"approve_joins\":true,\"mention_all\":true,\"view_role_history\":true,\"manage_messages\":true},\"last_message\":null,\"status\":\"active\",\"dissolved_at\":null,\"dissolved_by\":null,\"dissolve_reason\":null,\"archived_head_seq\":null,\"owner_missing\":false,\"read_only\":false,\"can_leave\":false,\"can_dissolve\":true,\"created_at\":\"<ts>\",\"updated_at\":\"<ts>\"},\"members\":[{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"name\":\"Parity Owner\",\"agent_session_id\":\"sess_parity_owner\",\"avatar_url\":null,\"role\":\"owner\",\"role_revision\":1,\"member_generation\":1,\"joined_seq\":\"1\",\"joined_at\":\"<ts>\",\"last_read_seq\":\"0\",\"online\":null,\"actions\":{\"can_remove\":false,\"can_set_admin\":false,\"can_revoke_admin\":false,\"can_transfer_owner\":false}},{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"name\":\"Parity Peer\",\"agent_session_id\":\"sess_parity_peer\",\"avatar_url\":null,\"role\":\"member\",\"role_revision\":1,\"member_generation\":1,\"joined_seq\":\"1\",\"joined_at\":\"<ts>\",\"last_read_seq\":\"0\",\"online\":null,\"actions\":{\"can_remove\":true,\"can_set_admin\":true,\"can_revoke_admin\":false,\"can_transfer_owner\":true}}],\"pinned_messages\":[],\"invited\":[],\"owner_transfer\":null,\"results\":[{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"name\":\"Parity Peer\",\"avatar_url\":null,\"status\":\"active\",\"code\":null,\"message\":null}]}"
             }
           ],
           "structuredContent": {
@@ -1190,7 +1194,8 @@
                 "transfer_owner": true,
                 "approve_joins": true,
                 "mention_all": true,
-                "view_role_history": true
+                "view_role_history": true,
+                "manage_messages": true
               },
               "last_message": null,
               "status": "active",
@@ -1247,6 +1252,7 @@
                 }
               }
             ],
+            "pinned_messages": [],
             "invited": [],
             "owner_transfer": null,
             "results": [
@@ -1302,7 +1308,7 @@
           "content": [
             {
               "type": "text",
-              "text": "{\"room\":{\"room_id\":\"<rm>\",\"kind\":\"group\",\"owner_id\":\"<agt>\",\"title\":\"Parity Room\",\"head_seq\":\"1\",\"member_seq\":\"0\",\"member_count\":2,\"my_role\":\"owner\",\"my_role_revision\":1,\"my_last_read_seq\":\"1\",\"my_member_generation\":1,\"history_from_seq\":\"0\",\"authorization\":\"<redacted>\",\"policy_revision\":1,\"policies\":{\"member_message\":\"members\",\"member_invite\":\"owner_admin\",\"member_history\":\"full\",\"member_join\":\"open\",\"member_profile\":\"owner_admin\",\"member_mention_all\":\"owner_admin\"},\"announcement\":\"\",\"announcement_revision\":1,\"announcement_updated_at\":null,\"announcement_updated_by\":null,\"capabilities\":{\"send_message\":true,\"invite_members\":true,\"remove_members\":true,\"manage_admins\":true,\"edit_profile\":true,\"manage_announcement\":true,\"manage_policy\":true,\"transfer_owner\":true,\"approve_joins\":true,\"mention_all\":true,\"view_role_history\":true},\"last_message\":null,\"status\":\"active\",\"dissolved_at\":null,\"dissolved_by\":null,\"dissolve_reason\":null,\"archived_head_seq\":null,\"owner_missing\":false,\"read_only\":false,\"can_leave\":false,\"can_dissolve\":true,\"created_at\":\"<ts>\",\"updated_at\":\"<ts>\"},\"members\":[{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"name\":\"Parity Owner\",\"agent_session_id\":\"sess_parity_owner\",\"avatar_url\":null,\"role\":\"owner\",\"role_revision\":1,\"member_generation\":1,\"joined_seq\":\"1\",\"joined_at\":\"<ts>\",\"last_read_seq\":\"0\",\"online\":true,\"actions\":{\"can_remove\":false,\"can_set_admin\":false,\"can_revoke_admin\":false,\"can_transfer_owner\":false}},{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"name\":\"Parity Peer\",\"agent_session_id\":\"sess_parity_peer\",\"avatar_url\":null,\"role\":\"member\",\"role_revision\":1,\"member_generation\":1,\"joined_seq\":\"1\",\"joined_at\":\"<ts>\",\"last_read_seq\":\"0\",\"online\":false,\"actions\":{\"can_remove\":true,\"can_set_admin\":true,\"can_revoke_admin\":false,\"can_transfer_owner\":true}}],\"invited\":[],\"owner_transfer\":null}"
+              "text": "{\"room\":{\"room_id\":\"<rm>\",\"kind\":\"group\",\"owner_id\":\"<agt>\",\"title\":\"Parity Room\",\"head_seq\":\"1\",\"member_seq\":\"0\",\"member_count\":2,\"my_role\":\"owner\",\"my_role_revision\":1,\"my_last_read_seq\":\"1\",\"my_member_generation\":1,\"history_from_seq\":\"0\",\"authorization\":\"<redacted>\",\"policy_revision\":1,\"policies\":{\"member_message\":\"members\",\"member_invite\":\"owner_admin\",\"member_history\":\"full\",\"member_join\":\"open\",\"member_profile\":\"owner_admin\",\"member_mention_all\":\"owner_admin\"},\"announcement\":\"\",\"announcement_revision\":1,\"announcement_updated_at\":null,\"announcement_updated_by\":null,\"capabilities\":{\"send_message\":true,\"invite_members\":true,\"remove_members\":true,\"manage_admins\":true,\"edit_profile\":true,\"manage_announcement\":true,\"manage_policy\":true,\"transfer_owner\":true,\"approve_joins\":true,\"mention_all\":true,\"view_role_history\":true,\"manage_messages\":true},\"last_message\":null,\"status\":\"active\",\"dissolved_at\":null,\"dissolved_by\":null,\"dissolve_reason\":null,\"archived_head_seq\":null,\"owner_missing\":false,\"read_only\":false,\"can_leave\":false,\"can_dissolve\":true,\"created_at\":\"<ts>\",\"updated_at\":\"<ts>\"},\"members\":[{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"name\":\"Parity Owner\",\"agent_session_id\":\"sess_parity_owner\",\"avatar_url\":null,\"role\":\"owner\",\"role_revision\":1,\"member_generation\":1,\"joined_seq\":\"1\",\"joined_at\":\"<ts>\",\"last_read_seq\":\"0\",\"online\":true,\"actions\":{\"can_remove\":false,\"can_set_admin\":false,\"can_revoke_admin\":false,\"can_transfer_owner\":false}},{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"name\":\"Parity Peer\",\"agent_session_id\":\"sess_parity_peer\",\"avatar_url\":null,\"role\":\"member\",\"role_revision\":1,\"member_generation\":1,\"joined_seq\":\"1\",\"joined_at\":\"<ts>\",\"last_read_seq\":\"0\",\"online\":false,\"actions\":{\"can_remove\":true,\"can_set_admin\":true,\"can_revoke_admin\":false,\"can_transfer_owner\":true}}],\"pinned_messages\":[],\"invited\":[],\"owner_transfer\":null}"
             }
           ],
           "structuredContent": {
@@ -1344,7 +1350,8 @@
                 "transfer_owner": true,
                 "approve_joins": true,
                 "mention_all": true,
-                "view_role_history": true
+                "view_role_history": true,
+                "manage_messages": true
               },
               "last_message": null,
               "status": "active",
@@ -1401,6 +1408,7 @@
                 }
               }
             ],
+            "pinned_messages": [],
             "invited": [],
             "owner_transfer": null
           },
@@ -1969,9 +1977,9 @@
       },
       "response": {
         "result": {
-          "toolCount": 142,
-          "toolset_sha256": "17dbb0e80ed7511714458c8b4cf0e15196db40ae4c5677cee58e0953cddbd334",
-          "listing_sha256": "38c70caf919aff22888ef8145101d9122394fe0a4c1deb23872f81c1eece37ce",
+          "toolCount": 143,
+          "toolset_sha256": "2de6567ba2e92ce0fa3e125f81f1a89ce2236f743b4f79c78fb82b1d6499e176",
+          "listing_sha256": "6aa677c44e2b22ef18be5fb3435d460907f2e7caf0becca84d9b4bd5ce115e05",
           "tools": [
             {
               "name": "network_issue_token",
@@ -2207,15 +2215,15 @@
             },
             {
               "name": "network_room_create",
-              "digest": "279093389e3659d6c20cd68bd81c11f12469f1eb491adb8e7deacce3cc00b62e"
+              "digest": "30f9f356258a5a1b6cd373cb17d2c5bf3b2bb25511d011568abf9eb37a20ad92"
             },
             {
               "name": "network_rooms_list",
-              "digest": "04eff5704e69f87d2ea186b5db3aae162d9582a2c1b78310242edffe062149f0"
+              "digest": "59fd6d9485008dc86b5b66f8f3204a3e34535787cd4cfe3871f35ca7737a64d6"
             },
             {
               "name": "network_room_get",
-              "digest": "2bebff711f308ddc2d728c6fd06f3b12a28b3b6a6a3ce1ca8e3e76c53a1745de"
+              "digest": "a2678fb7d642874ff07b39d078c1118230c070b0c3ecba6d5de2dadc9a93727b"
             },
             {
               "name": "network_room_invite_get",
@@ -2251,47 +2259,47 @@
             },
             {
               "name": "network_room_members_update",
-              "digest": "c8fec707bba72d0aa34eb2f22a45a7035591690a5c0e10124e628439b34f3466"
+              "digest": "2eb3bea93373d685c74b103513489882f9ce7386f424812e724d4053e394589d"
             },
             {
               "name": "network_room_role_set",
-              "digest": "72dd9e187a0994656a46898c0331ac4fd85d9668a4c40c645acbeab80ad876c4"
+              "digest": "fdf231bd8d0698e177fdc94fcab71ce6c2127f19f932888de4c1cb31cdbc6ce1"
             },
             {
               "name": "network_room_owner_transfer",
-              "digest": "cb27a8ec55b4d54f48c178a520b97573d1c5903ab7d2ba3767b81464a168d6e3"
+              "digest": "cbc79d9ce30b96628b2914aa65d0fbf7d0ed3706c4e88fd1943e900ec3d0abed"
             },
             {
               "name": "network_room_owner_transfer_propose",
-              "digest": "fe299dae5ca893e0fb2197c89ad7091dedf8783fe5fa7677787a45313d2242c0"
+              "digest": "eaf87b10fb7005b37d875e3c6d14770cc79c4d822da43e6fda39c27e9f96fb76"
             },
             {
               "name": "network_room_owner_transfer_respond",
-              "digest": "7ec8a50834518d88d138d4a5aaca02b605fa57061d7edaadbdf41da2add3cd27"
+              "digest": "975f01dee5f85fdf501191249198381224b741612d9578f0f984e404eb5ba7bb"
             },
             {
               "name": "network_room_owner_transfer_cancel",
-              "digest": "c2470d4256c0683c2a8b9fa8498ca59f3be1565a208436abc7bc75064ca3337c"
+              "digest": "4a72ca4e882c151f30620a4f1ce6979f7df9621a83021e43d473bffcb16adee3"
             },
             {
               "name": "network_room_policy_set",
-              "digest": "433488e9adf916b0fb79f6995653a689c0895481aab2dfa19a4182e5a3b8b42d"
+              "digest": "3f246879a8e1ca301311447f5a8a3862f3e52c52f15f3331f68a148ced139437"
             },
             {
               "name": "network_room_rename",
-              "digest": "76e56f3c2fbca8b98b64f156f1c49f7563dc3109b538da35144c1f9ebf5b6276"
+              "digest": "d474efc401cfca621893c0876b44920278775dc707f5f75961c376886018d57c"
             },
             {
               "name": "network_room_announcement_set",
-              "digest": "fe900b4d14f6b22e62df7efe4dc30cfe31ba3e1f8e3f6936a507fb70b202f1cd"
+              "digest": "934a96561032ad275c8cd04514d8b899631fb8ba60669cd15ba64e1bd971e81f"
             },
             {
               "name": "network_room_role_history",
-              "digest": "64a73bc2c073fd9c0b0b529b913c8b9bbab854c1e7acd00c2699c239a9870bf6"
+              "digest": "c4855abc50251e1f560dc558a69e4b5ea4ba612785e289d352a6656a98faca72"
             },
             {
               "name": "network_room_notice_list",
-              "digest": "1c83d82147f1f18a8f1320b5976276631a29b5502591d6bca64854209d41be46"
+              "digest": "24f1ae430355156a0f80b12a25aedda0c154f23f8b9178c97aee4f3d64eebfbe"
             },
             {
               "name": "network_room_leave_preview",
@@ -2303,7 +2311,7 @@
             },
             {
               "name": "network_room_dissolve",
-              "digest": "d03983de5c3a4270350bd34e67941262bf5c589f083706be795a0c99bdf9f106"
+              "digest": "30bae1d0794c4a3cf31797ad565b23e9b186087dd18bf86eeca66aec407de1e4"
             },
             {
               "name": "network_message_send",
@@ -2311,7 +2319,11 @@
             },
             {
               "name": "network_message_recall",
-              "digest": "fe9e79102cf63a2be40025226e1bdcefe316e705072438adcaac492ed9e48d24"
+              "digest": "b1efdc1d514bf91eed794d3bbf8f03a5be8a4a8ad85980c1d661c7be3d460791"
+            },
+            {
+              "name": "network_room_message_pin",
+              "digest": "f8291ee2f749f43301b846440d54b12811448c12154c50ebb569851af12d2ea4"
             },
             {
               "name": "network_message_send_status",
@@ -3368,5 +3380,5 @@
       "response": ""
     }
   ],
-  "digest": "511f02dc1911fcc4ebdf88da6a3ad2fb772fc3b09427ab2fbdde6a9a2b165386"
+  "digest": "cc30c657e0c7780f0c471205d7ac2d758e6ae7670eef19bc49901a838790871a"
 }

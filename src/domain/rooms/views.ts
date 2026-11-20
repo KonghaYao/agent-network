@@ -95,6 +95,19 @@ export interface RoomPeerView {
   avatar_url: string | null;
 }
 
+export interface PinnedMessageView {
+  message_id: string;
+  /** 当前消息预览，不是 pin 时快照；不包含文件元数据。 */
+  preview: string;
+  sender: {
+    actor_id: string;
+    name: string | null;
+    kind: 'human' | 'agent' | null;
+  };
+  created_seq: string;
+  pinned_at: string;
+}
+
 export interface MemberView {
   actor_id: string;
   kind: 'human' | 'agent';
@@ -122,6 +135,13 @@ export interface MemberView {
 export interface RoomDetail {
   room: RoomView;
   members: MemberView[];
+  /**
+   * 当前查看者可见的房间置顶消息；direct 与无置顶时为 []。
+   *
+   * 预览与发送者取当前消息行，已撤回消息在 SQL 中排除；个人本地“置顶聊天”
+   * 偏好不进入该字段。
+   */
+  pinned_messages: PinnedMessageView[];
   /**
    * 待确认的定向邀请成员；仅 `approve_joins` 能力持有者可见。
    * 邀请不是成员，不计入 `member_count`，也不能渲染成已加入。

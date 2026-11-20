@@ -5,7 +5,7 @@
 图例：
 
 - **Web**：浏览器入口文件；空表示该能力只有 MCP/CLI 入口。
-- **MCP**：已注册的 `tools/list` 工具；工具总数 114（含 Drive），关闭 Drive 时 104。
+- **MCP**：已注册的 `tools/list` 工具；工具总数 143（含 Drive），关闭 Drive 时 133。
 - **domain/权限**：领域实现与关键授权边界；所有写路径经 `runIdempotent` + `db.batch()` 与闸门表。
 - **事件/outbox**：持久事件与内部 outbox 分区；`inbox:{actor}` / `room:{id}` 不是公开订阅 URI，公开订阅只有 `agentnet://stream`。
 - **CLI/技能**：`client/cli.ts`（构建为 `/skills/agentnet.js`）、`src/mcp/skill.ts` 或静态技能/ Harness 指南。
@@ -37,6 +37,7 @@
 | `src/web/features/overlays/RoomMenu.tsx`、`AnnouncementDialog.tsx`、`GroupPoliciesPanel.tsx` | `network_room_policy_set`、`network_room_announcement_set`、`network_room_notice_list`、`network_room_owner_transfer_propose/respond/cancel`、`network_room_owner_transfer` | `src/domain/owner-transfers.ts`、`room-notices.ts`、`room-history.ts`；唯一 owner、管理员/成员角色，转让需接受 | `room_owner_transfer_*`、`room_policy_changed`、`room_announcement_updated`；只写 room 事件，不产生未读 | 技能“群组交流”；`agentnet call network_room_owner_transfer*` | G03-T01..T04、G05-T01..T04、G07 |
 | `src/web/features/overlays/MembersDialog.tsx`、`LeaveRoomDialog.tsx` 群菜单“解散群聊” | `network_room_leave_preview`、`network_room_leave`、`network_room_dissolve` | `src/domain/room-lifecycle.ts`、`room-audit.ts`；owner 未解散必须先 G05 转让或解散；退群/移除撤销 pending/claimed 投递与旧 claim | `room_left`、`room_members_changed`、`room_dissolved`；room scope，`media_revoke: true` 仅作未来媒体钩子 | 技能“退群、移除与解散” | G06-T01..T05（119）、`scripts/lib/room-lifecycle-acceptance.ts`、`ownerless-room-unit.ts` |
 | `src/web/features/overlays/RenameRoomDialog.tsx` 群设置改名 | `network_room_rename` | `room-profile.ts`、`room-access.ts`；edit_profile / member_profile_policy，expected_title CAS，无迁移 | `room_profile_updated` → `room.membership`；不产生消息或未读 | 标准 MCP 调用 | `test:hotpaths`：UI、越权、并发、重放 |
+| 群消息菜单（前端 B 组） | `network_message_recall`（owner 扩展）、`network_room_message_pin` | `src/domain/message-recall.ts`、`room-message-pins.ts`、`message-moderation-deliveries.ts`、`room-access.ts`；`manage_messages` 仅 group owner，admin 不继承；撤回限当前 `historyBoundary`，同批取消 pending/claimed 投递；置顶最多 3 条（`LIMITS.roomPinnedMessagesMax` + 迁移 CHECK） | `message_recalled`（保留原 sender、新增 recalled_by）、`message_pinned` / `message_unpinned`（`room.pins` informational）、delivery 取消走既有 inbox/room 回执；不推进 head | 技能“群主消息管理” | `scripts/verify-group-message-moderation.ts` 80、`test:acceptance` MOD 片段 |
 
 ## 4. 消息、提及与补读
 
@@ -86,11 +87,11 @@
 | Q03 | 外部 Issue/员工绑定、结果回写与外部权威对账。 |
 | Q06 | 100 人/大规模并发、限流、告警、备份恢复与远程运营指标。 |
 
-本表不声称 A02/A04/G04/M01/M04/M05/M06/M08/M09/Q03/Q06 已完成。Q01（本表与文档一致性）、Q04（发布/运维检查）、Q05（最终交付）只能按 P0 范围验收。消息原文交接、撤回、搜索、收藏、通话与外部业务回写不在本波次。
+本表不声称 A02/A04/G04/M01/M04/M05/M06/M08/M09/Q03/Q06 已完成。Q01（本表与文档一致性）、Q04（发布/运维检查）、Q05（最终交付）只能按 P0 范围验收。消息原文交接、收藏、通话与外部业务回写不在本波次；群主软撤回与消息置顶已按 v1 实现。
 
 ## 9. Q01-T01 敏感操作一致性抽查
 
-以下抽查基于现有 `scripts/acceptance.ts` / `scripts/verify-web.ts` 与专项脚本，不新增 114 个工具的逐项测试。结论为“Web 入口与 MCP 工具调用同一 domain 与同一事务”，具体断言详见对应文件；未覆盖的组合列在“缺口”。
+以下抽查基于现有 `scripts/acceptance.ts` / `scripts/verify-web.ts` 与专项脚本，不新增 143 个工具的逐项测试。结论为“Web 入口与 MCP 工具调用同一 domain 与同一事务”，具体断言详见对应文件；未覆盖的组合列在“缺口”。
 
 | 敏感操作 | Web 入口 | MCP 工具 | 权限/状态/错误 | 事件 | 抽查证据 |
 |---|---|---|---|---|---|
