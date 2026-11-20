@@ -21,13 +21,56 @@
   bottom: auto;
 }
 
-/* Menu.Trigger 合并 SDK Button 样式后仍维持原头部尺寸，不能撑高首载头部。 */
-#room-menu-toggle[data-lenso-slot='menu-trigger'] {
-  width: 28px !important;
-  min-width: 28px !important;
-  height: 28px !important;
-  min-height: 28px !important;
+/*
+ * 「···」触发区统一：Lenso Button 自带 tint 填充、蓝色前景和胶囊圆角，
+ * 在 390 触控视口会显示成灰色药丸。头部会话/账号菜单与消息旁操作共用
+ * 32px 视觉盒、18px 点阵；消息操作的触控命中区另由透明伪元素补足，
+ * 不画底色。StyleX 用 :not(#\#) 提权，这里的几何与表面必须 !important。
+ */
+#room-menu-toggle,
+#account-menu-toggle,
+.message-actions-trigger.message-actions-trigger {
+  position: relative;
+  box-sizing: border-box;
+  width: var(--app-control-icon) !important;
+  min-width: var(--app-control-icon) !important;
+  height: var(--app-control-icon) !important;
+  min-height: var(--app-control-icon) !important;
   padding: 0 !important;
+  border: 0 !important;
+  border-radius: var(--app-shape-control) !important;
+  background: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  color: var(--wx-text) !important;
+  font-size: 18px !important;
+  line-height: 1 !important;
+}
+.message-actions-trigger.message-actions-trigger {
+  color: var(--wx-muted) !important;
+}
+/* 消息操作原为 44px 可见圆底；缩到 32px 后把命中区保留在透明伪元素里。 */
+.message-actions-trigger.message-actions-trigger::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
+}
+/* 触屏不保留粘滞 hover；按下才出现浅色反馈。 */
+@media (hover: hover) {
+  #room-menu-toggle:hover,
+  #account-menu-toggle:hover,
+  .message-actions-trigger.message-actions-trigger:hover {
+    background: var(--wx-hover) !important;
+  }
+}
+#room-menu-toggle:active,
+#account-menu-toggle:active,
+.message-actions-trigger.message-actions-trigger:active {
+  background: var(--wx-hover) !important;
 }
 
 /* Lenso 自带 surface；去掉旧壳的二次边框和内边距，保留微信菜单命中区。 */
