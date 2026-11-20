@@ -60,6 +60,12 @@ export interface HistoryPage {
   timeline_has_more?: boolean;
   timeline_snapshot?: string;
   timeline_resume_cursor?: string;
+  /** 仅 anchor 请求返回：锚点及窗口两侧是否还有消息。 */
+  anchor_window?: {
+    message_id: string;
+    has_older: boolean;
+    has_newer: boolean;
+  };
 }
 
 export interface RoomMember {

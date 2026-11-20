@@ -42,6 +42,9 @@ interface ChatMessageProps {
   token: string;
   mentions: string[];
   allItems: HistoryMessage[];
+  /** 搜索结果当前定位；只影响目标消息的轮廓与闪烁，不改正文渲染。 */
+  searchActive?: boolean;
+  searchFlash?: boolean;
   onQuote: (item: HistoryMessage) => void;
   onStatus: (message: string) => void;
   onToggleTask: (item: HistoryMessage) => void;
@@ -370,6 +373,8 @@ export const ChatMessage = memo(function ChatMessage({
   token,
   mentions,
   allItems,
+  searchActive = false,
+  searchFlash = false,
   onQuote,
   onStatus,
   onToggleTask,
@@ -494,9 +499,10 @@ export const ChatMessage = memo(function ChatMessage({
         memoryTarget={memoryTarget}
       >
         <li
-          className={`msg${mine ? ' mine has-receipt' : ''}`}
+          className={`msg${mine ? ' mine has-receipt' : ''}${searchActive ? ' search-active' : ''}${searchFlash ? ' search-flash' : ''}`}
           data-task-message={item.task_root_id ? 'true' : undefined}
           data-message-id={item.message_id}
+          data-search-active={searchActive ? 'true' : undefined}
           data-sender-kind={agent ? 'agent' : 'human'}
           data-message-preview={item.preview}
           ref={rowRef}

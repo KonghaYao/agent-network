@@ -18,6 +18,16 @@ import { ChatMessage } from './ChatMessage';
 
 const TIME_GAP = 5 * 60 * 1000;
 
+export interface TimelineSearchNavigation {
+  activeMessageId: string | null;
+  query: string;
+  mode: 'exact' | 'fuzzy' | null;
+  jumpToken: number;
+  anchored: boolean;
+  hasNewer: boolean;
+  onReturnLatest: () => void;
+}
+
 interface TimelineProps {
   items: HistoryItem[];
   room: RoomView;
@@ -33,6 +43,7 @@ interface TimelineProps {
   olderEnded: boolean;
   hasOlder: boolean;
   forcePinToken: number;
+  searchNavigation?: TimelineSearchNavigation | null;
   onLoadOlder: () => Promise<void>;
   onRetryOutbox: (clientMessageId: string) => void;
   onRemoveOutbox: (clientMessageId: string) => void;
@@ -61,6 +72,7 @@ export function Timeline({
   olderEnded,
   hasOlder,
   forcePinToken,
+  searchNavigation,
   onLoadOlder,
   onRetryOutbox,
   onRemoveOutbox,
@@ -77,9 +89,12 @@ export function Timeline({
   const pinnedRef = useRef(true);
   const [pinned, setPinned] = useState(true);
   const [hasNew, setHasNew] = useState(false);
+  const [flashId, setFlashId] = useState<string | null>(null);
   const lastKeyRef = useRef<string | null>(null);
   const lastForceRef = useRef(forcePinToken);
+  const lastJumpRef = useRef(searchNavigation?.jumpToken ?? -1);
   const autoLoadingRef = useRef(false);
+  const anchored = searchNavigation?.anchored === true;
 
   const setPin = useCallback((value: boolean) => {
     pinnedRef.current = value;
@@ -102,6 +117,10 @@ export function Timeline({
 
   useLayoutEffect(() => {
     if (!lastKey) return;
+    if (anchored) {
+      lastKeyRef.current = lastKey;
+      return;
+    }
     if (forcePinToken !== lastForceRef.current) {
       lastForceRef.current = forcePinToken;
       setPin(true);
@@ -112,7 +131,7 @@ export function Timeline({
       setHasNew(true);
     }
     lastKeyRef.current = lastKey;
-  }, [items, lastKey, forcePinToken, scrollBottom, setPin]);
+  }, [anchored, items, lastKey, forcePinToken, scrollBottom, setPin]);
 
   useEffect(() => {
     const element = listRef.current;
@@ -135,11 +154,35 @@ export function Timeline({
     };
   }, [scrollBottom]);
 
+  // 历史窗口不跟最新页，不推进已读，也不因底部位置重新 pin。
   useEffect(() => {
-    if (!pinned) return undefined;
+    if (anchored) setPin(false);
+  }, [anchored, setPin]);
+
+  // 搜索定位：锚点窗口或当前实时列表提交 DOM 后滚动到目标并短暂闪烁。
+  useLayoutEffect(() => {
+    const activeId = searchNavigation?.activeMessageId;
+    const jumpToken = searchNavigation?.jumpToken ?? -1;
+    if (!activeId || jumpToken === lastJumpRef.current) return undefined;
+    lastJumpRef.current = jumpToken;
+    setPin(false);
+    const element = Array.from(
+      listRef.current?.querySelectorAll<HTMLElement>('[data-message-id]') ?? [],
+    ).find((node) => node.dataset.messageId === activeId);
+    if (!element) return undefined;
+    element.scrollIntoView({ block: 'center', inline: 'nearest' });
+    setFlashId(activeId);
+    const timer = window.setTimeout(() => {
+      setFlashId((current) => (current === activeId ? null : current));
+    }, LIMITS.webMessageSearchFlashMs);
+    return () => window.clearTimeout(timer);
+  }, [searchNavigation?.activeMessageId, searchNavigation?.jumpToken, setPin]);
+
+  useEffect(() => {
+    if (!pinned || anchored) return undefined;
     const timer = setTimeout(() => onMarkRead(room.head_seq), LIMITS.webScrollMarkReadDelayMs);
     return () => clearTimeout(timer);
-  }, [pinned, room.head_seq, onMarkRead]);
+  }, [anchored, pinned, room.head_seq, onMarkRead]);
 
   const loadOlder = useCallback(async () => {
     const element = listRef.current;
@@ -162,11 +205,13 @@ export function Timeline({
   const onScroll = () => {
     const element = listRef.current;
     if (!element) return;
-    const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
-    if (distance <= LIMITS.webScrollStickyPx) {
-      if (!pinnedRef.current) setPin(true);
-    } else if (pinnedRef.current) {
-      setPin(false);
+    if (!anchored) {
+      const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
+      if (distance <= LIMITS.webScrollStickyPx) {
+        if (!pinnedRef.current) setPin(true);
+      } else if (pinnedRef.current) {
+        setPin(false);
+      }
     }
     const scrollRange = element.scrollHeight - element.clientHeight;
     if (
@@ -218,6 +263,8 @@ export function Timeline({
           token={token}
           mentions={mentions}
           allItems={messages}
+          searchActive={searchNavigation?.activeMessageId === item.message_id}
+          searchFlash={flashId === item.message_id}
           onQuote={onQuote}
           onStatus={onStatus}
           onToggleTask={onToggleTask}
@@ -235,11 +282,34 @@ export function Timeline({
 
   return (
     <div className="timeline-wrap" style={{ display: 'contents' }}>
+      {anchored && searchNavigation ? (
+        <div
+          id="search-navigation-bar"
+          className="search-navigation-bar"
+          role="region"
+          aria-label="历史搜索结果导航"
+        >
+          <span className="search-navigation-label">
+            历史搜索结果
+            {searchNavigation.query ? `：${searchNavigation.query}` : ''}
+            {searchNavigation.hasNewer ? ' · 窗口之后还有更新消息' : ''}
+          </span>
+          <button
+            type="button"
+            id="search-return-latest"
+            className="search-return-latest"
+            onClick={searchNavigation.onReturnLatest}
+          >
+            返回最新消息
+          </button>
+        </div>
+      ) : null}
       <ol
         id="messages"
         className={`messages${items.length >= LIMITS.webLongMessageListThreshold ? ' messages--long' : ''}`}
         aria-live="polite"
         ref={listRef}
+        data-search-anchored={anchored ? 'true' : 'false'}
         onScroll={onScroll}
       >
         {showPager ? (
@@ -312,7 +382,7 @@ export function Timeline({
         type="button"
         variant="bordered"
         size="sm"
-        hidden={pinned}
+        hidden={pinned || anchored}
         onClick={() => {
           setPin(true);
           scrollBottom(true);

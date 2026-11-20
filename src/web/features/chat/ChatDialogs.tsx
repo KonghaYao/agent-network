@@ -9,6 +9,7 @@ import type {
 } from '../../lib/chat';
 import { senderName } from '../../lib/chat';
 import type { WebIdentity } from '../../lib/identity';
+import type { LocateResult, SearchNavigationTarget } from '../search/message-search-types';
 import { AgentReissueDialog } from '../overlays/AgentReissueDialog';
 import { AnnouncementDialog } from '../overlays/AnnouncementDialog';
 import { LeaveRoomDialog } from '../overlays/LeaveRoomDialog';
@@ -47,6 +48,8 @@ export function ChatDialogs({
   onRenameAgentDone,
   searchOpen,
   onSearchOpenChange,
+  searchReturnFocusRef,
+  onLocateSearchResult,
   onOpenTrace,
   taskTrace,
   onCloseTrace,
@@ -71,6 +74,8 @@ export function ChatDialogs({
   onRenameAgentDone: () => void;
   searchOpen: boolean;
   onSearchOpenChange: (open: boolean) => void;
+  searchReturnFocusRef: RefObject<HTMLElement | null>;
+  onLocateSearchResult: (target: SearchNavigationTarget) => Promise<LocateResult>;
   onOpenTrace: (rootId: string, focusId: string | null) => void;
   taskTrace: TaskTraceTarget | null;
   onCloseTrace: () => void;
@@ -151,6 +156,8 @@ export function ChatDialogs({
         onOpenChange={onSearchOpenChange}
         roomId={room.room_id}
         token={token}
+        returnFocusRef={searchReturnFocusRef}
+        onLocate={onLocateSearchResult}
         onOpenTask={(rootId, focusId) => {
           onSearchOpenChange(false);
           onOpenTrace(rootId, focusId);

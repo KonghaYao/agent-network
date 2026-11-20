@@ -65,11 +65,11 @@ interface Consumer {
 const search = { name: 'MessageSearchDialog', id: 'message-search-dialog', title: 'message-search-title',
   returnTo: '#message-search-button', open: async (page: Page) => { await page.locator('#message-search-button').click(); } };
 const context = { name: 'MessageContextDialog', id: 'message-context-dialog', title: 'message-context-title',
-  returnTo: '.message-search-result', open: async (page: Page) => {
+  returnTo: '[data-search-context]', open: async (page: Page) => {
     if (!(await page.locator('#message-search-dialog').isVisible())) await search.open(page);
     await page.locator('#message-search-input').fill('N2a overlay');
     await page.locator('#message-search-form button[type=submit]').click();
-    await page.locator('.message-search-result').first().click();
+    await page.locator('.message-search-result').first().locator('[data-search-context]').click();
   } };
 const consumers: Consumer[] = [
   { name: 'ForwardDialog', id: 'forward-modal', title: 'forward-title', returnTo: '[data-message-id].msg',
@@ -153,12 +153,12 @@ async function nestedFallback(page: Page, item: Consumer) {
   } else if (item === search) {
     await page.locator('#message-search-input').fill('N2a overlay');
     await page.locator('#message-search-form button[type=submit]').click();
-    await page.locator('.message-search-result').first().click();
+    await page.locator('.message-search-result').first().locator('[data-search-context]').click();
     await expect(page.locator('#message-context-dialog')).toHaveAttribute('data-modal-shell', 'fallback');
     await expect.poll(() => page.locator('#message-context-dialog').evaluate((node) => node.contains(document.activeElement))).toBe(true);
     await page.keyboard.press('Escape');
     await expect(page.locator('#message-search-dialog')).toBeVisible();
-    await expect(page.locator('.message-search-result').first()).toBeFocused();
+    await expect(page.locator('[data-search-context]').first()).toBeFocused();
   }
 }
 
@@ -304,7 +304,7 @@ test('MessageSearch 双实例与 TaskTrace 使用 Lenso，关闭子层不关闭�
   await expect(page.locator('#message-search-dialog')).toHaveAttribute('data-lenso-slot', 'modal-popup');
   await page.locator('#message-search-input').fill('N2a overlay');
   await page.locator('#message-search-form button[type=submit]').click();
-  await page.locator('.message-search-result').first().click();
+  await page.locator('.message-search-result').first().locator('[data-search-context]').click();
   await expect(page.locator('#message-context-dialog')).toHaveAttribute('data-lenso-slot', 'modal-popup');
   await page.locator('#message-context-close').click();
   await expect(page.locator('#message-context-dialog')).toHaveCount(0);
@@ -347,7 +347,7 @@ for (const width of [1280, 390]) {
       }
       await page.keyboard.press('Escape');
       await expect(page.locator('#message-search-dialog')).toBeVisible();
-      await expect(page.locator('.message-search-result')).toBeFocused();
+      await expect(page.locator('[data-search-context]').first()).toBeFocused();
       await page.keyboard.press('Escape');
       await page.goto(`${base}/`);
       await expect(page.locator('#contact-requests')).toHaveAttribute('data-lenso-slot', 'button');
