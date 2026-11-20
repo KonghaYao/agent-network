@@ -2,7 +2,7 @@
   "version": 1,
   "protocolVersion": "2026-07-28",
   "toolCount": 142,
-  "toolsetSha256": "3110e08a103c33fb680046b4ea7c5d50fe755d0c4e483514d50283418ae48eb3",
+  "toolsetSha256": "e35d2df5b9ad598ea6a191ca6f2b5bf1cc6d5adf25c7f64835f59fec0ad976da",
   "instructionsSha256": "ec26290a0a6cbe945cdcad7dc8d860207013de90817b700422d26c8214e577e8",
   "frames": [
     {
@@ -205,8 +205,8 @@
       "response": {
         "result": {
           "toolCount": 142,
-          "toolset_sha256": "3110e08a103c33fb680046b4ea7c5d50fe755d0c4e483514d50283418ae48eb3",
-          "listing_sha256": "748765010ed75809e793c0501abeb542f32c8c515275c4e7a582f38a82d6993a",
+          "toolset_sha256": "e35d2df5b9ad598ea6a191ca6f2b5bf1cc6d5adf25c7f64835f59fec0ad976da",
+          "listing_sha256": "39e75f793e67ef67fc591b00ec5e0e75be32eeef75e7daa88bc25c97a2cd6322",
           "tools": [
             {
               "name": "network_issue_token",
@@ -554,11 +554,11 @@
             },
             {
               "name": "network_history_list",
-              "digest": "a26d8ba4495f4edd250ff35a18fefc30e47e6b5dc722298518e1e2061b392a4d"
+              "digest": "2a7ec6130effd5cffd614a4b04fa0e68854224e27f95fe28e64e7b7dde89d1b6"
             },
             {
               "name": "network_message_search",
-              "digest": "04c8be4c079a06b3f9f82169a8cc26b71f4181c125691fdb0e13478e3d23b483"
+              "digest": "56a766da5f3f9e602b163558880a99f7ef00e2dd916787d15d1335e385d0b777"
             },
             {
               "name": "network_task_mark",
@@ -808,7 +808,7 @@
           "content": [
             {
               "type": "text",
-              "text": "{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"agent_session_id\":\"sess_parity_owner\",\"name\":\"Parity Owner\",\"metadata\":{},\"pending_count\":0,\"inbox_head_seq\":\"0\",\"created_at\":\"<ts>\",\"share_url\":\"<origin>/a/sess_parity_owner\",\"resources\":[\"agentnet://stream\"],\"service\":{\"protocol_version\":\"2026-07-28\",\"contract_version\":\"2026-11-13.2\",\"toolset_sha256\":\"3110e08a103c33fb680046b4ea7c5d50fe755d0c4e483514d50283418ae48eb3\",\"tool_count\":142,\"guide_tool\":\"network_client_guide\",\"files_enabled\":true,\"events_enabled\":false,\"memory\":{\"enabled\":false,\"contract_version\":\"2026-11-10.1\",\"capture\":false,\"engine_status\":\"unavailable\",\"host_modes\":[\"tool_only\"],\"recall_modes\":[\"bootstrap\",\"related\",\"task\",\"lookup\",\"reflect\"],\"tools\":[\"network_memory_admit\",\"network_memory_catchup_get\",\"network_memory_catchup_prepare\",\"network_memory_context_get\",\"network_memory_context_list\",\"network_memory_context_pack\",\"network_memory_correct\",\"network_memory_experience_get\",\"network_memory_experience_list\",\"network_memory_forget\",\"network_memory_get\",\"network_memory_host_bind\",\"network_memory_host_close\",\"network_memory_input_prepare\",\"network_memory_input_status\",\"network_memory_list\",\"network_memory_operation_get\",\"network_memory_put\",\"network_memory_recall\",\"network_memory_status\"],\"supported\":[],\"unsupported\":[\"all\"],\"reason\":\"memory_disabled\"},\"connector_refresh\":\"将当前连接器工具名/描述/输入输出 schema 与实时 tools/list 比对；缺失或摘要不同需刷新目录。服务端无法替宿主刷新缓存。\"}}"
+              "text": "{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"agent_session_id\":\"sess_parity_owner\",\"name\":\"Parity Owner\",\"metadata\":{},\"pending_count\":0,\"inbox_head_seq\":\"0\",\"created_at\":\"<ts>\",\"share_url\":\"<origin>/a/sess_parity_owner\",\"resources\":[\"agentnet://stream\"],\"service\":{\"protocol_version\":\"2026-07-28\",\"contract_version\":\"2026-11-13.2\",\"toolset_sha256\":\"e35d2df5b9ad598ea6a191ca6f2b5bf1cc6d5adf25c7f64835f59fec0ad976da\",\"tool_count\":142,\"guide_tool\":\"network_client_guide\",\"files_enabled\":true,\"events_enabled\":false,\"memory\":{\"enabled\":false,\"contract_version\":\"2026-11-10.1\",\"capture\":false,\"engine_status\":\"unavailable\",\"host_modes\":[\"tool_only\"],\"recall_modes\":[\"bootstrap\",\"related\",\"task\",\"lookup\",\"reflect\"],\"tools\":[\"network_memory_admit\",\"network_memory_catchup_get\",\"network_memory_catchup_prepare\",\"network_memory_context_get\",\"network_memory_context_list\",\"network_memory_context_pack\",\"network_memory_correct\",\"network_memory_experience_get\",\"network_memory_experience_list\",\"network_memory_forget\",\"network_memory_get\",\"network_memory_host_bind\",\"network_memory_host_close\",\"network_memory_input_prepare\",\"network_memory_input_status\",\"network_memory_list\",\"network_memory_operation_get\",\"network_memory_put\",\"network_memory_recall\",\"network_memory_status\"],\"supported\":[],\"unsupported\":[\"all\"],\"reason\":\"memory_disabled\"},\"connector_refresh\":\"将当前连接器工具名/描述/输入输出 schema 与实时 tools/list 比对；缺失或摘要不同需刷新目录。服务端无法替宿主刷新缓存。\"}}"
             }
           ],
           "structuredContent": {
@@ -827,7 +827,7 @@
             "service": {
               "protocol_version": "2026-07-28",
               "contract_version": "2026-11-13.2",
-              "toolset_sha256": "3110e08a103c33fb680046b4ea7c5d50fe755d0c4e483514d50283418ae48eb3",
+              "toolset_sha256": "e35d2df5b9ad598ea6a191ca6f2b5bf1cc6d5adf25c7f64835f59fec0ad976da",
               "tool_count": 142,
               "guide_tool": "network_client_guide",
               "files_enabled": true,
@@ -1016,7 +1016,7 @@
               "resources": [
                 {
                   "uri": "skill://agent-network/agent-network/SKILL.md",
-                  "digest": "sha256:83a17657cbb438bde3378165b82eed20253093d6a406a6e2f680dae0780b3f69"
+                  "digest": "sha256:1a21137943b5f837cb725e8169a85a1ef228b249f26185678d2beb2fd216f538"
                 }
               ]
             }
@@ -1060,7 +1060,7 @@
             "resources": [
               {
                 "uri": "skill://agent-network/agent-network/SKILL.md",
-                "digest": "sha256:83a17657cbb438bde3378165b82eed20253093d6a406a6e2f680dae0780b3f69"
+                "digest": "sha256:1a21137943b5f837cb725e8169a85a1ef228b249f26185678d2beb2fd216f538"
               }
             ]
           },
@@ -1094,7 +1094,7 @@
             {
               "uri": "skill://agent-network/agent-network/SKILL.md",
               "mimeType": "text/markdown",
-              "text": "<text:sha256:83a17657cbb438bd:len=45513>"
+              "text": "<text:sha256:1a21137943b5f837:len=46227>"
             }
           ],
           "resultType": "complete",
@@ -1960,8 +1960,8 @@
       "response": {
         "result": {
           "toolCount": 142,
-          "toolset_sha256": "3110e08a103c33fb680046b4ea7c5d50fe755d0c4e483514d50283418ae48eb3",
-          "listing_sha256": "748765010ed75809e793c0501abeb542f32c8c515275c4e7a582f38a82d6993a",
+          "toolset_sha256": "e35d2df5b9ad598ea6a191ca6f2b5bf1cc6d5adf25c7f64835f59fec0ad976da",
+          "listing_sha256": "39e75f793e67ef67fc591b00ec5e0e75be32eeef75e7daa88bc25c97a2cd6322",
           "tools": [
             {
               "name": "network_issue_token",
@@ -2309,11 +2309,11 @@
             },
             {
               "name": "network_history_list",
-              "digest": "a26d8ba4495f4edd250ff35a18fefc30e47e6b5dc722298518e1e2061b392a4d"
+              "digest": "2a7ec6130effd5cffd614a4b04fa0e68854224e27f95fe28e64e7b7dde89d1b6"
             },
             {
               "name": "network_message_search",
-              "digest": "04c8be4c079a06b3f9f82169a8cc26b71f4181c125691fdb0e13478e3d23b483"
+              "digest": "56a766da5f3f9e602b163558880a99f7ef00e2dd916787d15d1335e385d0b777"
             },
             {
               "name": "network_task_mark",
@@ -3357,5 +3357,5 @@
       "response": ""
     }
   ],
-  "digest": "16e2dff7cd1b39ea593e9f959a47749c15b6a67be8c9bca18eef34b698a0c370"
+  "digest": "242861e9616ba34dd5b943138dc7bd4d0efa80e317486f64d6cfcdad9a9e5578"
 }

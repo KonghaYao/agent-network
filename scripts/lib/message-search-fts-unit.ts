@@ -12,11 +12,20 @@ import { join, resolve } from 'node:path';
 
 import { createD1 } from '../../src/bun/d1';
 import { migrate } from '../../src/bun/migrate';
+import { decodeCursor } from '../../src/contracts/cursor';
 import { LIMITS } from '../../src/contracts/limits';
+import {
+  buildSearchSnippet,
+  findExactRanges,
+  findFuzzyMatch,
+  normalizeFuzzyQuery,
+} from '../../src/contracts/message-search-match';
 import { messageSearch } from '../../src/domain/message-search';
 import { messageSearchFtsPhrase } from '../../src/domain/message-search-fts';
 import { messageTaskSearch } from '../../src/domain/message-task-search';
+import { historyList } from '../../src/domain/messages';
 import type { Principal } from '../../src/domain/principal';
+import { sha256Hex } from '../../src/storage/db';
 import { getActor } from '../../src/storage/queries';
 import { check, checkEqual } from './harness';
 
@@ -476,8 +485,563 @@ async function planChecks(): Promise<void> {
   }
 }
 
+interface SearchPage {
+  items: Array<{
+    message_id: string;
+    created_seq: number;
+    snippet: string;
+    match_ranges?: Array<{ start: number; end: number }>;
+  }>;
+  next_cursor: string | null;
+  has_more: boolean;
+  snapshot: string;
+  mode?: string;
+  scan_limited?: boolean;
+  scanned_count?: number;
+  authorization: {
+    policy_revision: number;
+    history_from_seq: string;
+    member_generation: string;
+  };
+}
+
+interface HistoryPageShape {
+  items: Array<{
+    message_id: string;
+    created_seq: string;
+    sender_kind: string | null;
+    mentions: unknown[];
+    delivery_states: Record<string, number>;
+  }>;
+  next_cursor: string | null;
+  has_more: boolean;
+  snapshot: string;
+  head_seq: string;
+  anchor_window?: { message_id: string; has_older: boolean; has_newer: boolean };
+  timeline_items?: Array<{ kind: string; message_id?: string; created_seq?: string }>;
+  timeline_next_cursor?: string | null;
+  timeline_has_more?: boolean;
+  timeline_resume_cursor?: string;
+}
+
+async function fuzzyChecks(): Promise<void> {
+  const { sqlite, db, owner, outsider, directRoom } = await fixture();
+  try {
+    const search = (query: string, extra: Record<string, unknown> = {}) =>
+      messageSearch(db, owner, { room_id: directRoom, query, mode: 'fuzzy', ...extra }) as Promise<SearchPage>;
+    const exact = (query: string, extra: Record<string, unknown> = {}) =>
+      messageSearch(db, owner, { room_id: directRoom, query, ...extra }) as Promise<SearchPage>;
+
+    // 追加语义样例消息；head 同步推进，保持快照覆盖。
+    const addMessage = (messageId: string, seq: number, body: string) => {
+      sqlite
+        .prepare(
+          `INSERT INTO messages (message_id, room_id, sender_id, client_message_id, created_seq,
+                                 body, body_bytes, preview, reply_to, root_id, hop,
+                                 root_invocations_used, created_at)
+           VALUES (?, ?, 'usr_owner', ?, ?, ?, ?, ?, NULL, NULL, 0, 0, ?)`,
+        )
+        .run(messageId, directRoom, `client_${messageId}`, seq, body, Buffer.byteLength(body), body.slice(0, 40), NOW);
+    };
+    addMessage('msg_fuzzy_foo', 10, 'xx fOO bar yy');
+    addMessage('msg_fuzzy_release', 11, '发布新版本 记录');
+    addMessage('msg_fuzzy_hello', 12, 'Hello，new WORLD!');
+    addMessage('msg_fuzzy_full', 13, 'a---b c');
+    addMessage('msg_emoji', 14, '🙂--A');
+    addMessage('msg_fuzzy_recall', 15, '发版 待撤回');
+    sqlite.prepare('UPDATE rooms SET head_seq = 15 WHERE room_id = ?').run(directRoom);
+
+    // 语义样例：exact 保持连续原文，fuzzy 走保序子序列。
+    const exactContinuous = await exact('Foo bar');
+    checkEqual('exact 保持连续子串语义', exactContinuous.items.length, 1);
+    checkEqual('exact 不做全角折叠', (await exact('ＡＢＣ')).items.length, 0);
+    checkEqual('exact 不折叠非 ASCII 大小写', (await exact('äbc')).items.length, 0);
+    checkEqual('exact 不跨字匹配（发本）', (await exact('发本')).items.length, 0);
+    check(
+      'fuzzy 支持跨字子序列（发本）',
+      (await search('发本')).items.some((item) => item.message_id === 'msg_fuzzy_release'),
+      await search('发本'),
+    );
+
+    const chinese = await search('发版');
+    checkEqual(
+      'fuzzy 中文跨字命中',
+      chinese.items.map((item) => item.message_id).join(','),
+      'msg_fuzzy_recall,msg_fuzzy_release',
+    );
+    checkEqual('fuzzy 输出 mode', chinese.mode, 'fuzzy');
+    checkEqual('fuzzy scan_limited=false（全部扫描完）', chinese.scan_limited, false);
+    checkEqual('fuzzy scanned_count 为已检查候选数', chinese.scanned_count, 15);
+    check(
+      'fuzzy match_ranges 指向 snippet 内的原文',
+      (chinese.items[1]?.match_ranges ?? []).map((range) =>
+        chinese.items[1]!.snippet.slice(range.start, range.end),
+      ).join('') === '发版',
+      chinese.items[1],
+    );
+
+    const caseAndSpace = await search('hello world');
+    checkEqual('fuzzy 折叠空白/标点与 ASCII 大小写', caseAndSpace.items.length, 1);
+    const fullwidth = await search('Ａ，Ｂ　Ｃ');
+    checkEqual('fuzzy 折叠全角 ASCII/全角空格/标点', fullwidth.items.length, 1);
+
+    checkEqual('fuzzy 不要求连续原句（foo bar）', (await search('foo bar')).items.length, 1);
+    checkEqual('fuzzy 反序不命中', findFuzzyMatch('bar foo', normalizeFuzzyQuery('foo bar')), null);
+    checkEqual('fuzzy 重复字符需要不同位置', findFuzzyMatch('a', normalizeFuzzyQuery('aa')), null);
+    checkEqual('fuzzy 不误报明显无关文本', (await search('完全无关且不存在的查询词')).items.length, 0);
+
+    // 纯函数片段边界：长上下文、分散链与 emoji 不越界、不拆代理对。
+    const longBody = `${'前'.repeat(300)}发${'x'.repeat(500)}版${'后'.repeat(300)}`;
+    const longPositions = findFuzzyMatch(longBody, normalizeFuzzyQuery('发版'))!;
+    const longSnippet = buildSearchSnippet(longBody, longPositions, 240, 40);
+    check(
+      'fuzzy 片段不超过 240 码点',
+      Array.from(longSnippet.snippet).length <= LIMITS.messageSearchSnippetChars,
+      Array.from(longSnippet.snippet).length,
+    );
+    check(
+      'fuzzy 分散链只高亮窗口内首段',
+      longSnippet.match_ranges.every(
+        (range) =>
+          range.start >= 0 &&
+          range.end <= longSnippet.snippet.length &&
+          longSnippet.snippet.slice(range.start, range.end) === '发',
+      ),
+      longSnippet,
+    );
+    const emojiBody = `${'😀'.repeat(60)}发${'😀'.repeat(60)}版`;
+    const emojiPositions = findFuzzyMatch(emojiBody, normalizeFuzzyQuery('发版'))!;
+    const emojiSnippet = buildSearchSnippet(emojiBody, emojiPositions, 240, 40);
+    check(
+      'fuzzy 片段不拆代理对',
+      emojiSnippet.match_ranges.every((range) => {
+        const text = emojiSnippet.snippet.slice(range.start, range.end);
+        return text === '发' || text === '版';
+      }) && Array.from(emojiSnippet.snippet).every((char) => char !== '\uFFFD'),
+      emojiSnippet.match_ranges,
+    );
+    checkEqual(
+      'exact ranges 合并重叠连续命中',
+      JSON.stringify(findExactRanges('aaaa', 'aa')),
+      JSON.stringify([{ start: 0, end: 4 }]),
+    );
+
+    await expectCode(
+      'fuzzy 归一化后为空返回 INVALID_ARGUMENT',
+      () => search('!!!'),
+      'INVALID_ARGUMENT',
+    );
+    await expectCode(
+      'fuzzy 全角标点归一化后为空返回 INVALID_ARGUMENT',
+      () => search('！！！？？'),
+      'INVALID_ARGUMENT',
+    );
+    await expectCode(
+      '非成员 fuzzy 搜索被拒绝',
+      () => messageSearch(db, outsider, { room_id: directRoom, query: '发版', mode: 'fuzzy' }),
+      'NOT_MEMBER',
+    );
+
+    const emoji = await search('🙂a');
+    checkEqual('fuzzy emoji 命中', emoji.items.map((item) => item.message_id).join(','), 'msg_emoji');
+    const emojiRanges = emoji.items[0]?.match_ranges ?? [];
+    checkEqual(
+      'fuzzy emoji range 覆盖完整代理对',
+      emojiRanges.map((range) => emoji.items[0]!.snippet.slice(range.start, range.end)).join('|'),
+      '🙂|A',
+    );
+
+    // 撤回消息不再产生正文命中。
+    sqlite
+      .prepare(
+        "UPDATE messages SET body = '', body_bytes = 0, preview = '此消息已撤回' WHERE message_id = 'msg_fuzzy_recall'",
+      )
+      .run();
+    checkEqual(
+      '撤回后 fuzzy 不可搜索',
+      (await search('发版')).items.map((item) => item.message_id).join(','),
+      'msg_fuzzy_release',
+    );
+
+    // exact cursor 的 scope 保持旧格式（哈希与 lower 语义不变）。
+    const query = '分页关键词';
+    const exactFirst = await exact(query, { limit: 1 });
+    check('exact 返回游标', exactFirst.next_cursor !== null, exactFirst);
+    const exactScope = `room:${directRoom}:search:g${exactFirst.authorization.member_generation}:p${exactFirst.authorization.policy_revision}:q${await sha256Hex(query.toLowerCase())}`;
+    checkEqual(
+      'exact cursor scope 保持旧格式',
+      decodeCursor(exactFirst.next_cursor!, exactScope).scope,
+      exactScope,
+    );
+    const legacyCursor = exactFirst.next_cursor!;
+    const legacyPage = await exact(query, { limit: 5, cursor: legacyCursor });
+    check(
+      '旧 exact 游标继续可用且只返回更早消息',
+      legacyPage.items.every((item) => item.created_seq < Number(JSON.parse(Buffer.from(legacyCursor, 'base64url').toString('utf8')).seq)),
+      legacyPage.items,
+    );
+
+    // fuzzy cursor 只推进到最后实际检查的候选，并带独立算法版本。
+    addMessage('msg_fuzzy_page_1', 16, '发版 一');
+    addMessage('msg_fuzzy_page_2', 17, '填充 二');
+    addMessage('msg_fuzzy_page_3', 18, '发 布 版');
+    sqlite.prepare('UPDATE rooms SET head_seq = 18 WHERE room_id = ?').run(directRoom);
+
+    const fuzzyCursor = (await search('发版', { limit: 1 })).next_cursor;
+    check('fuzzy 首页返回继续游标', fuzzyCursor !== null, fuzzyCursor);
+    if (fuzzyCursor) {
+      const fuzzyScope = `room:${directRoom}:search:g${exactFirst.authorization.member_generation}:p${exactFirst.authorization.policy_revision}:mfuzzy-v1:q${await sha256Hex(normalizeFuzzyQuery('发版'))}`;
+      checkEqual(
+        'fuzzy cursor scope 带算法版本与归一 query hash',
+        decodeCursor(fuzzyCursor, fuzzyScope).scope,
+        fuzzyScope,
+      );
+      await expectCode(
+        'exact cursor 不能用于 fuzzy',
+        () =>
+          messageSearch(db, owner, {
+            room_id: directRoom,
+            query: '发版',
+            mode: 'fuzzy',
+            cursor: legacyCursor,
+          }),
+        'CURSOR_EXPIRED',
+      );
+      await expectCode(
+        'fuzzy cursor 不能用于 exact',
+        () =>
+          messageSearch(db, owner, {
+            room_id: directRoom,
+            query: '发版',
+            cursor: fuzzyCursor,
+          }),
+        'CURSOR_EXPIRED',
+      );
+    }
+    // 未命中的空批仍可继续；结果只为命中消息。
+    const fuzzyPages: string[] = [];
+    let fuzzyNext: string | null = null;
+    let fuzzyPage = await search('发版', { limit: 1 });
+    fuzzyPages.push(...fuzzyPage.items.map((item) => item.message_id));
+    fuzzyNext = fuzzyPage.next_cursor;
+    let guard = 0;
+    while (fuzzyNext && guard < 10) {
+      fuzzyPage = await search('发版', { limit: 1, cursor: fuzzyNext });
+      fuzzyPages.push(...fuzzyPage.items.map((item) => item.message_id));
+      fuzzyNext = fuzzyPage.next_cursor;
+      guard += 1;
+    }
+    checkEqual(
+      'fuzzy 分页不重不漏且按序号倒序',
+      fuzzyPages.join(','),
+      'msg_fuzzy_page_3,msg_fuzzy_page_1,msg_fuzzy_release',
+    );
+    checkEqual(
+      'fuzzy 分页结果与单页结果一致',
+      fuzzyPages.join(','),
+      (await search('发版')).items.map((item) => item.message_id).join(','),
+    );
+    check('fuzzy 分页遍历后无继续游标', fuzzyNext === null, fuzzyNext);
+  } finally {
+    sqlite.close();
+  }
+}
+
+async function fuzzyBudgetChecks(): Promise<void> {
+  const { sqlite, db, owner } = await fixture();
+  try {
+    const roomId = 'rm_fuzzy_budget';
+    insertDirectRoom(sqlite, roomId);
+    insertMessage(sqlite, roomId, 'msg_budget_hit', 1, '预算 发版 命中');
+    for (let index = 2; index <= 502; index += 1) {
+      insertMessage(sqlite, roomId, `msg_budget_${index}`, index, `填充 消息 ${index}`);
+    }
+    sqlite.prepare('UPDATE rooms SET head_seq = 502 WHERE room_id = ?').run(roomId);
+
+    const first = (await messageSearch(db, owner, {
+      room_id: roomId,
+      query: '发版',
+      mode: 'fuzzy',
+      limit: 25,
+    })) as SearchPage;
+    checkEqual('fuzzy 扫描预算首页空结果', first.items.length, 0);
+    checkEqual('fuzzy 扫描预算首页 scan_limited', first.scan_limited, true);
+    checkEqual(
+      'fuzzy 扫描预算首页检查 500 条候选',
+      first.scanned_count,
+      LIMITS.messageSearchFuzzyScanMax,
+    );
+    checkEqual('fuzzy 扫描预算首页 has_more', first.has_more, true);
+    check('fuzzy 扫描预算首页返回继续游标', first.next_cursor !== null, first);
+    const second = (await messageSearch(db, owner, {
+      room_id: roomId,
+      query: '发版',
+      mode: 'fuzzy',
+      limit: 25,
+      cursor: first.next_cursor!,
+    })) as SearchPage;
+    checkEqual(
+      'fuzzy 空批继续后找到更旧命中',
+      second.items.map((item) => item.message_id).join(','),
+      'msg_budget_hit',
+    );
+    checkEqual('fuzzy 找到命中后 scan_limited=false', second.scan_limited, false);
+    checkEqual('fuzzy 找到命中后 has_more=false', second.has_more, false);
+    checkEqual('fuzzy 第二页只检查剩余候选', second.scanned_count, 2);
+
+    // 正文字节预算：9 条 250KiB 正文，一页最多处理 8 条。
+    const bytesRoom = 'rm_fuzzy_bytes';
+    insertDirectRoom(sqlite, bytesRoom);
+    const huge = 'x'.repeat(250 * 1024);
+    insertMessage(sqlite, bytesRoom, 'msg_bytes_hit', 1, '发版 字节命中');
+    for (let index = 2; index <= 10; index += 1) {
+      insertMessage(sqlite, bytesRoom, `msg_bytes_${index}`, index, huge);
+    }
+    sqlite.prepare('UPDATE rooms SET head_seq = 10 WHERE room_id = ?').run(bytesRoom);
+    const bytesFirst = (await messageSearch(db, owner, {
+      room_id: bytesRoom,
+      query: '发版',
+      mode: 'fuzzy',
+    })) as SearchPage;
+    checkEqual('fuzzy 字节预算首页无命中', bytesFirst.items.length, 0);
+    checkEqual('fuzzy 字节预算 scan_limited', bytesFirst.scan_limited, true);
+    checkEqual('fuzzy 字节预算最多检查 8 条大正文', bytesFirst.scanned_count, 8);
+    const bytesSecond = (await messageSearch(db, owner, {
+      room_id: bytesRoom,
+      query: '发版',
+      mode: 'fuzzy',
+      cursor: bytesFirst.next_cursor!,
+    })) as SearchPage;
+    checkEqual(
+      'fuzzy 字节预算续页命中',
+      bytesSecond.items.map((item) => item.message_id).join(','),
+      'msg_bytes_hit',
+    );
+    checkEqual('fuzzy 字节预算续页检查 2 条', bytesSecond.scanned_count, 2);
+
+    // exact 不受 fuzzy 预算影响，仍返回连续匹配并标记 has_more。
+    const exact = (await messageSearch(db, owner, {
+      room_id: bytesRoom,
+      query: 'xxx',
+      limit: 2,
+    })) as SearchPage;
+    checkEqual('exact 在超大正文房间仍返回两页结果', exact.items.length, 2);
+    checkEqual('exact has_more 表示还有匹配', exact.has_more, true);
+    checkEqual('exact scan_limited=false', exact.scan_limited, false);
+    checkEqual('exact 不返回 scanned_count', exact.scanned_count, undefined);
+  } finally {
+    sqlite.close();
+  }
+}
+
+async function anchorChecks(): Promise<void> {
+  const { sqlite, db, owner, peer, outsider, boundedRoom } = await fixture();
+  try {
+    const roomId = 'rm_anchor';
+    insertDirectRoom(sqlite, roomId);
+    for (let index = 1; index <= 150; index += 1) {
+      insertMessage(sqlite, roomId, `msg_anchor_${index}`, index, `锚点消息 ${index}`);
+    }
+    sqlite.prepare('UPDATE rooms SET head_seq = 150 WHERE room_id = ?').run(roomId);
+    const otherRoom = 'rm_anchor_other';
+    insertDirectRoom(sqlite, otherRoom);
+    insertMessage(sqlite, otherRoom, 'msg_other_1', 1, '其他房间');
+    sqlite.prepare('UPDATE rooms SET head_seq = 1 WHERE room_id = ?').run(otherRoom);
+
+    const page = (await historyList(db, owner, {
+      room_id: roomId,
+      anchor_message_id: 'msg_anchor_75',
+      limit: 50,
+    })) as HistoryPageShape;
+    const seqs = page.items.map((item) => Number(item.created_seq));
+    checkEqual('anchor 窗口总数等于 limit', page.items.length, 50);
+    check('anchor 窗口包含目标消息', seqs.includes(75), seqs);
+    check('anchor 窗口按序号倒序', seqs.every((seq, index) => index === 0 || seqs[index - 1]! > seq), seqs);
+    checkEqual('anchor 窗口两侧都有更多', JSON.stringify(page.anchor_window), JSON.stringify({
+      message_id: 'msg_anchor_75',
+      has_older: true,
+      has_newer: true,
+    }));
+    checkEqual('anchor has_more 只表示更早侧', page.has_more, true);
+    check('anchor next_cursor 指向窗口最旧项', page.next_cursor !== null, page);
+
+    const single = (await historyList(db, owner, {
+      room_id: roomId,
+      anchor_message_id: 'msg_anchor_75',
+      limit: 1,
+    })) as HistoryPageShape;
+    checkEqual('limit=1 只返回锚点', single.items.map((item) => item.message_id).join(','), 'msg_anchor_75');
+    checkEqual('limit=1 still reports both sides', JSON.stringify(single.anchor_window), JSON.stringify({
+      message_id: 'msg_anchor_75',
+      has_older: true,
+      has_newer: true,
+    }));
+
+    const full = (await historyList(db, owner, {
+      room_id: roomId,
+      anchor_message_id: 'msg_anchor_75',
+      limit: 100,
+    })) as HistoryPageShape;
+    checkEqual('anchor limit 为总窗口上限', full.items.length, 100);
+    checkEqual('anchor 窗口上限内不重复', new Set(full.items.map((item) => item.message_id)).size, 100);
+
+    const oldest = (await historyList(db, owner, {
+      room_id: roomId,
+      anchor_message_id: 'msg_anchor_1',
+      limit: 50,
+    })) as HistoryPageShape;
+    checkEqual('最旧锚点 has_older=false', oldest.anchor_window?.has_older, false);
+    checkEqual('最旧锚点 has_more=false', oldest.has_more, false);
+    checkEqual('最旧锚点 next_cursor=null', oldest.next_cursor, null);
+    checkEqual('最旧锚点 has_newer=true', oldest.anchor_window?.has_newer, true);
+
+    const newest = (await historyList(db, owner, {
+      room_id: roomId,
+      anchor_message_id: 'msg_anchor_150',
+      limit: 50,
+    })) as HistoryPageShape;
+    checkEqual('最新锚点 has_newer=false', newest.anchor_window?.has_newer, false);
+    checkEqual('最新锚点 has_older=true', newest.anchor_window?.has_older, true);
+
+    const olderPage = (await historyList(db, owner, {
+      room_id: roomId,
+      cursor: page.next_cursor!,
+      limit: 50,
+    })) as HistoryPageShape;
+    const windowSeqs = new Set(seqs);
+    check(
+      'anchor 游标继续更早页且不重复',
+      olderPage.items.every((item) => !windowSeqs.has(Number(item.created_seq))),
+      olderPage.items.map((item) => item.created_seq),
+    );
+    check(
+      'anchor 更早页序号继续下降',
+      olderPage.items.every((item, index, items) => index === 0 || Number(items[index - 1]!.created_seq) > Number(item.created_seq)),
+      olderPage.items,
+    );
+
+    await expectCode(
+      '跨房间 anchor 返回 NOT_FOUND',
+      () => historyList(db, owner, { room_id: roomId, anchor_message_id: 'msg_other_1' }),
+      'NOT_FOUND',
+    );
+    await expectCode(
+      '不存在 anchor 返回 NOT_FOUND',
+      () => historyList(db, owner, { room_id: roomId, anchor_message_id: 'msg_missing' }),
+      'NOT_FOUND',
+    );
+    sqlite
+      .prepare("UPDATE messages SET body='', body_bytes=0, preview='已撤回' WHERE message_id='msg_anchor_10'")
+      .run();
+    await expectCode(
+      '撤回消息不能作为 anchor',
+      () => historyList(db, owner, { room_id: roomId, anchor_message_id: 'msg_anchor_10' }),
+      'NOT_FOUND',
+    );
+    await expectCode(
+      'anchor 与 cursor 互斥',
+      () =>
+        historyList(db, owner, {
+          room_id: roomId,
+          anchor_message_id: 'msg_anchor_75',
+          cursor: page.next_cursor!,
+        }),
+      'INVALID_ARGUMENT',
+    );
+    await expectCode(
+      'anchor 不允许 direction=after',
+      () =>
+        historyList(db, owner, {
+          room_id: roomId,
+          anchor_message_id: 'msg_anchor_75',
+          direction: 'after',
+        }),
+      'INVALID_ARGUMENT',
+    );
+    await expectCode(
+      '非成员 anchor 搜索被拒绝',
+      () => historyList(db, outsider, { room_id: roomId, anchor_message_id: 'msg_anchor_75' }),
+      'NOT_MEMBER',
+    );
+    await expectCode(
+      'from_join 之前的 anchor 返回 NOT_FOUND',
+      () =>
+        historyList(db, peer, {
+          room_id: boundedRoom,
+          anchor_message_id: 'msg_bound_1',
+        }),
+      'NOT_FOUND',
+    );
+    const boundedAnchor = (await historyList(db, peer, {
+      room_id: boundedRoom,
+      anchor_message_id: 'msg_bound_3',
+      limit: 3,
+    })) as HistoryPageShape;
+    check(
+      'from_join 之后的 anchor 可见',
+      boundedAnchor.items.some((item) => item.message_id === 'msg_bound_3'),
+      boundedAnchor.items,
+    );
+
+    const timeline = (await historyList(db, owner, {
+      room_id: roomId,
+      view: 'timeline',
+      anchor_message_id: 'msg_anchor_75',
+      limit: 50,
+    })) as HistoryPageShape;
+    const timelineIds = (timeline.timeline_items ?? []).map((item) => item.message_id);
+    checkEqual('timeline anchor 窗口总数等于 limit', timelineIds.length, 50);
+    check('timeline anchor 包含目标消息', timelineIds.includes('msg_anchor_75'), timelineIds);
+    check(
+      'timeline anchor 按展示 key 倒序',
+      (timeline.timeline_items ?? []).every((item, index, items) => {
+        if (index === 0) return true;
+        const previous = Number(items[index - 1]!.created_seq ?? 0);
+        const current = Number(item.created_seq ?? 0);
+        return previous > current;
+      }),
+      timeline.timeline_items,
+    );
+    checkEqual('timeline anchor_window 两侧更多', JSON.stringify(timeline.anchor_window), JSON.stringify({
+      message_id: 'msg_anchor_75',
+      has_older: true,
+      has_newer: true,
+    }));
+    checkEqual('timeline has_more 只表示更早侧', timeline.timeline_has_more, true);
+    check('timeline next_cursor 指向窗口最旧项', timeline.timeline_next_cursor !== null, timeline);
+    check('timeline resume cursor 仍存在', (timeline.timeline_resume_cursor ?? '').length > 0, timeline);
+
+    await expectCode(
+      'timeline anchor 与 after 互斥',
+      () =>
+        historyList(db, owner, {
+          room_id: roomId,
+          view: 'timeline',
+          anchor_message_id: 'msg_anchor_75',
+          direction: 'after',
+        }),
+      'INVALID_ARGUMENT',
+    );
+    await expectCode(
+      '非成员 timeline anchor 被拒绝',
+      () =>
+        historyList(db, outsider, {
+          room_id: roomId,
+          view: 'timeline',
+          anchor_message_id: 'msg_anchor_75',
+        }),
+      'NOT_MEMBER',
+    );
+  } finally {
+    sqlite.close();
+  }
+}
+
 export async function runMessageSearchFtsUnitChecks(): Promise<void> {
   await indexChecks();
   await searchChecks();
   await planChecks();
+  await fuzzyChecks();
+  await fuzzyBudgetChecks();
+  await anchorChecks();
 }

@@ -138,6 +138,58 @@ async function main(): Promise<void> {
   await report('高频英文短语', 'lorem ipsum');
   await report('2 字 CJK 回退', '独特');
 
+  console.log('\n== fuzzy 有界扫描（同一个 10k 房间）==');
+  interface FuzzyStats {
+    scanned_count?: number;
+    scan_limited?: boolean;
+    items: unknown[];
+  }
+  const measureFuzzy = async (query: string): Promise<{ samples: number[]; page: FuzzyStats }> => {
+    const samples: number[] = [];
+    let page: FuzzyStats = { items: [] };
+    for (let round = 0; round < ROUNDS; round += 1) {
+      const started = performance.now();
+      page = (await messageSearch(db, principal, {
+        room_id: 'rm_bench',
+        query,
+        mode: 'fuzzy',
+        limit: 25,
+      })) as FuzzyStats;
+      samples.push(performance.now() - started);
+    }
+    return { samples, page };
+  };
+  const { samples: sparseSamples, page: sparsePage } = await measureFuzzy('独特检索词');
+  console.log(
+    `fuzzy 稀疏（500 候选预算）: avg ${(sparseSamples.reduce((sum, value) => sum + value, 0) / sparseSamples.length).toFixed(3)}ms ` +
+      `p95 ${percentile(sparseSamples, 0.95).toFixed(3)}ms, scanned ${sparsePage.scanned_count}, ` +
+      `scan_limited ${String(sparsePage.scan_limited)}, items ${sparsePage.items.length}`,
+  );
+  const { samples: denseSamples, page: densePage } = await measureFuzzy('普通记录');
+  console.log(
+    `fuzzy 密集命中: avg ${(denseSamples.reduce((sum, value) => sum + value, 0) / denseSamples.length).toFixed(3)}ms ` +
+      `p95 ${percentile(denseSamples, 0.95).toFixed(3)}ms, scanned ${densePage.scanned_count}, ` +
+      `items ${densePage.items.length}`,
+  );
+
+  // 256 KiB 长正文作为最新候选，验证单请求正文预算与非连续子序列。
+  const longBody = `${'x'.repeat(256 * 1024 - 16)} 末尾词 发版`;
+  sqlite
+    .prepare(
+      `INSERT INTO messages (message_id, room_id, sender_id, client_message_id, created_seq,
+                             body, body_bytes, preview, reply_to, root_id, hop,
+                             root_invocations_used, created_at)
+       VALUES ('msg_long', 'rm_bench', 'usr_bench', 'client_long', 10001, ?, ?, ?, NULL, NULL, 0, 0, ?)`,
+    )
+    .run(longBody, Buffer.byteLength(longBody), '长正文', NOW);
+  sqlite.prepare("UPDATE rooms SET head_seq = 10001 WHERE room_id = 'rm_bench'").run();
+  const { samples: longSamples, page: longPage } = await measureFuzzy('末尾词');
+  console.log(
+    `fuzzy 256KiB 正文命中: avg ${(longSamples.reduce((sum, value) => sum + value, 0) / longSamples.length).toFixed(3)}ms ` +
+      `p95 ${percentile(longSamples, 0.95).toFixed(3)}ms, scanned ${longPage.scanned_count}, ` +
+      `items ${longPage.items.length}`,
+  );
+
   const ftsBytes = (
     sqlite
       .prepare(

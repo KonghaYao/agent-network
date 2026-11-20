@@ -16,6 +16,7 @@ import {
   listHistoryMessagesBefore,
 } from '../../storage/queries';
 import type { ActorRow, MessageRow } from '../../storage/rows';
+import type { HistoryMessageRow } from '../../storage/queries';
 import { deliveryStatesFor, mentionsFor, nullableString } from '../message-view-helpers';
 import { actorId, type Principal } from '../principal';
 import { loadRoomAccess } from '../room-access';
@@ -28,7 +29,117 @@ import {
   visibleMessage,
 } from '../room-history';
 import { timelineList, type TimelinePage } from '../timeline';
-import { type MessagePage } from './view';
+import { type HistoryMessageView, type MessagePage } from './view';
+
+/** 历史页完整消息投影；普通分页与 anchor 窗口共用同一字段集合。 */
+async function historyViews(
+  db: D1Database,
+  rows: HistoryMessageRow[],
+): Promise<HistoryMessageView[]> {
+  const ids = rows.map((row) => row.message_id);
+  const states = await deliveryStatesFor(db, ids);
+  const mentions = await mentionsFor(db, ids);
+  // 一次 IN 查询取权威 kind，避免网页依赖成员列表或在成员被移出后丢失 AI 属性。
+  const senderIds = [...new Set(rows.map((row) => row.sender_id))];
+  const senders = await getActorsByIds(db, senderIds);
+  const senderKinds = new Map(senders.map((actor) => [actor.actor_id, actor.kind]));
+  return rows.map((row) => {
+    const summary = states.get(row.message_id);
+    return {
+      message_id: row.message_id,
+      room_id: row.room_id,
+      sender_id: row.sender_id,
+      sender_kind: senderKinds.get(row.sender_id) ?? null,
+      created_seq: String(row.created_seq),
+      preview: row.preview,
+      body_bytes: row.body_bytes,
+      created_at: String(row.created_at),
+      reply_to: row.reply_to,
+      root_id: row.root_id,
+      task_root_id: row.task_root_id,
+      hop: row.hop,
+      delivery_states: summary?.states ?? {},
+      mentions: mentions.get(row.message_id) ?? [],
+      delivery_claimed_at: nullableString(summary?.claimedAt ?? null),
+      delivery_updated_at: nullableString(summary?.updatedAt ?? null),
+    };
+  });
+}
+
+/** anchor 窗口：两侧各取一半，limit 是整个窗口的总条数。 */
+async function historyAnchorPage(
+  db: D1Database,
+  room: Awaited<ReturnType<typeof loadRoomAccess>>['room'],
+  boundary: HistoryBoundary,
+  anchorMessageId: string,
+  limit: number,
+  snapshot: number,
+  scope: string,
+): Promise<MessagePage> {
+  const anchor = await getMessage(db, anchorMessageId);
+  if (
+    !anchor ||
+    anchor.room_id !== room.room_id ||
+    anchor.body_bytes <= 0 ||
+    !visibleMessage(anchor, boundary)
+  ) {
+    throw new BusinessError('NOT_FOUND', '消息不存在或当前历史授权不可见');
+  }
+  const beforeCount = Math.floor((limit - 1) / 2);
+  const afterCount = limit - 1 - beforeCount;
+  const [olderRows, newerRows] = await Promise.all([
+    listHistoryMessagesBefore(db, {
+      roomId: room.room_id,
+      snapshot,
+      fromSeq: boundary.fromSeq,
+      beforeSeq: anchor.created_seq,
+      limit: beforeCount + 1,
+    }),
+    listHistoryMessagesAfter(db, {
+      roomId: room.room_id,
+      snapshot,
+      fromSeq: boundary.fromSeq,
+      afterSeq: anchor.created_seq,
+      limit: afterCount + 1,
+    }),
+  ]);
+  const hasOlder = olderRows.length > beforeCount;
+  const hasNewer = newerRows.length > afterCount;
+  const older = olderRows.slice(0, beforeCount);
+  const newer = newerRows.slice(0, afterCount).reverse();
+  const anchorRow: HistoryMessageRow = {
+    message_id: anchor.message_id,
+    room_id: anchor.room_id,
+    sender_id: anchor.sender_id,
+    created_seq: anchor.created_seq,
+    preview: anchor.preview,
+    body_bytes: anchor.body_bytes,
+    created_at: anchor.created_at,
+    reply_to: anchor.reply_to,
+    root_id: anchor.root_id,
+    task_root_id: anchor.task_root_id,
+    hop: anchor.hop,
+  };
+  const rows = [...newer, anchorRow, ...older];
+  const items = await historyViews(db, rows);
+  const oldest = rows.at(-1);
+  return {
+    items,
+    next_cursor:
+      hasOlder && oldest
+        ? encodeCursor({ v: 1, scope, dir: 'before', seq: oldest.created_seq, snapshot })
+        : null,
+    has_more: hasOlder,
+    snapshot: String(snapshot),
+    head_seq: String(room.head_seq),
+    authorization: historySnapshot(boundary),
+    anchor_window: {
+      message_id: anchor.message_id,
+      has_older: hasOlder,
+      has_newer: hasNewer,
+    },
+  };
+}
 
 export async function historyList(
   db: D1Database,
@@ -42,6 +153,15 @@ export async function historyList(
   const boundary = historyBoundary(room, member);
   const authorization = historySnapshot(boundary);
 
+  if (input.anchor_message_id) {
+    if (input.cursor) {
+      throw new BusinessError('INVALID_ARGUMENT', 'anchor_message_id 与 cursor 不能同时使用');
+    }
+    if ((input.direction ?? 'before') === 'after') {
+      throw new BusinessError('INVALID_ARGUMENT', 'anchor_message_id 只支持居中或向前读取');
+    }
+  }
+
   if (input.view === 'timeline') {
     if (principal.actor?.kind !== 'human') {
       throw new BusinessError('INVALID_ARGUMENT', 'timeline 视图仅对人类身份开放');
@@ -51,18 +171,31 @@ export async function historyList(
 
   const scope = historyCursorScope('history', room.room_id, boundary.memberGeneration);
   const limit = clampPage(input.limit, LIMITS.historyPageDefault, LIMITS.historyPageMax);
+  const direction = input.direction ?? 'before';
   const cursor = input.cursor
     ? decodeHistoryCursor(input.cursor, scope, room.room_id)
     : null;
-  const direction = input.direction ?? 'before';
   // 解散归档固定读取上界；after 追新也不能越过 archived_head_seq。
   const readHead =
     boundary.toSeq === null ? room.head_seq : Math.min(room.head_seq, boundary.toSeq);
   // 快照上界只用于向前翻旧页；after 是追新，必须允许超过首次查询时的 head。
-  const snapshot =
-    direction === 'after'
+  const snapshot = input.anchor_message_id
+    ? Math.max(boundary.fromSeq, readHead)
+    : direction === 'after'
       ? readHead
       : Math.max(boundary.fromSeq, cursor?.snapshot ?? readHead);
+
+  if (input.anchor_message_id) {
+    return historyAnchorPage(
+      db,
+      room,
+      boundary,
+      input.anchor_message_id,
+      limit,
+      snapshot,
+      scope,
+    );
+  }
 
   const rows =
     direction === 'before'
@@ -84,40 +217,7 @@ export async function historyList(
   const page = rows.slice(0, limit);
   const hasMore = rows.length > limit;
   const last = page.at(-1);
-  const states = await deliveryStatesFor(
-    db,
-    page.map((row) => row.message_id),
-  );
-  const mentions = await mentionsFor(
-    db,
-    page.map((row) => row.message_id),
-  );
-  // 一次 IN 查询取权威 kind，避免网页依赖成员列表或在成员被移出后丢失 AI 属性。
-  const senderIds = [...new Set(page.map((row) => row.sender_id))];
-  const senders = await getActorsByIds(db, senderIds);
-  const senderKinds = new Map(senders.map((actor) => [actor.actor_id, actor.kind]));
-
-  const items = page.map((row) => {
-    const summary = states.get(row.message_id);
-    return {
-      message_id: row.message_id,
-      room_id: row.room_id,
-      sender_id: row.sender_id,
-      sender_kind: senderKinds.get(row.sender_id) ?? null,
-      created_seq: String(row.created_seq),
-      preview: row.preview,
-      body_bytes: row.body_bytes,
-      created_at: String(row.created_at),
-      reply_to: row.reply_to,
-      root_id: row.root_id,
-      task_root_id: row.task_root_id,
-      hop: row.hop,
-      delivery_states: summary?.states ?? {},
-      mentions: mentions.get(row.message_id) ?? [],
-      delivery_claimed_at: nullableString(summary?.claimedAt ?? null),
-      delivery_updated_at: nullableString(summary?.updatedAt ?? null),
-    };
-  });
+  const items = await historyViews(db, page);
 
   return {
     items,

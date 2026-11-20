@@ -889,6 +889,33 @@ async function main(): Promise<void> {
     historySchema.includes('"task_root_id"'),
     historyTool?.outputSchema,
   );
+  check(
+    'history 输入 schema 包含 anchor_message_id',
+    JSON.stringify(historyTool?.inputSchema ?? {}).includes('"anchor_message_id"'),
+    historyTool?.inputSchema,
+  );
+  check(
+    'history 输出 schema 包含 anchor_window',
+    historySchema.includes('"anchor_window"'),
+    historyTool?.outputSchema,
+  );
+  const messageSearchTool = listed?.tools?.find(
+    (tool) => tool.name === 'network_message_search',
+  ) as TaskToolView | undefined;
+  const messageSearchInput = JSON.stringify(messageSearchTool?.inputSchema ?? {});
+  const messageSearchOutput = JSON.stringify(messageSearchTool?.outputSchema ?? {});
+  check(
+    'message_search 输入包含 exact/fuzzy 模式',
+    ['"mode"', '"exact"', '"fuzzy"'].every((marker) => messageSearchInput.includes(marker)),
+    messageSearchTool?.inputSchema,
+  );
+  check(
+    'message_search 输出包含高亮区间与模糊预算字段',
+    ['"match_ranges"', '"mode"', '"scan_limited"', '"scanned_count"'].every((marker) =>
+      messageSearchOutput.includes(marker),
+    ),
+    messageSearchTool?.outputSchema,
+  );
 
   interface TaskToolView {
     name: string;
@@ -3491,7 +3518,11 @@ async function main(): Promise<void> {
   );
   const historyResult = (
     historyResponse.body.result as
-      | { structuredContent?: { items?: { sender_kind?: string | null }[] } }
+      | {
+          structuredContent?: {
+            items?: { sender_kind?: string | null; message_id?: string }[];
+          };
+        }
       | undefined
   )?.structuredContent;
   const historyKinds = new Set((historyResult?.items ?? []).map((item) => item.sender_kind));
@@ -3511,6 +3542,48 @@ async function main(): Promise<void> {
     ),
     historyResult?.items?.map((item) => item.sender_kind),
   );
+
+  // anchor 窗口：返回目标消息与两侧提示，cursor 只表示更早侧。
+  const anchorTarget = historyResult?.items?.[0]?.message_id;
+  if (anchorTarget) {
+    const anchored = await rawToolCall<{
+      items: { message_id: string }[];
+      next_cursor: string | null;
+      has_more: boolean;
+      anchor_window?: { message_id: string; has_older: boolean; has_newer: boolean };
+    }>(browserToken, 'network_history_list', {
+      room_id: historyRoomId,
+      anchor_message_id: anchorTarget,
+      limit: 3,
+    });
+    check(
+      'history anchor 窗口包含目标消息',
+      anchored.data?.items.some((item) => item.message_id === anchorTarget) === true,
+      anchored.data,
+    );
+    checkEqual(
+      'history anchor_window 指向目标消息',
+      anchored.data?.anchor_window?.message_id,
+      anchorTarget,
+    );
+    const anchorAfter = await rawToolCall(browserToken, 'network_history_list', {
+      room_id: historyRoomId,
+      anchor_message_id: anchorTarget,
+      direction: 'after',
+    });
+    checkEqual('history anchor 拒绝 direction=after', anchorAfter.code, 'INVALID_ARGUMENT');
+    const anchorWithCursor = await rawToolCall(browserToken, 'network_history_list', {
+      room_id: historyRoomId,
+      anchor_message_id: anchorTarget,
+      cursor: anchored.data?.next_cursor ?? 'missing_cursor',
+      limit: 3,
+    });
+    checkEqual(
+      'history anchor 拒绝 cursor',
+      anchorWithCursor.code,
+      'INVALID_ARGUMENT',
+    );
+  }
 
   // after 游标必须单调前进：本页返回消息时指向最后一条 created_seq；
   // 再次传入不得重复返回同一段，避免 CLI reconnect 补读原地打转。
