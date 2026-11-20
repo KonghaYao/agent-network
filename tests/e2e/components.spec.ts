@@ -401,6 +401,89 @@ test.describe.serial('SPA 组件库与状态管理', () => {
     await expect(toggle).toBeFocused();
   });
 
+  test('390/1280 的「···」按钮透明、32px 视觉盒且仍能打开菜单', async ({ page }) => {
+    const metrics = (selector: string) =>
+      page.locator(selector).first().evaluate((node) => {
+        const style = getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        const hit = getComputedStyle(node, '::after');
+        return {
+          width: Math.round(rect.width * 10) / 10,
+          height: Math.round(rect.height * 10) / 10,
+          background: style.backgroundColor,
+          borderWidth: style.borderTopWidth,
+          boxShadow: style.boxShadow,
+          fontSize: Number.parseFloat(style.fontSize),
+          hitWidth: hit.width,
+          hitHeight: hit.height,
+        };
+      });
+    const expectDot = async (selector: string) => {
+      const value = await metrics(selector);
+      expect(value.background, selector).toBe('rgba(0, 0, 0, 0)');
+      expect(value.borderWidth, selector).toBe('0px');
+      expect(value.boxShadow, selector).toBe('none');
+      expect(value.width, selector).toBeGreaterThanOrEqual(32);
+      expect(value.width, selector).toBeLessThanOrEqual(36);
+      expect(value.height, selector).toBeGreaterThanOrEqual(32);
+      expect(value.height, selector).toBeLessThanOrEqual(36);
+      expect(value.fontSize, selector).toBeGreaterThanOrEqual(18);
+      expect(value.fontSize, selector).toBeLessThanOrEqual(20);
+      return value;
+    };
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${base}/c/${roomId}`);
+    await expect(page.locator('#composer')).toBeVisible();
+    await expect(page.locator('.message-actions-trigger').first()).toBeVisible();
+
+    await expectDot('#account-menu-toggle');
+    await expectDot('#room-menu-toggle');
+    const messageDot = await expectDot('.message-actions-trigger');
+    // 视觉盒缩到 32px 后，原 44px 触控命中区仍保留在透明伪元素上。
+    expect(messageDot.hitWidth).toBe('44px');
+    expect(messageDot.hitHeight).toBe('44px');
+
+    // 静止透明，悬停出现浅色反馈；移开后恢复透明。
+    const roomDot = page.locator('#room-menu-toggle');
+    await roomDot.hover();
+    await expect
+      .poll(() => roomDot.evaluate((node) => getComputedStyle(node).backgroundColor))
+      .not.toBe('rgba(0, 0, 0, 0)');
+    await page.mouse.move(0, 0);
+    await expect
+      .poll(() => roomDot.evaluate((node) => getComputedStyle(node).backgroundColor))
+      .toBe('rgba(0, 0, 0, 0)');
+
+    await roomDot.click();
+    await expect(page.locator('#room-menu')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#room-menu')).toBeHidden();
+
+    await page.locator('#account-menu-toggle').click();
+    await expect(page.locator('#account-menu')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#account-menu')).toBeHidden();
+
+    await page.locator('.message-actions-trigger').first().click();
+    await expect(page.locator('#message-action-menu')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#message-action-menu')).toBeHidden();
+
+    // 桌面端同样收敛，不因移动端规则回退；账号入口仍在侧栏。
+    // 先移开指针，避免刚点过的消息按钮仍处于 hover 反馈。
+    await page.mouse.move(0, 0);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await expect(page.locator('#composer')).toBeVisible();
+    await expect(page.locator('#account-menu-toggle')).toBeHidden();
+    await expectDot('#room-menu-toggle');
+    await expectDot('.message-actions-trigger');
+    await page.locator('#room-menu-toggle').click();
+    await expect(page.locator('#room-menu')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#room-menu')).toBeHidden();
+  });
+
   test('拖放上传走 dropzone，仍保留 XHR 进度与文件 chip', async ({ page }) => {
     await page.goto(`${base}/c/${roomId}`);
     await expect(page.locator('#composer')).toBeVisible();
