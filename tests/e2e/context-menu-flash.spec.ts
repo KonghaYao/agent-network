@@ -1,14 +1,38 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import type { CDPSession } from 'playwright-core';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
+import {
+  buildTextMask,
+  clampRect,
+  decodePngLuma,
+  gradientMeanAtMask,
+  meanAbsDiff,
+  type LumaImage,
+  type RasterRect,
+} from './fixtures/png-pixels';
+
 /**
- * 右键菜单瞬态闪烁回归。
+ * 右键菜单首帧回归（像素级）。
  *
- * 真实 Bun 服务与 Chromium；消息、群成员与文件卡都走真实 MCP 工具。每种目标
- * 右键后逐动画帧采样 600ms：页面底色/根节点透明度、滚动尺寸、菜单 root 与
- * 内容层的透明度必须同步出现，不能先铺一块空白玻璃面再淡入条目。
+ * 真实 Bun 服务与 Chromium；用 CDP screencast 记录右键后的合成帧，逐帧比较
+ * 菜单投影/玻璃面与文字边缘。修复前 Lenso 先画 layout 根节点的投影，popup
+ * 下一帧才出现，浅色与深色都能截到一帧空白菜单。
+ *
+ * 每个目标浅色、深色各右键 20 次；任何一帧只要菜单壳（投影或玻璃面）可见，
+ * 文字就必须已经出现，否则失败。
  */
+
+const RUNS = 20;
+/** 右键后采样的合成帧窗口；覆盖 popup 挂载、内容和详情加载。 */
+const CAPTURE_MS = 260;
+/** 菜单框外 28px 内是投影；用投影判断“菜单壳已出现”。 */
+const SHADOW_THRESHOLD = 0.6;
+/** 菜单内部亮度变化超过该值，说明玻璃面已经绘制。 */
+const SURFACE_THRESHOLD = 0.3;
+/** 文字掩码位置上的平均局部对比度；空白玻璃面接近 0。 */
+const TEXT_THRESHOLD = 8;
 
 async function baseUrl(): Promise<string> {
   if (process.env.E2E_BASE_URL) return process.env.E2E_BASE_URL;
@@ -110,227 +134,116 @@ async function login(page: Page, token: string) {
   }, token);
 }
 
-interface FlashFrame {
-  t: number;
-  html: {
-    bg: string;
-    opacity: string;
-    filter: string;
-    transform: string;
-    scrollWidth: number;
-    scrollHeight: number;
-    scrollTop: number;
-  };
-  body: { bg: string; opacity: string; filter: string; transform: string };
-  root: {
-    bg: string;
-    opacity: string;
-    filter: string;
-    transform: string;
-    width: number;
-    height: number;
-  } | null;
-  menu: {
-    slot: string | null;
-    popup: boolean;
-    surfaceOpacity: number | null;
-    contentOpacity: number | null;
-    contentFilter: string | null;
-    contentTransform: string | null;
-    itemHeight: number;
-    itemCount: number;
-    width: number;
-    height: number;
-  } | null;
-  fullscreen: string[];
+interface CapturedMenu {
+  frames: LumaImage[];
+  box: RasterRect;
 }
 
 /**
- * 在动画帧里采样；菜单出现后的任意一帧，只要玻璃面可见，内容层也必须可见。
- * 修复前 Lenso 会先画一块最终尺寸的玻璃面，再把条目从 opacity 0 淡入。
+ * 右键一次并抓取合成帧。先等到一帧 pre-open 画面再点击，首帧即基线；停止
+ * screencast 后再解码，避免 PNG 解码阻塞 CDP 的帧确认。
  */
-async function installFlashProbe(page: Page, menuSelector: string): Promise<void> {
-  await page.evaluate((selector) => {
-    const signature = (element: Element) =>
-      `${element.tagName}#${element.id}|${element.getAttribute('data-lenso-slot') ?? ''}|${element.getAttribute('role') ?? ''}|${String(element.className).slice(0, 120)}`;
-    const visibleFullscreen = (element: Element) => {
-      const style = getComputedStyle(element);
-      const rect = element.getBoundingClientRect();
-      if (rect.width < innerWidth * 0.95 || rect.height < innerHeight * 0.95) return false;
-      if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) <= 0.01) return false;
-      return (
-        style.backgroundColor !== 'rgba(0, 0, 0, 0)' ||
-        style.backdropFilter !== 'none' ||
-        style.backgroundImage !== 'none'
-      );
-    };
-    const menuScope = '[role="menu"], [data-lenso-slot*="context-menu"], [data-lenso-slot*="menu"], [data-lenso-slot*="backdrop"], [data-lenso-slot*="scrim"], [data-material-live-paints], [data-lenso-live-rim], .spa-dialog-overlay';
-    const baseline = new Set(
-      [...document.querySelectorAll(menuScope)].filter(visibleFullscreen).map(signature),
-    );
-    const frames: FlashFrame[] = [];
-    const started = performance.now();
-    const probe = window as unknown as {
-      __flashFrames: FlashFrame[];
-      __flashStop: boolean;
-    };
-    probe.__flashFrames = frames;
-    probe.__flashStop = false;
-    const read = () => {
-      const menu = document.querySelector<HTMLElement>(selector);
-      const popup = menu?.querySelector<HTMLElement>('[data-lenso-slot="menu-popup"]') ?? null;
-      const surface = popup?.querySelector<HTMLElement>(':scope > [data-lenso-slot="menu-surface"]') ?? null;
-      const content = popup?.querySelector<HTMLElement>(':scope > [data-lenso-slot="menu-content"]') ?? null;
-      const items = menu ? [...menu.querySelectorAll<HTMLElement>('[role="menuitem"]')] : [];
-      const firstItem = items.find((item) => {
-        const rect = item.getBoundingClientRect();
-        return rect.width > 0 && rect.height > 0;
-      });
-      const htmlStyle = getComputedStyle(document.documentElement);
-      const bodyStyle = getComputedStyle(document.body);
-      const rootNode = document.getElementById('root');
-      const rootStyle = rootNode ? getComputedStyle(rootNode) : null;
-      const rootRect = rootNode?.getBoundingClientRect();
-      const menuRect = menu?.getBoundingClientRect();
-      frames.push({
-        t: Math.round(performance.now() - started),
-        html: {
-          bg: htmlStyle.backgroundColor,
-          opacity: htmlStyle.opacity,
-          filter: htmlStyle.filter,
-          transform: htmlStyle.transform,
-          scrollWidth: document.documentElement.scrollWidth,
-          scrollHeight: document.documentElement.scrollHeight,
-          scrollTop: document.documentElement.scrollTop,
-        },
-        body: {
-          bg: bodyStyle.backgroundColor,
-          opacity: bodyStyle.opacity,
-          filter: bodyStyle.filter,
-          transform: bodyStyle.transform,
-        },
-        root: rootStyle
-          ? {
-              bg: rootStyle.backgroundColor,
-              opacity: rootStyle.opacity,
-              filter: rootStyle.filter,
-              transform: rootStyle.transform,
-              width: Math.round(rootRect?.width ?? 0),
-              height: Math.round(rootRect?.height ?? 0),
-            }
-          : null,
-        menu: menu
-          ? {
-              slot: menu.getAttribute('data-lenso-slot'),
-              popup: Boolean(popup),
-              surfaceOpacity: surface ? Number(getComputedStyle(surface).opacity) : null,
-              contentOpacity: content ? Number(getComputedStyle(content).opacity) : null,
-              contentFilter: content ? getComputedStyle(content).filter : null,
-              contentTransform: content ? getComputedStyle(content).transform : null,
-              itemHeight: Math.round(firstItem?.getBoundingClientRect().height ?? 0),
-              itemCount: items.length,
-              width: Math.round(menuRect?.width ?? 0),
-              height: Math.round(menuRect?.height ?? 0),
-            }
-          : null,
-        fullscreen: [...document.querySelectorAll(menuScope)]
-          .filter(visibleFullscreen)
-          .map(signature)
-          .filter((entry) => !baseline.has(entry)),
-      });
-      if (!probe.__flashStop) requestAnimationFrame(read);
-    };
-    requestAnimationFrame(read);
-  }, menuSelector);
-}
-
-async function readFlashProbe(page: Page): Promise<FlashFrame[]> {
-  return page.evaluate(() => {
-    const probe = window as unknown as {
-      __flashFrames: FlashFrame[];
-      __flashStop: boolean;
-    };
-    probe.__flashStop = true;
-    return probe.__flashFrames;
-  });
-}
-
-function assertNoPageFlash(frames: FlashFrame[]): void {
-  expect(frames.length).toBeGreaterThan(10);
-  const pageStates = new Set(
-    frames.map((frame) =>
-      JSON.stringify([
-        frame.html.bg,
-        frame.html.opacity,
-        frame.html.filter,
-        frame.html.transform,
-        frame.body.bg,
-        frame.body.opacity,
-        frame.body.filter,
-        frame.body.transform,
-        frame.root?.bg,
-        frame.root?.opacity,
-        frame.root?.filter,
-        frame.root?.transform,
-      ]),
-    ),
-  );
-  expect(pageStates.size, [...pageStates].join('\n')).toBe(1);
-  const scrollStates = new Set(
-    frames.map((frame) => `${frame.html.scrollWidth}x${frame.html.scrollHeight}@${frame.html.scrollTop}`),
-  );
-  expect(scrollStates.size, [...scrollStates].join('\n')).toBe(1);
-  const rootSizes = new Set(frames.map((frame) => `${frame.root?.width}x${frame.root?.height}`));
-  expect(rootSizes.size, [...rootSizes].join('\n')).toBe(1);
-  for (const frame of frames) {
-    expect(frame.fullscreen, `t=${frame.t}`).toEqual([]);
-  }
-}
-
-function assertMaterialAndContentTogether(frames: FlashFrame[]): void {
-  const menuFrames = frames.filter((frame) => frame.menu);
-  expect(menuFrames.length).toBeGreaterThan(3);
-  expect(menuFrames.some((frame) => frame.menu?.slot === 'context-menu-layout')).toBe(true);
-  const lensoFrames = menuFrames.filter(
-    (frame) => frame.menu?.popup === true && frame.menu.surfaceOpacity !== null && frame.menu.contentOpacity !== null,
-  );
-  expect(lensoFrames.length).toBeGreaterThan(3);
-  for (const frame of lensoFrames) {
-    const { surfaceOpacity, contentOpacity, itemHeight, itemCount } = frame.menu!;
-    if (surfaceOpacity !== null && surfaceOpacity > 0.5) {
-      // 修复前 contentOpacity 为 0 而玻璃面已完全可见；两者必须同帧出现。
-      expect(contentOpacity ?? 0, `t=${frame.t} surface=${surfaceOpacity}`).toBeGreaterThan(0.5);
-      expect(itemHeight, `t=${frame.t}`).toBeGreaterThanOrEqual(24);
-      expect(itemCount, `t=${frame.t}`).toBeGreaterThan(0);
-    }
-  }
-}
-
-async function assertMenuInteractive(menu: Locator): Promise<void> {
-  await expect(menu).toBeVisible();
-  const first = menu.locator('[role="menuitem"]:not([aria-disabled="true"])').first();
-  await expect(first).toBeVisible();
-  const box = await first.boundingBox();
-  expect(box).not.toBeNull();
-  expect(box?.height ?? 0).toBeGreaterThanOrEqual(24);
-}
-
-async function probeRightClick(
+async function captureMenu(
   page: Page,
+  cdp: CDPSession,
   target: Locator,
   menuSelector: string,
-): Promise<void> {
-  await target.scrollIntoViewIfNeeded();
-  await installFlashProbe(page, menuSelector);
-  await target.click({ button: 'right' });
-  await page.waitForTimeout(620);
-  const frames = await readFlashProbe(page);
-  assertNoPageFlash(frames);
-  assertMaterialAndContentTogether(frames);
-  await assertMenuInteractive(page.locator(menuSelector));
+): Promise<CapturedMenu> {
+  const payloads: Buffer[] = [];
+  const onFrame = (event: { data: string; sessionId: number }) => {
+    payloads.push(Buffer.from(event.data, 'base64'));
+    void cdp.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch(() => undefined);
+  };
+  cdp.on('Page.screencastFrame', onFrame);
+  await cdp.send('Page.startScreencast', { format: 'png', everyNthFrame: 1 });
+  try {
+    await new Promise<void>((resolveFrame, rejectFrame) => {
+      const timer = setTimeout(() => rejectFrame(new Error('screencast 未产生首帧')), 3000);
+      cdp.once('Page.screencastFrame', () => {
+        clearTimeout(timer);
+        resolveFrame();
+      });
+    });
+    // 首帧落袋后再点击，保证 frames[0] 是菜单出现前的基线。
+    await page.waitForTimeout(24);
+    await target.click({ button: 'right' });
+    await page.waitForTimeout(CAPTURE_MS);
+    const menu = page.locator(menuSelector);
+    await expect(menu).toBeVisible();
+    const box = await menu.boundingBox();
+    if (!box) throw new Error(`菜单没有布局盒：${menuSelector}`);
+    return { frames: payloads.map((payload) => decodePngLuma(payload)), box };
+  } finally {
+    await cdp.send('Page.stopScreencast').catch(() => undefined);
+    cdp.off('Page.screencastFrame', onFrame);
+    // 停止后仍可能有在途帧，等一下再返回，避免把残帧算进下一次。
+    await page.waitForTimeout(40);
+  }
 }
 
-test.describe('右键菜单瞬态闪烁', () => {
+function assertNoBlankFrame(captured: CapturedMenu): void {
+  const { frames, box } = captured;
+  expect(frames.length, 'screencast 帧数不足').toBeGreaterThan(1);
+  const viewport = { width: frames[0]!.width, height: frames[0]!.height };
+  const innerHeight = Math.min(box.height, 152) - 16;
+  const inner = clampRect(
+    { x: box.x + 14, y: box.y + 8, width: box.width - 28, height: innerHeight },
+    viewport.width,
+    viewport.height,
+  );
+  const rightShadow = clampRect(
+    { x: box.x + box.width + 1, y: box.y + 16, width: 27, height: box.height - 32 },
+    viewport.width,
+    viewport.height,
+  );
+  const bottomShadow = clampRect(
+    { x: box.x + 16, y: box.y + box.height + 1, width: box.width - 32, height: 27 },
+    viewport.width,
+    viewport.height,
+  );
+  const baseline = frames[0]!;
+  const settled = frames[frames.length - 1]!;
+  const textMask = buildTextMask(settled, inner, 30);
+  expect(textMask.count, '稳定帧没有提取到文字边缘').toBeGreaterThan(20);
+
+  let textFrames = 0;
+  const blankFrames: string[] = [];
+  for (let index = 0; index < frames.length; index += 1) {
+    const frame = frames[index]!;
+    const innerDiff = meanAbsDiff(frame, baseline, inner);
+    const shadow = Math.max(
+      meanAbsDiff(frame, baseline, rightShadow),
+      meanAbsDiff(frame, baseline, bottomShadow),
+    );
+    const text = gradientMeanAtMask(frame, inner, textMask.mask);
+    if (shadow > SHADOW_THRESHOLD && innerDiff < SURFACE_THRESHOLD) {
+      blankFrames.push(`frame ${index}: 只有菜单投影/空白面（shadow=${shadow.toFixed(2)}）`);
+    } else if (shadow > SHADOW_THRESHOLD && innerDiff >= SURFACE_THRESHOLD && text < TEXT_THRESHOLD) {
+      blankFrames.push(
+        `frame ${index}: 玻璃面已绘制但没有文字（inner=${innerDiff.toFixed(2)} text=${text.toFixed(1)}）`,
+      );
+    }
+    if (innerDiff >= SURFACE_THRESHOLD && text >= TEXT_THRESHOLD) textFrames += 1;
+  }
+  expect(textFrames, '整段采样都没有看到菜单文字').toBeGreaterThan(0);
+  expect(blankFrames, `出现空白菜单帧：\n${blankFrames.join('\n')}`).toEqual([]);
+}
+
+async function gotoChat(page: Page, base: string, roomId: string): Promise<void> {
+  await page.goto(`${base}/c/${roomId}`);
+  await expect(page.locator('#messages .msg').last()).toBeVisible();
+}
+
+const TARGETS = [
+  '会话行',
+  '消息气泡',
+  '消息头像',
+  '文件卡',
+  '群成员头像',
+] as const;
+type TargetName = (typeof TARGETS)[number];
+
+test.describe('右键菜单逐帧像素回归', () => {
   test.use({ viewport: { width: 1280, height: 800 } });
 
   let base = '';
@@ -420,58 +333,74 @@ test.describe('右键菜单瞬态闪烁', () => {
     await login(page, tokenA);
   });
 
-  test('会话行右键：玻璃面与条目同帧出现，页面不闪、滚动不跳', async ({ page }) => {
-    await page.goto(`${base}/`);
-    const row = page.locator(`#room-list a[data-room-id="${groupId}"]`);
-    await expect(row).toBeVisible();
+  async function targetFor(page: Page, name: TargetName): Promise<{ target: Locator; menu: string }> {
+    switch (name) {
+      case '会话行': {
+        await page.goto(`${base}/`);
+        const row = page.locator(`#room-list a[data-room-id="${groupId}"]`);
+        await expect(row).toBeVisible();
+        return { target: row, menu: '#room-row-menu' };
+      }
+      case '消息气泡': {
+        await gotoChat(page, base, groupId);
+        return { target: page.locator('.msg:not(.mine) .bubble').last(), menu: '#message-context-menu' };
+      }
+      case '消息头像': {
+        await gotoChat(page, base, groupId);
+        return { target: page.locator('.msg:not(.mine) .msg-avatar').last(), menu: '#message-context-menu' };
+      }
+      case '文件卡': {
+        await gotoChat(page, base, groupId);
+        expect(fileSent).toBe(true);
+        return { target: page.locator('.msg-file').last(), menu: '#message-context-menu' };
+      }
+      case '群成员头像': {
+        await gotoChat(page, base, groupId);
+        await page.locator('#members-button').click();
+        await expect(page.locator('#members-modal')).toBeVisible();
+        return {
+          target: page
+            .locator('#members-modal .member-roster-item', { hasText: agentName })
+            .locator('.memory-avatar-trigger'),
+          menu: '#memory-avatar-menu',
+        };
+      }
+    }
+  }
 
-    await probeRightClick(page, row, '#room-row-menu');
+  for (const theme of ['light', 'dark'] as const) {
+    test.describe(theme === 'light' ? '浅色' : '深色', () => {
+      test.use({ colorScheme: theme });
 
-    const menu = page.locator('#room-row-menu');
-    await expect(page.locator('#room-row-menu-pin')).toBeVisible();
-    await page.locator('#room-row-menu-pin').click();
-    await expect(menu).toBeHidden();
-    await expect(row.locator('.room-pref-label')).toHaveText('置顶');
-  });
+      for (const name of TARGETS) {
+        test(`${name}：20 次右键都没有空白首帧`, async ({ page, context }) => {
+          const cdp = await context.newCDPSession(page);
+          const { target, menu } = await targetFor(page, name);
+          await expect(target).toBeVisible();
 
-  test('消息气泡、头像与文件卡右键：逐帧无空白玻璃面', async ({ page }) => {
-    await page.goto(`${base}/c/${groupId}`);
-    await expect(page.locator('#messages .msg').last()).toBeVisible();
+          for (let run = 0; run < RUNS; run += 1) {
+            const captured = await captureMenu(page, cdp, target, menu);
+            expect(captured.frames[0]?.width, 'screencast 与视口尺寸不一致').toBe(1280);
+            assertNoBlankFrame(captured);
 
-    const bubble = page.locator('.msg:not(.mine) .bubble').last();
-    await probeRightClick(page, bubble, '#message-context-menu');
-    await page.locator('#message-action-quote').click();
-    await expect(page.locator('#message-context-menu')).toBeHidden();
-    await expect(page.locator('#composer-reply')).toBeVisible();
-    await page.getByRole('button', { name: '取消引用' }).click();
+            await page.keyboard.press('Escape');
+            await expect(page.locator(menu)).toBeHidden();
+            // 等 Lenso 卸载完成，避免下一次右键仍处于退场状态。
+            await page.waitForTimeout(24);
+          }
 
-    const avatar = page.locator('.msg:not(.mine) .msg-avatar').last();
-    await probeRightClick(page, avatar, '#message-context-menu');
-    await page.keyboard.press('Escape');
-    await expect(page.locator('#message-context-menu')).toBeHidden();
-
-    expect(fileSent).toBe(true);
-    const file = page.locator('.msg-file').last();
-    await expect(file).toBeVisible();
-    await probeRightClick(page, file, '#message-context-menu');
-    await page.keyboard.press('Escape');
-    await expect(page.locator('#message-context-menu')).toBeHidden();
-  });
-
-  test('群成员头像右键：菜单与内容同步出现并保持可关闭', async ({ page }) => {
-    await page.goto(`${base}/c/${groupId}`);
-    await expect(page.locator('#messages .msg').last()).toBeVisible();
-    await page.locator('#members-button').click();
-    const modal = page.locator('#members-modal');
-    await expect(modal).toBeVisible();
-    const avatar = modal
-      .locator('.member-roster-item', { hasText: agentName })
-      .locator('.memory-avatar-trigger');
-    await expect(avatar).toBeVisible();
-
-    await probeRightClick(page, avatar, '#memory-avatar-menu');
-    await page.keyboard.press('Escape');
-    await expect(page.locator('#memory-avatar-menu')).toBeHidden();
-    await expect(modal).toBeVisible();
-  });
+          // 首帧检查不替代交互：最后一次打开后确认菜单可定位、可 Esc 关闭。
+          const final = await captureMenu(page, cdp, target, menu);
+          expect(final.box.width).toBeGreaterThan(100);
+          expect(final.box.height).toBeGreaterThanOrEqual(44);
+          const firstItem = page.locator(`${menu} [role="menuitem"]`).first();
+          await expect(firstItem).toBeVisible();
+          const itemBox = await firstItem.boundingBox();
+          expect(itemBox?.height ?? 0).toBeGreaterThanOrEqual(24);
+          await page.keyboard.press('Escape');
+          await expect(page.locator(menu)).toBeHidden();
+        });
+      }
+    });
+  }
 });
