@@ -35,6 +35,19 @@ import {
 } from '../../lib/files-ui';
 import { callTool } from '../../lib/mcp-client';
 import type { WebIdentity } from '../../lib/identity';
+import { composerUpdateBusy, setUpdateBusy } from '../../pwa/update-busy';
+import {
+  defaultSnapshotStorage,
+  getUpdateTabId,
+  readUpdateSnapshot,
+  removeUpdateSnapshot,
+} from '../../pwa/update-snapshot';
+import {
+  registerUpdateDraftProvider,
+  requestSafeUpdate,
+  useUpdateState,
+  useUpdateWriteBlocked,
+} from '../../pwa/update-store';
 import {
   findMentionQuery,
   insertMention,
@@ -57,7 +70,10 @@ const DRAWBOARD_ASSET_URL =
     : '/assets/chat-drawboard.js';
 
 interface DrawboardModule {
-  openDrawboard(options: { onInsert: (file: File) => void }): void;
+  openDrawboard(options: {
+    onInsert: (file: File) => void;
+    onClose?: () => void;
+  }): void;
 }
 
 let drawboardPromise: Promise<DrawboardModule> | null = null;
@@ -292,14 +308,20 @@ export function Composer({
   const [selections, setSelections] = useState<MentionSelection[]>([]);
   const [mention, setMention] = useState<MentionQuery | null>(null);
   const [localSending, setLocalSending] = useState(false);
+  const [composing, setComposing] = useState(false);
   const [attachOpen, setAttachOpen] = useState(false);
   const [drawboardLoading, setDrawboardLoading] = useState(false);
+  const [drawboardOpen, setDrawboardOpen] = useState(false);
   const [drawboardError, setDrawboardError] = useState(false);
+  const [restoreTick, setRestoreTick] = useState(0);
+  const writeBlocked = useUpdateWriteBlocked();
+  const updateState = useUpdateState();
+  const updateAvailable =
+    updateState.phase === 'available' || updateState.phase === 'incompatible';
   const drawboardOpening = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const textRef = useRef(text);
-  const pendingCaretRef = useRef<number | null>(null);
-  const autoCaretRef = useRef(false);
+  const pendingCaretRef = useRef<number | null>(null);  const autoCaretRef = useRef(false);
   const handledReplyRef = useRef<ComposerReply | null>(null);
   const handledDraftRef = useRef<ComposerDraftRequest | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -308,6 +330,16 @@ export function Composer({
   const suppressEnterRef = useRef(false);
   const sendingRef = useRef(false);
   const mountedRef = useRef(true);
+  const restoredKeyRef = useRef<string | null>(null);
+  const restoredSelectionRef = useRef<{ start: number; end: number } | null>(null);
+  const selectionRef = useRef({ start: 0, end: 0 });
+
+  const rememberSelection = (element: HTMLTextAreaElement): void => {
+    selectionRef.current = {
+      start: element.selectionStart ?? 0,
+      end: element.selectionEnd ?? 0,
+    };
+  };
 
   const combobox = Ariakit.useComboboxStore({ defaultOpen: false });
 
@@ -318,12 +350,73 @@ export function Composer({
     };
   }, []);
 
+  // 记录最近一次有效光标/选区；点击更新按钮后 textarea 失焦仍能写入快照。
+  useEffect(() => {
+    const onSelectionChange = (): void => {
+      const element = textareaRef.current;
+      if (element && document.activeElement === element) rememberSelection(element);
+    };
+    document.addEventListener('selectionchange', onSelectionChange);
+    return () => document.removeEventListener('selectionchange', onSelectionChange);
+  }, []);
+
   useEffect(() => {
     setText(readDraft(key));
     setFiles([]);
     setSelections([]);
     setMention(null);
   }, [key]);
+
+  /*
+   * 显式更新后的一次性快照恢复。Composer 只在身份与房间读取成功后挂载，
+   * 因此这里已经完成账号与房间访问核验；key 同时校验 actor/room/tab。
+   */
+  useEffect(() => {
+    if (restoredKeyRef.current === key) return;
+    restoredKeyRef.current = key;
+    const storage = defaultSnapshotStorage();
+    const tabId = getUpdateTabId(storage);
+    const snapshot = readUpdateSnapshot({
+      storage,
+      tabId,
+      actorId: identity.actor_id,
+      roomId: room.room_id,
+    });
+    if (!snapshot) return;
+    setText(snapshot.text);
+    restoredSelectionRef.current = {
+      start: Math.min(snapshot.selectionStart, snapshot.text.length),
+      end: Math.min(snapshot.selectionEnd, snapshot.text.length),
+    };
+    setRestoreTick((value) => value + 1);
+    removeUpdateSnapshot({
+      storage,
+      tabId,
+      actorId: identity.actor_id,
+      roomId: room.room_id,
+    });
+  }, [identity.actor_id, key, room.room_id]);
+
+  useEffect(
+    () =>
+      registerUpdateDraftProvider(() => {
+        const value = textRef.current;
+        const element = textareaRef.current;
+        const focused = element !== null && document.activeElement === element;
+        return {
+          actorId: identity.actor_id,
+          roomId: room.room_id,
+          text: value,
+          selectionStart: focused
+            ? (element.selectionStart ?? value.length)
+            : selectionRef.current.start,
+          selectionEnd: focused
+            ? (element.selectionEnd ?? value.length)
+            : selectionRef.current.end,
+        };
+      }),
+    [identity.actor_id, room.room_id],
+  );
 
   useEffect(() => {
     textRef.current = text;
@@ -388,12 +481,17 @@ export function Composer({
       element.setSelectionRange(end, end);
       return;
     }
+    const restored = restoredSelectionRef.current;
+    if (restored) {
+      restoredSelectionRef.current = null;
+      element.setSelectionRange(restored.start, restored.end);
+    }
     const caret = pendingCaretRef.current;
     if (caret === null) return;
     element.focus();
     element.setSelectionRange(caret, caret);
     pendingCaretRef.current = null;
-  }, [text]);
+  }, [text, restoreTick]);
 
   useEffect(() => {
     const element = textareaRef.current;
@@ -431,7 +529,26 @@ export function Composer({
   const uploading = files.some((file) => file.status === 'uploading');
   const busy = sending || localSending;
   const readyFiles = files.filter((file) => file.status === 'ready' && file.publicUrl);
-  const canSend = !busy && !uploading && !room.read_only && (text.trim().length > 0 || readyFiles.length > 0);
+  const canSend =
+    !busy &&
+    !uploading &&
+    !room.read_only &&
+    !writeBlocked &&
+    (text.trim().length > 0 || readyFiles.length > 0);
+  const updateBusyLabel = composerUpdateBusy({
+    composing,
+    selections: selections.length,
+    reply: Boolean(reply),
+    files,
+    sending: busy,
+    drawboardLoading,
+    drawboardOpen,
+  }).join('；');
+
+  useEffect(() => {
+    setUpdateBusy('composer', updateBusyLabel || null);
+    return () => setUpdateBusy('composer', null);
+  }, [updateBusyLabel]);
 
   const refreshMention = useCallback(
     (value: string, caret: number) => {
@@ -469,6 +586,10 @@ export function Composer({
 
   const addFiles = useCallback(
     (fileList: FileList | File[]) => {
+      if (writeBlocked) {
+        onStatus('当前页面与服务器版本不兼容，请先更新后再添加附件。');
+        return;
+      }
       const incoming = Array.from(fileList);
       for (const file of incoming) {
         const fileKey = `cf_${crypto.randomUUID()}`;
@@ -513,7 +634,7 @@ export function Composer({
         })();
       }
     },
-    [onStatus, room.room_id, token],
+    [onStatus, room.room_id, token, writeBlocked],
   );
 
   useEffect(() => {
@@ -527,6 +648,10 @@ export function Composer({
         onStatus('群已解散，当前为只读归档，不能使用画板。');
         return;
       }
+      if (writeBlocked) {
+        onStatus('当前页面与服务器版本不兼容，请先更新后再使用画板。');
+        return;
+      }
       if (drawboardOpening.current) return;
       drawboardOpening.current = true;
       setDrawboardError(false);
@@ -535,18 +660,21 @@ export function Composer({
         const module = await loadDrawboard(forceRetry);
         if (!mountedRef.current) return;
         setDrawboardLoading(false);
+        setDrawboardOpen(true);
         module.openDrawboard({
           onInsert: (file) => addFiles([file]),
+          onClose: () => setDrawboardOpen(false),
         });
       } catch {
         if (!mountedRef.current) return;
         setDrawboardLoading(false);
+        setDrawboardOpen(false);
         setDrawboardError(true);
       } finally {
         drawboardOpening.current = false;
       }
     },
-    [addFiles, onStatus, room.read_only],
+    [addFiles, onStatus, room.read_only, writeBlocked],
   );
 
   useEffect(() => {
@@ -579,7 +707,12 @@ export function Composer({
   };
 
   const submit = async () => {
-    if (sendingRef.current || !canSend) return;
+    if (sendingRef.current) return;
+    if (writeBlocked) {
+      onStatus('当前页面与服务器版本不兼容，请先更新后再发送。');
+      return;
+    }
+    if (!canSend) return;
     if (text.trim().length === 0 && readyFiles.length === 0) return;
     const urls = readyFiles.map((file) => file.publicUrl!).filter(Boolean);
     const body = composeMessageBody(text, urls);
@@ -640,6 +773,7 @@ export function Composer({
 
   const onChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
     const value = event.target.value;
+    rememberSelection(event.target);
     setText(value);
     setSelections((previous) => pruneSelections(previous, value, members));
     const caret = event.target.selectionStart ?? value.length;
@@ -711,7 +845,7 @@ export function Composer({
               aria-haspopup="menu"
               aria-controls="attach-menu"
               hint="添加附件"
-              disabled={room.read_only}
+              disabled={room.read_only || writeBlocked}
             >
               +
             </Tooltip>
@@ -741,6 +875,11 @@ export function Composer({
           }}
         />
         <div className="composer-main">
+          {writeBlocked ? (
+            <p className="composer-update-block" role="status">
+              当前页面与服务器版本不兼容；请先更新后再发送或上传。
+            </p>
+          ) : null}
           {reply ? (
             <div id="composer-reply" className="composer-reply">
               <span>引用 {reply.label}</span>
@@ -793,7 +932,9 @@ export function Composer({
                 onChange={onChange}
                 onKeyDown={onKeyDown}
                 onPaste={onPaste}
+                onSelect={(event) => rememberSelection(event.currentTarget)}
                 onKeyUp={(event) => {
+                  rememberSelection(event.currentTarget);
                   if (event.key === 'Enter' && suppressEnterRef.current) {
                     suppressEnterRef.current = false;
                     return;
@@ -803,6 +944,7 @@ export function Composer({
                   refreshMention(event.currentTarget.value, caret);
                 }}
                 onClick={(event) => {
+                  rememberSelection(event.currentTarget);
                   if (composingRef.current) return;
                   refreshMention(
                     event.currentTarget.value,
@@ -811,9 +953,11 @@ export function Composer({
                 }}
                 onCompositionStart={() => {
                   composingRef.current = true;
+                  setComposing(true);
                 }}
                 onCompositionEnd={(event) => {
                   composingRef.current = false;
+                  setComposing(false);
                   compositionEndedAtRef.current = Date.now();
                   const element = event.currentTarget;
                   refreshMention(element.value, element.selectionStart ?? element.value.length);
@@ -871,6 +1015,15 @@ export function Composer({
               >
                 重试
               </Button>
+              {updateAvailable ? (
+                <Button
+                  type="button"
+                  id="drawboard-update-retry"
+                  onClick={() => void requestSafeUpdate()}
+                >
+                  更新后重试
+                </Button>
+              ) : null}
               <Button type="button" id="drawboard-error-close" onClick={() => setDrawboardError(false)}>
                 关闭
               </Button>

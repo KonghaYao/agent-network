@@ -23,6 +23,7 @@ import { HomePage } from '../pages/HomePage';
 import { JoinPage } from '../pages/JoinPage';
 import { SharePage } from '../pages/SharePage';
 import { InstallGuideHost } from '../pwa/InstallGuideHost';
+import { UpdateNotice } from '../pwa/UpdateNotice';
 import { initInstallPrompt } from '../pwa/install';
 import { registerServiceWorker } from '../pwa/register';
 
@@ -129,6 +130,7 @@ function App({ bootstrap }: { bootstrap: SpaBootstrap | null }) {
       <ConfirmHost />
       <AgentMemoryDialogHost />
       {appRoute ? <InstallGuideHost appRoute /> : null}
+      {appRoute || route.name === 'pair' ? <UpdateNotice /> : null}
     </>
   );
 }

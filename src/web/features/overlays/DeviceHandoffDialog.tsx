@@ -6,6 +6,7 @@ import { callTool, type McpError } from '../../lib/mcp-client';
 import { copyText } from '../../lib/files';
 import { drawQrCanvas } from '../../lib/qr-canvas';
 import { newRequestId } from '../../lib/request-id';
+import { handoffUpdateBusy, setUpdateBusy } from '../../pwa/update-busy';
 
 interface PairingCreated {
   pairing_id: string;
@@ -81,6 +82,12 @@ export function DeviceHandoffDialog({
   const [listError, setListError] = useState('');
   const [busyPairing, setBusyPairing] = useState<string | null>(null);
   const [qrFailed, setQrFailed] = useState(false);
+  const handoffBusy = handoffUpdateBusy(open).join('；');
+
+  useEffect(() => {
+    setUpdateBusy('device-handoff', handoffBusy || null);
+    return () => setUpdateBusy('device-handoff', null);
+  }, [handoffBusy]);
 
   const generation = useRef(0);
   const listSeq = useRef(0);

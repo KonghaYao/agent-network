@@ -21,6 +21,8 @@ import { DRAWBOARD_STYLE } from './styles';
 export interface DrawboardOptions {
   /** 导出成功并关闭画板后回调；调用方负责加入待发送 chips。 */
   onInsert(file: File): void;
+  /** 关闭（取消、插入或点击遮罩）后回调；用于释放更新忙碌状态。 */
+  onClose?(): void;
 }
 
 export interface DrawboardHandle {
@@ -451,6 +453,7 @@ export function openDrawboard(options: DrawboardOptions): DrawboardHandle {
     style.remove();
     document.body.style.overflow = previousOverflow;
     void canvas.dispose().catch(() => undefined);
+    options.onClose?.();
     if (previousFocus && typeof previousFocus.focus === 'function') previousFocus.focus();
   }
 

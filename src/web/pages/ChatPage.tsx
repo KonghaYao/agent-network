@@ -50,6 +50,8 @@ import { filePreviewKind, type RoomFileItem } from '../lib/files-ui';
 import { callTool, type McpError } from '../lib/mcp-client';
 import { queryKeys } from '../lib/query-keys';
 import { newRequestId } from '../lib/request-id';
+import { outboxUpdateBusy, setUpdateBusy } from '../pwa/update-busy';
+import { isUpdateWriteBlocked } from '../pwa/update-store';
 
 const FilesPane = lazy(() =>
   import('../features/panels/FilesPane').then((module) => ({ default: module.FilesPane })),
@@ -211,6 +213,13 @@ export function ChatPage({ roomId }: ChatPageProps) {
       invalidateTasks();
     }, [invalidateTasks, refresh]),
   });
+  const outboxSending = queue.items.some((item) => item.status === 'sending');
+  const outboxBusy = outboxUpdateBusy(outboxSending).join('；');
+
+  useEffect(() => {
+    setUpdateBusy('outbox', outboxBusy || null);
+    return () => setUpdateBusy('outbox', null);
+  }, [outboxBusy]);
 
   useEffect(() => {
     setReply(null);
@@ -374,6 +383,11 @@ export function ChatPage({ roomId }: ChatPageProps) {
   const onSend = useCallback(
     async (input: ComposerSendInput) => {
       if (!room || !identity) return { ok: false, error: '房间尚未加载' };
+      if (isUpdateWriteBlocked()) {
+        const message = '当前页面与服务器版本不兼容，请先更新后再发送。';
+        setStatus(message);
+        return { ok: false, error: message };
+      }
       const body = composeMessageBody(input.text, input.urls);
       const plan = buildSendPlan({
         room,
@@ -414,6 +428,10 @@ export function ChatPage({ roomId }: ChatPageProps) {
 
   const onRetryOutbox = useCallback(
     async (clientMessageId: string) => {
+      if (isUpdateWriteBlocked()) {
+        setStatus('当前页面与服务器版本不兼容，请先更新后再重试发送。');
+        return;
+      }
       const outcome = await queue.retry(clientMessageId);
       if (outcome.ok) {
         setStatus('');

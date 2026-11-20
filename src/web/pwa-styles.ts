@@ -36,6 +36,31 @@ export const PWA_STYLE = `
     height: 22px; color: var(--wx-link, #576b95); font-size: 12px;
     text-decoration: none; }
   .account-guest-actions a.account-scan:hover { text-decoration: underline; }
+
+  /* 更新提示：固定顶部，避免遮挡底部输入区；移动端计入安全区。 */
+  .pwa-update-notice { position: fixed; left: 50%; top: calc(12px + env(safe-area-inset-top));
+    z-index: 60; display: flex; align-items: center; gap: 12px;
+    width: min(560px, calc(100vw - 24px)); box-sizing: border-box;
+    padding: 10px 12px; border: 1px solid var(--wx-line, #e5e5e5); border-radius: 10px;
+    background: var(--wx-panel, #ffffff); color: var(--wx-text, #1a1a1a);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16); transform: translateX(-50%); }
+  .pwa-update-copy { min-width: 0; flex: 1 1 auto; }
+  .pwa-update-title { display: block; margin: 0 0 2px; font-size: 13px; font-weight: 600; }
+  .pwa-update-lead { margin: 0; color: var(--wx-muted, #666); font-size: 12px;
+    line-height: 1.55; overflow-wrap: anywhere; }
+  .pwa-update-status { margin: 4px 0 0; color: var(--wx-link, #576b95); font-size: 12px; }
+  .pwa-update-actions { display: flex; flex-wrap: wrap; justify-content: flex-end;
+    gap: 8px; flex: 0 0 auto; }
+  .pwa-update-actions button { min-height: 36px; white-space: nowrap; }
+  .composer-update-block { margin: 0 0 6px; padding: 6px 8px; border-radius: 6px;
+    background: var(--wx-panel, #f7f7f7); color: var(--wx-muted, #666);
+    font-size: 12px; line-height: 1.5; }
+  @media (max-width: 759px) {
+    .pwa-update-notice { flex-direction: column; align-items: stretch;
+      top: calc(10px + env(safe-area-inset-top)); }
+    .pwa-update-actions { justify-content: stretch; }
+    .pwa-update-actions button { flex: 1 1 auto; min-height: 44px; }
+  }
   @media (max-width: 759px) {
     .install-guide-card { width: 100%; }
     .install-guide-actions { flex-direction: column; align-items: stretch; }

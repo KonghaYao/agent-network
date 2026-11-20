@@ -6,6 +6,7 @@ import { LIMITS } from '../../../contracts/limits';
 import { callTool, type McpError } from '../../lib/mcp-client';
 import { queryKeys } from '../../lib/query-keys';
 import { newRequestId } from '../../lib/request-id';
+import { friendInviteUpdateBusy, setUpdateBusy } from '../../pwa/update-busy';
 
 interface SearchActor {
   actor_id: string;
@@ -59,9 +60,16 @@ export function ContactSearchPanel({
   const [status, setStatus] = useState('');
   const [error, setError] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [inviteSending, setInviteSending] = useState(false);
   const [selected, setSelected] = useState<SearchItem | null>(null);
   const [message, setMessage] = useState('');
   const abortRef = useRef<AbortController | null>(null);
+  const inviteBusy = friendInviteUpdateBusy(inviteSending).join('；');
+
+  useEffect(() => {
+    setUpdateBusy('friend-invite', inviteBusy || null);
+    return () => setUpdateBusy('friend-invite', null);
+  }, [inviteBusy]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
@@ -112,6 +120,7 @@ export function ContactSearchPanel({
   const send = async () => {
     if (!selected || busy) return;
     setBusy(true);
+    setInviteSending(true);
     setError(false);
     setStatus('正在发送好友邀请…');
     try {
@@ -152,6 +161,7 @@ export function ContactSearchPanel({
       setError(true);
     } finally {
       setBusy(false);
+      setInviteSending(false);
     }
   };
 

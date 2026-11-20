@@ -485,6 +485,14 @@ export const LIMITS = {
   webPairingScanMaxDimension: 640,
   /** 已登录设备未批准时的受控兑换轮询间隔（毫秒）。 */
   webPairingRedeemPollMs: 2_000,
+  /** 版本检查相邻事件的合并节流（毫秒）；强制检查可绕过一次。 */
+  webVersionCheckThrottleMs: 60_000,
+  /** 前台页面的周期版本检查间隔（毫秒）；后台暂停。 */
+  webVersionForegroundIntervalMs: 15 * 60_000,
+  /** `/web-version.json` 请求超时（毫秒）；失败只标记，不阻断聊天。 */
+  webVersionRequestTimeoutMs: 4_000,
+  /** 一次性草稿快照的保留时间（毫秒）；恢复或过期后删除。 */
+  webUpdateSnapshotTtlMs: 10 * 60_000,
   /** 发布资源保留窗口（毫秒）：最近 7 天内启用的 build 全部保留。 */
   webReleaseRetentionMs: 7 * 24 * 60 * 60_000,
   /** 无论窗口如何都保留最近 N 个不同 buildId。 */
