@@ -47,6 +47,7 @@ export function ChatDialogs({
   onRenameAgentDone,
   searchOpen,
   onSearchOpenChange,
+  searchReturnFocusRef,
   onOpenTrace,
   taskTrace,
   onCloseTrace,
@@ -71,6 +72,7 @@ export function ChatDialogs({
   onRenameAgentDone: () => void;
   searchOpen: boolean;
   onSearchOpenChange: (open: boolean) => void;
+  searchReturnFocusRef: RefObject<HTMLElement | null>;
   onOpenTrace: (rootId: string, focusId: string | null) => void;
   taskTrace: TaskTraceTarget | null;
   onCloseTrace: () => void;
@@ -151,6 +153,7 @@ export function ChatDialogs({
         onOpenChange={onSearchOpenChange}
         roomId={room.room_id}
         token={token}
+        returnFocusRef={searchReturnFocusRef}
         onOpenTask={(rootId, focusId) => {
           onSearchOpenChange(false);
           onOpenTrace(rootId, focusId);

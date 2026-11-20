@@ -9,6 +9,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type RefObject,
 } from 'react';
 import { useDropzone } from 'react-dropzone';
 
@@ -157,6 +158,15 @@ export function ChatPage({ roomId }: ChatPageProps) {
   const [panePreviewFile, setPanePreviewFile] = useState<RoomFileItem | null>(null);
   // 群成员弹窗从搜索右侧的常驻入口打开；关闭时必须显式回到该按钮。
   const membersButtonRef = useRef<HTMLButtonElement>(null);
+  // 搜索弹窗关闭时按 id 取当前节点：Lenso 升级会替换原生按钮 DOM。
+  const searchReturnFocusRef = useMemo<RefObject<HTMLElement | null>>(
+    () => ({
+      get current() {
+        return document.getElementById('message-search-button');
+      },
+    }),
+    [],
+  );
   // 会话菜单项打开的弹窗（记忆、公告等）关闭后回到菜单入口。
   const roomMenuToggleRef = useRef<HTMLButtonElement>(null);
   // 聊天区 dropzone 不持有上传状态；Composer 挂载后把 addFiles 注册到这里。
@@ -435,6 +445,30 @@ export function ChatPage({ roomId }: ChatPageProps) {
     multiple: true,
     onDrop: onDropFiles,
   });
+
+  // 不把 ref 直接挂在 Tooltip as={Button} 上，避免 Lenso 模块晚到时
+  // 原生按钮因提前获得焦点而永久锁定 fallback；关闭弹窗时按 id 取回节点。
+  // 会话就绪时 Ctrl/Cmd+F 打开搜索；输入框内保留浏览器原生查找。
+  useEffect(() => {
+    if (!ready || searchOpen) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+      if (event.key.toLowerCase() !== 'f') return;
+      if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        target.closest('textarea, input, select, [contenteditable="true"]')
+      ) {
+        return;
+      }
+      event.preventDefault();
+      setSearchOpen(true);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [ready, searchOpen]);
+
   // 首载骨架与静态输入区：错误态让位给错误页，避免骨架长期占位。
   const loadingShell = !ready && chat.status !== 'error';
   const filesRequested = desktop ? filesDesktopOpen : overlayPane === 'files';
@@ -941,6 +975,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
           roomActions={roomActions}
           searchOpen={searchOpen}
           onSearchOpenChange={setSearchOpen}
+          searchReturnFocusRef={searchReturnFocusRef}
           onOpenTrace={openTrace}
           taskTrace={taskTrace}
           onCloseTrace={closeTrace}

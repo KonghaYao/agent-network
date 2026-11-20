@@ -47,6 +47,7 @@ export interface ChatDialogsMountProps {
   };
   searchOpen: boolean;
   onSearchOpenChange: (open: boolean) => void;
+  searchReturnFocusRef: RefObject<HTMLElement | null>;
   onOpenTrace: (rootId: string, focusId: string | null) => void;
   taskTrace: TaskTraceTarget | null;
   onCloseTrace: () => void;
@@ -76,6 +77,7 @@ export function ChatDialogsMount({
   roomActions,
   searchOpen,
   onSearchOpenChange,
+  searchReturnFocusRef,
   onOpenTrace,
   taskTrace,
   onCloseTrace,
@@ -116,6 +118,7 @@ export function ChatDialogsMount({
           }}
           searchOpen={searchOpen}
           onSearchOpenChange={onSearchOpenChange}
+          searchReturnFocusRef={searchReturnFocusRef}
           onOpenTrace={onOpenTrace}
           taskTrace={taskTrace}
           onCloseTrace={onCloseTrace}
