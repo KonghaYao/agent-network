@@ -918,7 +918,14 @@ test.describe('SPA Chat', () => {
     await callTool(base, tokenA, 'network_task_mark', {
       request_id: requestId('file_task'), room_id: roomId, message_id: messageId,
     });
-    await expect(fileCard.locator('..')).toHaveAttribute('data-lenso-slot', 'surface');
+    // 文件卡容器是 .msg-files（消息卡没有 Lenso surface），且只承载本消息的唯一附件。
+    const fileSurface = fileCard.locator('..');
+    await expect(fileSurface).toHaveClass(/(?:^|\s)msg-files(?:\s|$)/u);
+    await expect(fileSurface).toBeVisible();
+    await expect(fileSurface.locator('.msg-file')).toHaveCount(1);
+    const fileId = /\/f\/(f_[A-Za-z0-9_-]{22})\?/u.exec(downloadHref)?.[1];
+    expect(fileId).toBeTruthy();
+    await expect(fileCard).toHaveAttribute('data-file-id', fileId ?? '');
     await page.setViewportSize({ width: 390, height: 844 });
     await page.emulateMedia({ colorScheme: 'dark' });
     await expectNoHorizontalOverflow(fileCard);
