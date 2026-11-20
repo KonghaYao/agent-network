@@ -47,8 +47,6 @@ export default defineConfig({
     __WEB_DRAWBOARD_URL__: JSON.stringify(modules.drawboard),
     // 仅用于支持诊断；每次发布不同，保证 A/B 真实构建的字节有差异。
     __WEB_BUILD_NONCE__: JSON.stringify(process.env.WEB_BUILD_NONCE ?? ''),
-    // 开发服务器与生产构建的显式区分；不依赖 import.meta.env 的全局类型。
-    __WEB_PRODUCTION__: JSON.stringify(process.env.NODE_ENV === 'production'),
   },
   optimizeDeps: {
     exclude: ['@lenso/ui', '@lenso/tokens', '@lenso/glass'],

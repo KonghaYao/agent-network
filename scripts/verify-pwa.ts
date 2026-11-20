@@ -4,8 +4,11 @@
  */
 
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+
+import { build } from 'vite';
 
 import {
   PWA_BACKGROUND_COLOR,
@@ -15,6 +18,7 @@ import {
 } from '../src/web/pwa/brand';
 import { PWA_BRAND_ASSETS } from '../src/web/pwa/brand-assets.generated';
 import { buildPwaManifest, pwaHeadTags } from '../src/web/pwa/manifest';
+import { registerServiceWorker } from '../src/web/pwa/register';
 import {
   SERVICE_WORKER_SOURCE,
   offlinePageHtml,
@@ -65,6 +69,80 @@ async function assertAsset(
     const size = pngSize(bytes);
     checkEqual(`${label} 宽`, size.width, expected.width);
     checkEqual(`${label} 高`, size.height, expected.height);
+  }
+}
+
+/**
+ * 注册开关的运行时与构建验收。
+ *
+ * - 开发路径：Bun 的 `import.meta.env` 就是 `process.env`；清掉 PROD/MODE 后
+ *   调用必须直接返回，不能因裸标识符抛 `ReferenceError`。
+ * - 生产构建：`NODE_ENV=test` 曾让旧的自定义 define 静默移除注册；这里用
+ *   真实 `vite.config.ts` 构建一个只导入注册模块的入口，断言产物仍保留
+ *   注册调用。
+ */
+async function verifyRegisterSwitch(): Promise<void> {
+  const savedProd = process.env.PROD;
+  const savedMode = process.env.MODE;
+  let devError: unknown;
+  delete process.env.PROD;
+  delete process.env.MODE;
+  try {
+    registerServiceWorker();
+  } catch (error) {
+    devError = error;
+  } finally {
+    if (savedProd !== undefined) process.env.PROD = savedProd;
+    if (savedMode !== undefined) process.env.MODE = savedMode;
+  }
+  check(
+    '开发路径调用不抛错',
+    devError === undefined,
+    devError instanceof Error ? devError.message : devError,
+  );
+
+  const entryDir = await mkdtemp(join(tmpdir(), 'pwa-register-'));
+  const outDir = resolve(REPO_ROOT, 'dist/pwa-register-check');
+  const entry = join(entryDir, 'entry.ts');
+  await writeFile(
+    entry,
+    `import { registerServiceWorker } from ${JSON.stringify(resolve(REPO_ROOT, 'src/web/pwa/register.ts'))};\nregisterServiceWorker();\n`,
+  );
+
+  const savedNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'test';
+  try {
+    await build({
+      root: REPO_ROOT,
+      logLevel: 'silent',
+      publicDir: false,
+      build: {
+        outDir,
+        emptyOutDir: true,
+        manifest: false,
+        minify: true,
+        rollupOptions: { input: entry },
+      },
+    });
+  } finally {
+    if (savedNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = savedNodeEnv;
+  }
+
+  try {
+    const assetsDir = join(outDir, 'assets');
+    const files = await readdir(assetsDir);
+    let code = '';
+    for (const file of files) {
+      if (file.endsWith('.js')) code += await readFile(join(assetsDir, file), 'utf8');
+    }
+    check(
+      'NODE_ENV=test 的生产构建保留 serviceWorker.register',
+      code.includes('serviceWorker.register'),
+    );
+  } finally {
+    await rm(entryDir, { recursive: true, force: true });
+    await rm(outDir, { recursive: true, force: true });
   }
 }
 
@@ -163,6 +241,27 @@ async function main() {
   check('SW 源码包含路径判断函数', SERVICE_WORKER_SOURCE.includes('URL'));
   check('SW 源码包含离线页函数', SERVICE_WORKER_SOURCE.includes('offlinePageHtml'));
   check('SW 源码含离线 HTML', SERVICE_WORKER_SOURCE.includes('<!doctype html>'));
+
+  const registerSource = await readFile(resolve(REPO_ROOT, 'src/web/pwa/register.ts'), 'utf8');
+  check(
+    '注册模块不再引用自定义 __WEB_PRODUCTION__',
+    !registerSource.includes('__WEB_PRODUCTION__'),
+  );
+  check(
+    '注册模块使用 Vite 内建 import.meta.env.PROD',
+    registerSource.includes('import.meta.env.PROD'),
+  );
+  check(
+    '注册模块不读取 process.env.NODE_ENV',
+    !registerSource.includes('process.env.NODE_ENV'),
+  );
+  const viteConfigSource = await readFile(resolve(REPO_ROOT, 'vite.config.ts'), 'utf8');
+  check(
+    'vite.config 不再注入 __WEB_PRODUCTION__',
+    !viteConfigSource.includes('__WEB_PRODUCTION__'),
+  );
+
+  await verifyRegisterSwitch();
 
   console.log(`\nPWA 单元检查通过：${checksPassed()} 项`);
 }
