@@ -14,6 +14,9 @@ const args = parseArgs(process.argv.slice(2));
 const base = args.values.get('base') ?? process.env.AGENTNET_URL ?? 'http://127.0.0.1:8792';
 const root = args.values.get('root') ?? defaultReleasesRoot();
 const expected = args.values.get('expect-build') ?? (await readCurrentBuildId(root));
+// 默认要求固定别名可读：旧页面仍在请求 /assets/chat-*.js，404 不能被当成
+// 发布成功。只有明确的全新安装（没有旧 dist）才允许显式跳过。
+const requireLegacyAliases = !args.flags.has('allow-missing-legacy');
 
 if (!expected) {
   console.error(`没有当前发布指针，也没有提供 --expect-build（root: ${root}）`);
@@ -21,7 +24,7 @@ if (!expected) {
 }
 
 try {
-  const result = await probeLiveRelease(base, root, expected);
+  const result = await probeLiveRelease(base, root, expected, { requireLegacyAliases });
   console.log(
     JSON.stringify(
       {

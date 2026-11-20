@@ -5,6 +5,7 @@
  * 最后才切换 `current`。任何校验失败都不得改变入口指针。
  */
 
+import type { Dirent } from 'node:fs';
 import {
   copyFile,
   mkdir,
@@ -360,7 +361,12 @@ export async function buildCandidate(options: BuildCandidateOptions): Promise<We
   await writeFileAtomic(join(webDir, staticRelativeFromUrl(drawboardUrl)), drawboardBytes);
 
   const graph = await readViteEntry(webDir);
-  const assets = await collectAssets(webDir, { immutable: true, strictMime: true });
+  // 只有 Vite 内容地址目录 `assets/` 允许一年 immutable；将来的 sw.js、
+  // manifest.webmanifest 等公开文件必须重新验证，使用 no-cache。
+  const assets = await collectAssets(webDir, {
+    immutable: (relative) => relative.startsWith('assets/'),
+    strictMime: true,
+  });
   const byUrl = new Map(assets.map((asset) => [asset.url, asset]));
   const entry = byUrl.get(staticUrlFromRelative(graph.entryFile));
   if (!entry) throw new Error('入口不在构建产物中');
@@ -675,6 +681,10 @@ export interface PruneResult {
   readonly candidates: readonly { relative: string; bytes: number; url: string }[];
   readonly bytes: number;
   readonly removed: number;
+  /** 超过隔离期、可安全丢弃的候选构建目录（成功保留或失败遗留）。 */
+  readonly candidateDirs: readonly { name: string; bytes: number }[];
+  readonly candidateBytes: number;
+  readonly removedCandidateDirs: number;
 }
 
 /**
@@ -742,26 +752,45 @@ export async function pruneReleases(options: PruneOptions): Promise<PruneResult>
       });
     }
     const bytes = candidates.reduce((sum, item) => sum + item.bytes, 0);
+    const staleCandidates = await collectStaleCandidateDirs(
+      options.root,
+      now,
+      options.graceMs,
+      log,
+    );
+    const candidateBytes = staleCandidates.reduce((sum, item) => sum + item.bytes, 0);
     log(
-      `保留 ${retained.size} 个 build、${referenced.size} 个 URL；可清理 ${candidates.length} 个文件（${formatBytes(bytes)}）`,
+      `保留 ${retained.size} 个 build、${referenced.size} 个 URL；可清理 ${candidates.length} 个文件（${formatBytes(bytes)}）与 ${staleCandidates.length} 个过期候选目录（${formatBytes(candidateBytes)}）`,
     );
     for (const candidate of candidates) {
       log(`  ${candidate.url} (${formatBytes(candidate.bytes)})`);
     }
+    for (const candidate of staleCandidates) {
+      log(`  candidates/${candidate.name}/ (${formatBytes(candidate.bytes)})`);
+    }
+    const publicSummary = candidates.map(({ relative, bytes: size, url }) => ({
+      relative,
+      bytes: size,
+      url,
+    }));
+    const candidateSummary = staleCandidates.map(({ name, bytes: size }) => ({
+      name,
+      bytes: size,
+    }));
     if (!options.apply) {
       return {
         retainedBuilds: [...retained],
         originals: [...referenced],
-        candidates: candidates.map(({ relative, bytes: size, url }) => ({ relative, bytes: size, url })),
+        candidates: publicSummary,
         bytes,
         removed: 0,
+        candidateDirs: candidateSummary,
+        candidateBytes,
+        removedCandidateDirs: 0,
       };
     }
-    for (const candidate of candidates) {
-      await unlink(candidate.file).catch((error) => {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      });
-    }
+    // 先提交新索引再删文件：中断时最多留下索引外的孤儿文件，
+    // 不会出现索引仍指向已删除文件。
     const nextAssets: Record<string, WebReleaseAsset> = {};
     for (const [relative, asset] of Object.entries(index.assets)) {
       if (referenced.has(relative)) nextAssets[relative] = asset;
@@ -770,6 +799,14 @@ export async function pruneReleases(options: PruneOptions): Promise<PruneResult>
       schemaVersion: WEB_RELEASE_SCHEMA_VERSION,
       assets: nextAssets,
     });
+    for (const candidate of candidates) {
+      await unlink(candidate.file).catch((error) => {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      });
+    }
+    for (const candidate of staleCandidates) {
+      await rm(candidate.path, { recursive: true, force: true });
+    }
     // 只移除已经空掉的目录，不触碰根目录与 legacy/。
     const directories = new Set<string>();
     for (const candidate of candidates) {
@@ -785,12 +822,54 @@ export async function pruneReleases(options: PruneOptions): Promise<PruneResult>
     return {
       retainedBuilds: [...retained],
       originals: [...referenced],
-      candidates: candidates.map(({ relative, bytes: size, url }) => ({ relative, bytes: size, url })),
+      candidates: publicSummary,
       bytes,
       removed: candidates.length,
+      candidateDirs: candidateSummary,
+      candidateBytes,
+      removedCandidateDirs: staleCandidates.length,
     };
   });
   return result;
+}
+
+/**
+ * 候选目录在发布成功且 keepCandidate 时保留，构建失败时也可能遗留。
+ * 只清理 mtime 超过隔离期的目录；返回 dry-run 与 apply 共用的清单。
+ */
+async function collectStaleCandidateDirs(
+  root: string,
+  now: number,
+  graceMs: number,
+  log: (message: string) => void,
+): Promise<{ name: string; bytes: number; path: string }[]> {
+  const candidatesRoot = join(root, 'candidates');
+  let entries: Dirent[];
+  try {
+    entries = await readdir(candidatesRoot, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+  const stale: { name: string; bytes: number; path: string }[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const path = join(candidatesRoot, entry.name);
+    const info = await stat(path).catch(() => null);
+    if (!info || now - info.mtimeMs < graceMs) continue;
+    let bytes = 0;
+    try {
+      for (const relative of await walkFiles(path)) {
+        bytes += (await stat(join(path, relative))).size;
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      log(`  跳过不可读候选目录 candidates/${entry.name}/: ${reason}`);
+      continue;
+    }
+    stale.push({ name: entry.name, bytes, path });
+  }
+  return stale;
 }
 
 export interface LiveProbeResult {
@@ -833,10 +912,16 @@ async function fetchChecked(url: string, expected: {
  * 对运行中的实例做端到端探针：版本接口、HTML 元数据、全部资产字节/MIME/
  * 缓存头、固定别名与 `/mcp` 非 GET。供发布脚本与 A/B/A 验收共用。
  */
+export interface LiveProbeOptions {
+  /** 发布根必须已有冻结别名；用于一键部署拒绝未迁移的旧 dist 切换。 */
+  readonly requireLegacyAliases?: boolean;
+}
+
 export async function probeLiveRelease(
   base: string,
   root: string,
   expectedBuildId: string,
+  options: LiveProbeOptions = {},
 ): Promise<LiveProbeResult> {
   const origin = base.replace(/\/+$/u, '');
   const health = await fetch(`${origin}/health`);
@@ -887,6 +972,9 @@ export async function probeLiveRelease(
   }
 
   const legacy = await readLegacyAliases(root);
+  if (!legacy && options.requireLegacyAliases) {
+    throw new Error(`固定别名未冻结（缺少 ${root}/legacy.json）：拒绝把未迁移发布判定为成功`);
+  }
   if (legacy) {
     for (const [name, alias] of Object.entries(legacy.aliases)) {
       await fetchChecked(`${origin}/assets/${name}`, {

@@ -1,5 +1,5 @@
 import { Database } from 'bun:sqlite';
-import { existsSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 import { createApp, runScheduled } from '../app';
@@ -32,7 +32,7 @@ import { AgentPresenceTimeline } from '../realtime/presence-timeline';
 import { buildDrawboardBundle } from '../web/drawboard-bundle';
 import { buildMarkdownBundle } from '../web/markdown-bundle';
 import { loadSpaManifest } from '../web/spa-manifest';
-import { loadCurrentWebRelease } from '../web/web-release';
+import { loadCurrentWebRelease, resolveWebReleaseMode } from '../web/web-release';
 import { buildCliBundle } from './cli-bundle';
 import { createD1 } from './d1';
 import { resolveFileTicketSecret } from './file-ticket-secret';
@@ -388,14 +388,15 @@ if (process.env.DRIVE_DISABLED !== '1') {
   );
 }
 
-// 发布模式：显式设置 WEB_RELEASES_ROOT，或默认目录已存在 current 指针时启用。
-// 指针存在但发布描述/资源校验失败必须启动失败，不能悄悄退回旧 dist。
-const releasesRoot = resolve(
-  process.env.WEB_RELEASES_ROOT ?? resolve(import.meta.dir, '../../dist/web-releases'),
+// 发布模式只在显式设置 WEB_RELEASES_ROOT 时启用；未设置时始终读取 dist/web。
+// 仓库里残留的 dist/web-releases/current 不得悄悄改变启动行为。
+// 指针存在但发布描述/资源校验失败必须启动失败，不能退回旧 dist。
+const releaseMode = resolveWebReleaseMode(
+  process.env.WEB_RELEASES_ROOT,
+  resolve(import.meta.dir, '../../dist/web-releases'),
 );
-const releaseRequested =
-  process.env.WEB_RELEASES_ROOT !== undefined ||
-  existsSync(resolve(releasesRoot, 'current'));
+const releasesRoot = releaseMode.root;
+const releaseRequested = releaseMode.enabled;
 const webRelease = releaseRequested ? await loadCurrentWebRelease(releasesRoot) : null;
 if (releaseRequested && !webRelease) {
   throw new Error(`WEB_RELEASES_ROOT 已启用但没有可用发布: ${releasesRoot}/current`);

@@ -799,7 +799,7 @@ AGENTNET_URL=https://networks.example.com bun run test:drive
 
 ### Web 发布底座（阶段 1）
 
-阶段 1 只提供可原子切换、可回滚、旧资源可继续读取的发布模型；安装引导、Service Worker、扫码接入属于后续阶段。旧流程仍然有效：`bun run build:web` 写 `dist/web`，未设置 `WEB_RELEASES_ROOT` 时服务端按原方式读取。
+阶段 1 只提供可原子切换、可回滚、旧资源可继续读取的发布模型；安装引导、Service Worker、扫码接入属于后续阶段。旧流程仍然有效：`bun run build:web` 写 `dist/web`，未设置 `WEB_RELEASES_ROOT` 时服务端按原方式读取。发布模式只在显式设置 `WEB_RELEASES_ROOT` 时启用；即使仓库或服务器上残留 `<repo>/dist/web-releases/current`，未设置该变量也不会自动切到发布目录。
 
 发布目录（默认 `<repo>/dist/web-releases`，已随 `dist/` 忽略；生产建议 `/opt/agent-network-releases`）：
 
@@ -825,6 +825,8 @@ AGENTNET_URL=https://networks.example.com bun run test:drive
 bun run build:web:release -- --root /opt/agent-network-releases
 
 # 重启后冒烟：/health、版本接口、HTML、全部资源字节、固定别名、GET /mcp 405
+# 默认要求 legacy.json 存在且固定别名摘要一致；全新安装（没有旧 dist）才用
+# --allow-missing-legacy 跳过别名检查。
 sudo systemctl restart agent-network
 bun run web:release:smoke -- --root /opt/agent-network-releases --base http://127.0.0.1:8792
 
@@ -833,19 +835,19 @@ bun run web:release:rollback -- --root /opt/agent-network-releases --to previous
 sudo systemctl restart agent-network
 bun run web:release:smoke -- --root /opt/agent-network-releases --base http://127.0.0.1:8792
 
-# 清理：默认 dry-run；显式 --apply 才删除无引用资源
+# 清理：默认 dry-run；显式 --apply 才删除无引用资源与过期候选目录
 bun run web:release:prune -- --root /opt/agent-network-releases
 bun run web:release:prune -- --root /opt/agent-network-releases --apply
 ```
 
-一键部署脚本（服务器上执行）：`sudo bash scripts/deploy-web-release.sh`。它执行 `git pull --ff-only`、`bun install --frozen-lockfile`、候选构建、切指针、重启与冒烟；任一步失败自动回滚上一发布。脚本不执行 `db:migrate`，迁移仍需按原流程单独执行。systemd unit 需要设置：
+一键部署脚本（服务器上执行）：`sudo bash scripts/deploy-web-release.sh`。它执行 `git pull --ff-only`、`bun install --frozen-lockfile`、候选构建、切指针、重启与冒烟；`current` 切换成功后，`systemctl restart` 非零、`/health` 超时、冒烟或固定别名检查失败都会自动回滚上一发布，再次重启并复测，最后以非零退出。`/health` 探测的 `curl` 使用 `--connect-timeout 2 --max-time 5`（可用 `HEALTH_CONNECT_TIMEOUT_SECONDS`、`HEALTH_MAX_TIME_SECONDS` 覆盖），不会无限挂起。脚本不执行 `db:migrate`，迁移仍需按原流程单独执行。本地可用 `bun run test:web-release:deploy` 以假 git/bun/systemctl/curl 驱动真实脚本，不会触碰 systemd。systemd unit 需要设置：
 
 ```ini
 WorkingDirectory=/opt/agent-network
 Environment=WEB_RELEASES_ROOT=/opt/agent-network-releases
 ```
 
-首次迁移必须在第一次用新模型重启前执行。它归档线上当前 `dist/web` 的全部字节，并从 `http://127.0.0.1:8792/assets/*` 读取两个模块的**实际响应字节**，建立 baseline release 与冻结别名；读取失败会中止，不会用重新构建的 bundle 顶替：
+首次迁移必须在第一次用新模型重启前执行。若 `dist/web/.vite/manifest.json` 仍存在而发布根缺少 `legacy.json`，一键部署会在切换 `current` 之前拒绝发布并提示先运行 `web:release:migrate`。迁移归档线上当前 `dist/web` 的全部字节，并从 `http://127.0.0.1:8792/assets/*` 读取两个模块的**实际响应字节**，建立 baseline release 与冻结别名；读取失败会中止，不会用重新构建的 bundle 顶替：
 
 ```bash
 bun run web:release:migrate -- \
@@ -856,8 +858,8 @@ bun run web:release:migrate -- \
 
 保留与缓存边界：
 
-- 保留集合是“当前发布 ∪ 最近 7 天部署 ∪ 最近两个不同 buildId ∪ 显式 pin ∪ 迁移基线”的并集；清理还会跳过 mtime 在 24 小时隔离期内的文件，并拒绝在指针/描述损坏时猜测。
-- 新发布只使用内容地址资源，缓存 `public, max-age=31536000, immutable`。迁移归档中非 `assets/` 的旧文件使用 `no-cache` + 内容 ETag。固定别名 `/assets/chat-markdown.js`、`/assets/chat-drawboard.js` 使用 5 分钟缓存，且字节永久冻结在迁移基线。
+- 保留集合是“当前发布 ∪ 最近 7 天部署 ∪ 最近两个不同 buildId ∪ 显式 pin ∪ 迁移基线”的并集；清理还会跳过 mtime 在 24 小时隔离期内的文件，并拒绝在指针/描述损坏时猜测。清理默认 dry-run，`--apply` 会先提交新索引再删除文件，避免中断后索引指向已删除文件；同时清理超过隔离期的候选构建目录。
+- 只有 `assets/` 下的内容地址资源使用 `public, max-age=31536000, immutable`；其他公开文件（例如将来的 `sw.js`、`manifest.webmanifest`）使用 `no-cache`。迁移归档中非 `assets/` 的旧文件同样使用 `no-cache` + 内容 ETag。固定别名 `/assets/chat-markdown.js`、`/assets/chat-drawboard.js` 使用 5 分钟缓存，且字节永久冻结在迁移基线。
 - 一年 immutable 是浏览器缓存允许期，不代表服务器承诺保留一年。保留窗口外的旧标签不保证还能加载全部懒模块；`legacy.json` 的别名字节不会自动删除，只有确认兼容期结束后才能人工退役。
 - 发布切换点是单进程重启：存在 1–2 秒不可用窗口，SSE 断开重连，在途请求可能失败；不做零停机承诺，也不引入第二业务实例。
 

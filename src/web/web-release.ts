@@ -100,6 +100,26 @@ export interface ImmutableIndex {
   readonly assets: Readonly<Record<string, WebReleaseAsset>>;
 }
 
+export interface WebReleaseMode {
+  readonly root: string;
+  /** 只有显式设置 WEB_RELEASES_ROOT 才启用发布模式。 */
+  readonly enabled: boolean;
+}
+
+/**
+ * 解析发布根。未设置环境变量时即使默认目录已有 `current` 也不启用发布模式，
+ * 避免仓库里残留的发布目录悄悄改变启动行为。
+ */
+export function resolveWebReleaseMode(
+  explicitRoot: string | undefined,
+  fallbackRoot: string,
+): WebReleaseMode {
+  return {
+    root: resolve(explicitRoot ?? fallbackRoot),
+    enabled: explicitRoot !== undefined,
+  };
+}
+
 export interface LoadedWebRelease {
   /** releasesRoot 的绝对路径。 */
   readonly root: string;
@@ -156,6 +176,7 @@ export function contentTypeForPath(path: string): string {
   if (lower.endsWith('.js') || lower.endsWith('.mjs')) return 'text/javascript; charset=utf-8';
   if (lower.endsWith('.css')) return 'text/css; charset=utf-8';
   if (lower.endsWith('.json')) return 'application/json; charset=utf-8';
+  if (lower.endsWith('.webmanifest')) return 'application/manifest+json; charset=utf-8';
   if (lower.endsWith('.woff2')) return 'font/woff2';
   if (lower.endsWith('.woff')) return 'font/woff';
   if (lower.endsWith('.ttf')) return 'font/ttf';

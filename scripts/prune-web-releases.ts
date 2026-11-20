@@ -39,7 +39,10 @@ try {
         referencedUrls: result.originals.length,
         candidates: result.candidates.length,
         bytes: result.bytes,
+        candidateDirs: result.candidateDirs.length,
+        candidateBytes: result.candidateBytes,
         removed: result.removed,
+        removedCandidateDirs: result.removedCandidateDirs,
       },
       null,
       2,
@@ -47,7 +50,9 @@ try {
   );
   if (!apply) {
     console.log(
-      `dry-run：未删除任何文件。确认后运行同一命令并加 --apply（可清理 ${formatBytes(result.bytes)}）。`,
+      `dry-run：未删除任何文件。确认后运行同一命令并加 --apply（可清理 ${formatBytes(
+        result.bytes + result.candidateBytes,
+      )}）。`,
     );
   }
 } catch (error) {

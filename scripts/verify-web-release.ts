@@ -106,6 +106,12 @@ async function main() {
     check('A 已产生 deploymentId', typeof aPublished.deploymentId === 'string');
     aDeploymentId = aPublished.deploymentId ?? '';
     checkEqual('A 固定别名已冻结', aPublished.legacyFrozen, true);
+    check(
+      '候选 immutable 仅限 /static/assets/',
+      a.manifest.assets.every(
+        (asset) => asset.immutable === asset.url.startsWith('/static/assets/'),
+      ),
+    );
 
     const lazyA = await lazyChunkOf(a);
     const lazyAssetA = a.manifest.assets.find(
