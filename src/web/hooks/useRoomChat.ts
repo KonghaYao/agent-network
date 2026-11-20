@@ -197,18 +197,21 @@ async function fetchTimelineAfter(
 }
 
 /**
- * 只有移除成员或把自己降级会收紧当前身份的可见边界。
+ * 只有真正失去房间访问权的成员事件才需要遮住旧私有视图。
  *
- * 服务端把这类事件标为 `action_required`；改名、公告、策略、加人、
- * `room.created` 与解散归档都是 informational，只需刷新查询。
+ * 服务端对“被移出”下发 `change: "removed"` + `action_required`；对
+ * `room_role_changed`（admin→member）虽然也标 `action_required`，但成员
+ * 仍在群内，历史边界按 `joined_seq` 计算、与角色无关，当前正文与输入框
+ * 仍然有效，只应原地刷新能力视图。改名、公告、策略、加人、移除旁观者、
+ * 群主变更、`room.created` 与解散归档都是 informational 或非移除事件。
  */
 function revokesCurrentAccess(
   event: Extract<ActorStreamEvent, { type: 'event' }>,
 ): boolean {
-  // 服务端只把针对本人的移除/降级标为 action_required；旁观者收到的是
-  // informational 的 change=removed，不能因此遮住自己的会话。
+  // 旁观者收到 informational 的 change=removed，不能因此遮住自己的会话；
+  // 角色变化不改变读边界，不能仅凭 action_required 误遮罩。
   if (event.attention !== 'action_required') return false;
-  return event.change === 'removed' || event.change === 'role_changed';
+  return event.change === 'removed';
 }
 
 export function useRoomChat(roomId: string, options: RoomChatOptions = {}) {

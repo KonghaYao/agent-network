@@ -435,7 +435,8 @@ export function roomStreamItems(
     case 'room_role_changed':
     case 'owner_transferred':
     case 'room_owner_transfer_accepted': {
-      // 角色变更只刷新成员/能力视图；被撤销管理员本人收到 action_required。
+      // 角色变更只刷新成员/能力视图；被撤销管理员本人收到 action_required，
+      // 表示管理能力失效，但成员仍在群内、读边界不变，网页不得据此遮罩。
       const target = stringField(metadata, 'target_actor_id')
         ?? stringField(metadata, 'new_owner_id')
         ?? stringField(metadata, 'to_actor_id')

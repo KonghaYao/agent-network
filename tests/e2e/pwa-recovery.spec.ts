@@ -225,34 +225,102 @@ async function finishIdentitySwitch(page: Page, name: string) {
   await expect(page.locator('#account-name')).toHaveText(name, { timeout: 20_000 });
 }
 
+interface MaskSession {
+  startedAt: number;
+  durationMs: number;
+  frames: number;
+  text: string;
+}
+
 interface EntryProbeState {
   masks: { at: number; text: string }[];
+  maskSessions: MaskSession[];
+  /** 遮罩可见期间 rAF 采样到的帧数；0 表示从未绘制。 */
+  maskFrames: number;
+  /** 遮罩累计可见时长（毫秒），按相邻采样差值累加。 */
+  maskedMs: number;
+  /** 当前是否仍被遮罩；读取时会把进行中的会话补进 maskSessions。 */
+  maskVisible: boolean;
+  maskStartedAt: number;
+  maskSessionFrames: number;
+  maskText: string;
   catchups: { at: number; text: string; active: string | null; rebuilt: string | null }[];
 }
 
 /**
  * 进房前安装 DOM 记录器：遮罩一闪而过也要留下证据。
  *
- * 每次页面加载重置；调用方在导航/刷新后读取。只记录可见文本与状态位，
- * 不读取消息正文或凭据。
+ * 每次页面加载重置；调用方在导航/刷新后读取。rAF 逐帧统计遮罩帧数与
+ * 累计时长，MutationObserver 记录首次出现与文案变化；只记录可见文本与
+ * 状态位，不读取消息正文或凭据。
  */
 async function installEntryProbe(page: Page) {
   await page.addInitScript(() => {
-    const state: EntryProbeState = { masks: [], catchups: [] };
+    const state: EntryProbeState = {
+      masks: [],
+      maskSessions: [],
+      maskFrames: 0,
+      maskedMs: 0,
+      maskVisible: false,
+      maskStartedAt: 0,
+      maskSessionFrames: 0,
+      maskText: '',
+      catchups: [],
+    };
     (window as unknown as { __entryProbe: EntryProbeState }).__entryProbe = state;
     let lastMask = '';
     let lastCatchup = '';
-    const record = () => {
-      const mask = document.getElementById('recovery-mask');
-      const maskText = mask
+    let lastSampleAt = 0;
+    const readMaskText = (mask: Element | null): string =>
+      mask
         ? (document.getElementById('recovery-mask-text')?.textContent ?? '')
             .replace(/\s+/g, ' ')
             .trim()
         : '';
-      if (mask && maskText !== lastMask) {
-        state.masks.push({ at: Math.round(performance.now()), text: maskText });
-        lastMask = maskText;
-      } else if (!mask) {
+    const startSession = (now: number, text: string) => {
+      state.maskVisible = true;
+      state.maskStartedAt = now;
+      state.maskSessionFrames = 0;
+      state.maskText = text;
+      state.masks.push({ at: Math.round(now), text });
+      lastMask = text;
+    };
+    const endSession = (now: number) => {
+      state.maskSessions.push({
+        startedAt: Math.round(state.maskStartedAt),
+        durationMs: Math.round(now - state.maskStartedAt),
+        frames: state.maskSessionFrames,
+        text: state.maskText,
+      });
+      state.maskVisible = false;
+    };
+    /**
+     * `countFrame` 只由 rAF 路径置真：MutationObserver 只补充首次出现与
+     * 文案变化，不重复累加帧数/时长。
+     */
+    const record = (countFrame: boolean) => {
+      const now = performance.now();
+      const delta = lastSampleAt ? now - lastSampleAt : 0;
+      if (countFrame) lastSampleAt = now;
+      const mask = document.getElementById('recovery-mask');
+      if (mask) {
+        if (countFrame) {
+          state.maskFrames += 1;
+          if (state.maskVisible) state.maskedMs += delta;
+        }
+        const text = readMaskText(mask);
+        if (!state.maskVisible) {
+          startSession(now, text);
+        } else if (countFrame) {
+          state.maskSessionFrames += 1;
+        }
+        if (text !== lastMask) {
+          state.maskText = text;
+          state.masks.push({ at: Math.round(now), text });
+          lastMask = text;
+        }
+      } else if (state.maskVisible) {
+        endSession(now);
         lastMask = '';
       }
       const catchup = document.getElementById('history-catchup');
@@ -261,7 +329,7 @@ async function installEntryProbe(page: Page) {
         const signature = `${text}|${catchup.dataset.catchupActive ?? ''}|${catchup.dataset.catchupRebuilt ?? ''}`;
         if (signature !== lastCatchup) {
           state.catchups.push({
-            at: Math.round(performance.now()),
+            at: Math.round(now),
             text,
             active: catchup.dataset.catchupActive ?? null,
             rebuilt: catchup.dataset.catchupRebuilt ?? null,
@@ -273,14 +341,18 @@ async function installEntryProbe(page: Page) {
       }
     };
     const start = () => {
-      record();
-      new MutationObserver(record).observe(document.documentElement, {
+      record(true);
+      new MutationObserver(() => record(false)).observe(document.documentElement, {
         childList: true,
         subtree: true,
         attributes: true,
         attributeFilter: ['hidden'],
       });
-      setInterval(record, 50);
+      const frame = () => {
+        record(true);
+        requestAnimationFrame(frame);
+      };
+      requestAnimationFrame(frame);
     };
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', start, { once: true });
@@ -291,30 +363,98 @@ async function installEntryProbe(page: Page) {
 }
 
 async function readEntryProbe(page: Page): Promise<EntryProbeState> {
-  return page.evaluate(
-    () =>
-      (window as unknown as { __entryProbe?: EntryProbeState }).__entryProbe ?? {
+  return page.evaluate(() => {
+    const state = (window as unknown as { __entryProbe?: EntryProbeState }).__entryProbe;
+    if (!state) {
+      return {
         masks: [],
+        maskSessions: [],
+        maskFrames: 0,
+        maskedMs: 0,
+        maskVisible: false,
+        maskStartedAt: 0,
+        maskSessionFrames: 0,
+        maskText: '',
         catchups: [],
-      },
-  );
+      } satisfies EntryProbeState;
+    }
+    if (!state.maskVisible) return state;
+    // 遮罩仍在：把进行中的会话补进快照，便于粘性遮罩断言时长/帧数。
+    return {
+      ...state,
+      maskSessions: [
+        ...state.maskSessions,
+        {
+          startedAt: Math.round(state.maskStartedAt),
+          durationMs: Math.round(performance.now() - state.maskStartedAt),
+          frames: state.maskSessionFrames,
+          text: state.maskText,
+        },
+      ],
+    };
+  });
 }
 
 const RECOVERY_COPY = /恢复|离线|重新验证|核对身份/;
 
-/** 正常进房：聊天立即可用，不允许出现遮罩或恢复文案。 */
-async function expectCleanEntry(page: Page, stage: string) {
-  await expect(page.locator('#composer')).toBeVisible({ timeout: 20_000 });
-  await expect(page.locator('#body')).toBeEnabled();
-  await expect(page.locator('#messages')).toContainText('组件验收初始消息');
-  await expect(page.locator('#recovery-mask')).toHaveCount(0);
-  const probe = await readEntryProbe(page);
+/**
+ * 遮罩统计必须为 0：既查 DOM 快照，也查 rAF 帧数与累计时长，避免只读
+ * `visible` 漏掉一闪而过的遮罩。
+ */
+function expectNoMaskActivity(probe: EntryProbeState, stage: string): void {
   expect(probe.masks, `${stage} 出现恢复遮罩：${JSON.stringify(probe.masks)}`).toEqual([]);
+  expect(
+    probe.maskSessions,
+    `${stage} 出现遮罩会话：${JSON.stringify(probe.maskSessions)}`,
+  ).toEqual([]);
+  expect(probe.maskFrames, `${stage} 遮罩帧数`).toBe(0);
+  expect(probe.maskedMs, `${stage} 遮罩时长`).toBe(0);
   const recoveryBars = probe.catchups.filter((item) => RECOVERY_COPY.test(item.text));
   expect(
     recoveryBars,
     `${stage} 出现恢复文案：${JSON.stringify(recoveryBars)}`,
   ).toEqual([]);
+}
+
+/** 输入后发送按钮启用，证明输入框没有被遮罩/骨架/只读状态阻断。 */
+async function expectComposerUsable(page: Page): Promise<void> {
+  const body = page.locator('#body');
+  await expect(body).toBeEditable();
+  await body.fill('进房可用性探针');
+  await expect(page.locator('#send')).toBeEnabled();
+  await body.fill('');
+}
+
+/** 遮罩期间输入框不可操作：不存在、被 disabled 或位于 inert 根节点内。 */
+async function composerUsable(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const body = document.getElementById('body') as HTMLTextAreaElement | null;
+    if (!body) return false;
+    const rect = body.getBoundingClientRect();
+    const style = getComputedStyle(body);
+    return (
+      !body.disabled &&
+      body.closest('[inert]') === null &&
+      rect.width > 0 &&
+      rect.height > 0 &&
+      style.display !== 'none' &&
+      style.visibility !== 'hidden'
+    );
+  });
+}
+
+/**
+ * 正常进房：聊天立即可用，观察窗内不允许出现遮罩或恢复文案。
+ * 默认观察 3 秒，覆盖慢网络下延迟到达的恢复触发。
+ */
+async function expectCleanEntry(page: Page, stage: string, settleMs = 3_000) {
+  await expect(page.locator('#composer')).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('#body')).toBeEnabled();
+  await expect(page.locator('#messages')).toContainText('组件验收初始消息');
+  await page.waitForTimeout(settleMs);
+  await expectComposerUsable(page);
+  const probe = await readEntryProbe(page);
+  expectNoMaskActivity(probe, stage);
   return probe;
 }
 
@@ -326,15 +466,15 @@ test('正常进房（直链/首页点击/刷新）不出现恢复遮罩，聊天
 
   const stageProbe = async (stage: string) => {
     const probe = await expectCleanEntry(page, stage);
-    await page.waitForTimeout(500);
     const after = await readEntryProbe(page);
-    expect(after.masks, `${stage} 后续出现遮罩`).toEqual([]);
-    const recoveryBars = after.catchups.filter((item) => RECOVERY_COPY.test(item.text));
-    expect(recoveryBars, `${stage} 后续出现恢复文案`).toEqual([]);
+    expectNoMaskActivity(after, `${stage} 观察窗后`);
     console.log(JSON.stringify({
       probe: 'clean-entry',
       stage,
       masks: after.masks.length,
+      maskSessions: after.maskSessions.length,
+      maskFrames: after.maskFrames,
+      maskedMs: after.maskedMs,
       catchups: after.catchups.length,
       initialMasks: probe.masks.length,
       inputEditable: true,
@@ -360,13 +500,13 @@ test('正常进房（直链/首页点击/刷新）不出现恢复遮罩，聊天
   await stageProbe('reload');
 });
 
-test('慢网络进房最多短暂加载，不出现恢复文案', async ({ page }) => {
+test('慢网络进房（me/room_get/history 各 1s）不出现恢复遮罩', async ({ page }) => {
   const base = await baseUrl();
   const fixture = await createComponentRoom(base);
   const delayed = ['network_me', 'network_room_get', 'network_history_list'];
   await page.route('**/mcp', async (route) => {
     const name = route.request().headers()['mcp-name'];
-    if (name && delayed.includes(name)) await delay(700);
+    if (name && delayed.includes(name)) await delay(1_000);
     await route.continue();
   });
   await installEntryProbe(page);
@@ -374,26 +514,35 @@ test('慢网络进房最多短暂加载，不出现恢复文案', async ({ page 
 
   await page.goto(`${base}/c/${fixture.roomId}`);
   const probe = await expectCleanEntry(page, 'slow-network');
-  await page.waitForTimeout(800);
   const after = await readEntryProbe(page);
-  expect(after.masks).toEqual([]);
-  const recoveryBars = after.catchups.filter((item) => RECOVERY_COPY.test(item.text));
-  expect(recoveryBars).toEqual([]);
+  expectNoMaskActivity(after, 'slow-network 观察窗后');
   console.log(JSON.stringify({
     probe: 'slow-entry',
+    delaysMs: 1_000,
     masks: after.masks.length,
+    maskSessions: after.maskSessions.length,
+    maskFrames: after.maskFrames,
+    maskedMs: after.maskedMs,
     catchups: after.catchups.map((item) => item.text),
     initialMasks: probe.masks.length,
     inputEditable: true,
   }));
 });
 
-test('进入会话后改名/加成员只刷新，不触发恢复遮罩', async ({ page }) => {
+test('informational 成员/房间事件只原地刷新，不触发恢复遮罩', async ({ page }) => {
   const base = await baseUrl();
   const fixture = await createComponentRoom(base);
   await installEntryProbe(page);
   await login(page, base, fixture.tokenA);
   await openRoom(page, base, fixture.tokenA, fixture.roomId, fixture.roomTitle);
+  await page.waitForTimeout(600);
+
+  const toolCalls: string[] = [];
+  page.on('request', (request) => {
+    const name = request.headers()['mcp-name'];
+    if (name) toolCalls.push(name);
+  });
+  const calls = (name: string) => toolCalls.filter((item) => item === name).length;
 
   const newTitle = `组件改名 ${crypto.randomUUID().replaceAll('-', '').slice(0, 8)}`;
   await callTool(base, fixture.tokenA, 'network_room_rename', {
@@ -420,29 +569,127 @@ test('进入会话后改名/加成员只刷新，不触发恢复遮罩', async (
   });
   await expect(page.locator('#subtitle')).toContainText('2 人', { timeout: 15_000 });
 
-  await page.waitForTimeout(800);
+  // room.created 属于其他房间：只刷新会话列表，当前房间保持原地可用。
+  const roomsBefore = calls('network_rooms_list');
+  await callTool(base, fixture.tokenA, 'network_room_create', {
+    request_id: requestId('e2e_new_group'),
+    kind: 'group',
+    title: `组件旁路群 ${crypto.randomUUID().slice(0, 4)}`,
+    members: [fixture.actorB],
+  });
+  await expect
+    .poll(() => calls('network_rooms_list'), { timeout: 15_000 })
+    .toBeGreaterThan(roomsBefore);
+
+  await page.waitForTimeout(3_000);
   const probe = await readEntryProbe(page);
-  expect(probe.masks, JSON.stringify(probe.masks)).toEqual([]);
-  const recoveryBars = probe.catchups.filter((item) => RECOVERY_COPY.test(item.text));
-  expect(recoveryBars).toEqual([]);
-  await expect(page.locator('#body')).toBeEnabled();
+  expectNoMaskActivity(probe, 'informational-membership');
   await expect(page.locator('#recovery-mask')).toHaveCount(0);
+  await expect(page.locator('#title')).toHaveText(newTitle);
+  await expect(page.locator('#messages')).toContainText('组件验收初始消息');
+  await expectComposerUsable(page);
   console.log(JSON.stringify({
     probe: 'informational-membership',
+    events: ['room_profile_updated', 'members_changed(add)', 'members_changed(remove-other)', 'room.created'],
     masks: probe.masks.length,
+    maskSessions: probe.maskSessions.length,
+    maskFrames: probe.maskFrames,
+    maskedMs: probe.maskedMs,
+    roomGetCalls: calls('network_room_get'),
+    historyCalls: calls('network_history_list'),
+    roomsListCalls: calls('network_rooms_list'),
     title: await page.locator('#title').textContent(),
     subtitle: await page.locator('#subtitle').textContent(),
     inputEditable: true,
   }));
 });
 
-test('被移出会话时仍出现粘性恢复遮罩', async ({ page }) => {
+test('撤销管理员（action_required role_changed）不遮罩，仍可发送', async ({ page }) => {
   const base = await baseUrl();
   const fixture = await createComponentRoom(base);
   await installEntryProbe(page);
   await login(page, base, fixture.tokenB);
   await openRoom(page, base, fixture.tokenB, fixture.roomId, fixture.roomTitle);
+  await page.waitForTimeout(600);
 
+  const toolCalls: string[] = [];
+  page.on('request', (request) => {
+    const name = request.headers()['mcp-name'];
+    if (name) toolCalls.push(name);
+  });
+  const calls = (name: string) => toolCalls.filter((item) => item === name).length;
+
+  type Detail = { members: { actor_id: string; role_revision: number }[] };
+  const initial = await callTool<Detail>(base, fixture.tokenA, 'network_room_get', {
+    room_id: fixture.roomId,
+  });
+  const target = initial.members.find((member) => member.actor_id === fixture.actorB);
+  if (!target) throw new Error('缺少测试成员');
+
+  const appointedAt = calls('network_room_get');
+  const appointed = await callTool<Detail>(base, fixture.tokenA, 'network_room_role_set', {
+    request_id: requestId('e2e_role_admin'),
+    room_id: fixture.roomId,
+    actor_id: fixture.actorB,
+    role: 'admin',
+    expected_role_revision: target.role_revision,
+  });
+  const admin = appointed.members.find((member) => member.actor_id === fixture.actorB);
+  if (!admin) throw new Error('任命后缺少测试成员');
+  // 被任命为 admin 对本人是 informational；页面应刷新详情。
+  await expect
+    .poll(() => calls('network_room_get'), { timeout: 15_000 })
+    .toBeGreaterThan(appointedAt);
+
+  const demotedAt = calls('network_room_get');
+  await callTool<Detail>(base, fixture.tokenA, 'network_room_role_set', {
+    request_id: requestId('e2e_role_member'),
+    room_id: fixture.roomId,
+    actor_id: fixture.actorB,
+    role: 'member',
+    expected_role_revision: admin.role_revision,
+  });
+  // 被撤销管理员本人收到 action_required + change=role_changed：
+  // 管理能力失效，但成员仍在群内，读边界不变，只原地刷新。
+  await expect.poll(() => calls('network_room_get'), { timeout: 15_000 }).toBeGreaterThan(demotedAt);
+
+  await page.waitForTimeout(3_000);
+  const probe = await readEntryProbe(page);
+  expectNoMaskActivity(probe, 'role-demotion');
+  await expect(page.locator('#recovery-mask')).toHaveCount(0);
+  await expect(page.locator('#title')).toHaveText(fixture.roomTitle);
+  await expect(page.locator('#messages')).toContainText('组件验收初始消息');
+  await expectComposerUsable(page);
+
+  await page.locator('#body').fill('撤销管理员后仍可发送');
+  await page.locator('#send').click();
+  await expect(page.locator('#messages')).toContainText('撤销管理员后仍可发送', {
+    timeout: 15_000,
+  });
+
+  console.log(JSON.stringify({
+    probe: 'role-demotion',
+    event: 'room_role_changed action_required new_role=member',
+    masks: probe.masks.length,
+    maskSessions: probe.maskSessions.length,
+    maskFrames: probe.maskFrames,
+    maskedMs: probe.maskedMs,
+    roomGetCalls: calls('network_room_get'),
+    inputEditable: true,
+    sentAfterDemotion: true,
+  }));
+});
+
+test('被移出会话时出现粘性恢复遮罩，旧正文与输入框不可用', async ({ page }) => {
+  const base = await baseUrl();
+  const fixture = await createComponentRoom(base);
+  await installEntryProbe(page);
+  await login(page, base, fixture.tokenB);
+  await openRoom(page, base, fixture.tokenB, fixture.roomId, fixture.roomTitle);
+  await expect(page.locator('#messages')).toContainText('组件验收初始消息');
+  await expectComposerUsable(page);
+
+  const removedAt = Date.now();
   await callTool(base, fixture.tokenA, 'network_room_members_update', {
     request_id: requestId('e2e_remove_member'),
     room_id: fixture.roomId,
@@ -453,6 +700,10 @@ test('被移出会话时仍出现粘性恢复遮罩', async ({ page }) => {
   await expect(page.locator('#recovery-mask-text')).toContainText(/不在该会话|权限/);
   await expect(page.locator('#messages')).toBeHidden();
   await expect(page.locator('#body')).not.toBeVisible();
+  // 粘性遮罩清掉私有缓存后，旧正文不能再留在 DOM 里。
+  await expect(page.getByText('组件验收初始消息')).toHaveCount(0);
+  expect(await composerUsable(page), '撤权后输入框仍可用').toBe(false);
+
   const snapshot = await page.evaluate(
     () =>
       (
@@ -467,13 +718,26 @@ test('被移出会话时仍出现粘性恢复遮罩', async ({ page }) => {
   expect(snapshot?.masked).toBe(true);
   expect(snapshot?.sticky).toBe(true);
   expect(snapshot?.lastReasons).toContain('membership');
+
   const probe = await readEntryProbe(page);
-  expect(probe.masks.length).toBeGreaterThan(0);
+  expect(probe.masks.length, '遮罩应至少出现一次').toBeGreaterThan(0);
+  expect(probe.maskSessions.length, '应记录遮罩会话').toBeGreaterThan(0);
+  expect(probe.maskFrames, '遮罩帧数').toBeGreaterThan(0);
+  expect(probe.maskedMs, '遮罩时长').toBeGreaterThan(0);
+  expect(probe.maskSessions.at(-1)?.durationMs ?? 0).toBeGreaterThan(0);
   console.log(JSON.stringify({
     probe: 'membership-revoke',
     masked: true,
     phase: snapshot?.phase,
     reasons: snapshot?.lastReasons,
+    masks: probe.masks.length,
+    maskSessions: probe.maskSessions.length,
+    maskFrames: probe.maskFrames,
+    maskedMs: probe.maskedMs,
+    maskDurationMs: probe.maskSessions.at(-1)?.durationMs ?? 0,
+    sinceRemovalMs: Date.now() - removedAt,
+    oldBodyCount: await page.getByText('组件验收初始消息').count(),
+    inputUsable: await composerUsable(page),
   }));
 });
 

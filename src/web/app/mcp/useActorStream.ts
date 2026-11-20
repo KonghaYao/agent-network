@@ -44,8 +44,10 @@ export type ActorStreamEvent =
       /** 服务端提供的 change（如 recalled/marked/completed）。 */
       change: string | null;
       /**
-       * 服务端标注的处理优先级。只有 `action_required` 才代表当前身份的
-       * 权限或可见边界可能被收紧；普通成员/资料变化是 informational。
+       * 服务端标注的处理优先级。`action_required` 表示当前身份需要重新
+       * 确认能力或访问边界，不一定意味着会话内容已不可读；被撤销管理员
+       * 仍是群成员，只有被移出才会失去读权限。普通成员/资料变化是
+       * informational。
        */
       attention: StreamAttention | null;
     };
