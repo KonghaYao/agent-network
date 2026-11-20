@@ -377,33 +377,116 @@ test.describe('file preview scroll', () => {
     });
   }
 
-  test('right resizer clamps at token limits and keeps the chat scrollbar draggable', async ({ page }) => {
+  test('right resizer clamps at the window-aware limits and keeps the chat scrollbar draggable', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto(`${base}/c/${roomId}`);
     await expect(page.locator('#files-pane')).toBeVisible();
     const handle = page.locator('#files-resizer');
     const paneWidth = () =>
       page.locator('#files-pane').evaluate((element) => element.getBoundingClientRect().width);
+    const maxWidth = await page.evaluate(() =>
+      Math.min(
+        1000,
+        Math.max(440, window.innerWidth - document.querySelector<HTMLElement>('.sidebar')!.getBoundingClientRect().width - 280),
+      ),
+    );
+    expect(maxWidth).toBeCloseTo(700, 0);
     await expect(handle).toHaveAttribute('aria-valuemin', '280');
-    await expect(handle).toHaveAttribute('aria-valuemax', '440');
+    await expect(handle).toHaveAttribute('aria-valuemax', String(Math.round(maxWidth)));
 
     await handle.focus();
     // ArrowLeft 加宽右栏，ArrowRight 收窄。
-    for (let step = 0; step < 12; step += 1) await page.keyboard.press('ArrowLeft');
-    await expect(handle).toHaveAttribute('aria-valuenow', '440');
-    expect(await paneWidth()).toBeCloseTo(440, 0);
+    for (let step = 0; step < 45; step += 1) await page.keyboard.press('ArrowLeft');
+    await expect(handle).toHaveAttribute('aria-valuenow', String(Math.round(maxWidth)));
+    expect(await paneWidth()).toBeCloseTo(maxWidth, 0);
     // 越过上限后继续加宽，宽度停在上限。
     for (let step = 0; step < 5; step += 1) await page.keyboard.press('ArrowLeft');
-    await expect(handle).toHaveAttribute('aria-valuenow', '440');
-    expect(await paneWidth()).toBeCloseTo(440, 0);
+    await expect(handle).toHaveAttribute('aria-valuenow', String(Math.round(maxWidth)));
+    expect(await paneWidth()).toBeCloseTo(maxWidth, 0);
+    const atMax = await page.evaluate(() => ({
+      chat: document.querySelector<HTMLElement>('.chat-pane')!.getBoundingClientRect().width,
+      scrollWidth: document.documentElement.scrollWidth,
+      innerWidth: window.innerWidth,
+    }));
+    expect(atMax.chat).toBeGreaterThanOrEqual(280);
+    expect(atMax.scrollWidth).toBe(atMax.innerWidth);
 
-    for (let step = 0; step < 20; step += 1) await page.keyboard.press('ArrowRight');
+    for (let step = 0; step < 50; step += 1) await page.keyboard.press('ArrowRight');
     await expect(handle).toHaveAttribute('aria-valuenow', '280');
     expect(await paneWidth()).toBeCloseTo(280, 0);
     // 越过下限后继续收窄，宽度停在下限。
     for (let step = 0; step < 5; step += 1) await page.keyboard.press('ArrowRight');
     await expect(handle).toHaveAttribute('aria-valuenow', '280');
     expect(await paneWidth()).toBeCloseTo(280, 0);
+  });
+
+  test('right pane max width grows with the window, caps at 1000, and clamps after resize', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${base}/c/${roomId}`);
+    await expect(page.locator('#files-pane')).toBeVisible();
+    const handle = page.locator('#files-resizer');
+    const metrics = () =>
+      page.evaluate(() => ({
+        sidebar: document.querySelector<HTMLElement>('.sidebar')!.getBoundingClientRect().width,
+        pane: document.querySelector<HTMLElement>('#files-pane')!.getBoundingClientRect().width,
+        chat: document.querySelector<HTMLElement>('.chat-pane')!.getBoundingClientRect().width,
+        scrollWidth: document.documentElement.scrollWidth,
+        innerWidth: window.innerWidth,
+      }));
+    const expectedMax = (innerWidth: number, sidebar: number) =>
+      Math.min(1000, Math.max(440, innerWidth - sidebar - 280));
+    const dragToLeftEdge = async () => {
+      const box = await handle.boundingBox();
+      if (!box) throw new Error('文件栏手柄不可见');
+      const y = box.y + box.height / 2;
+      await page.mouse.move(box.x + box.width / 2, y);
+      await page.mouse.down();
+      await page.mouse.move(0, y, { steps: 20 });
+      await page.mouse.up();
+    };
+
+    const at1280 = await metrics();
+    const max1280 = expectedMax(1280, at1280.sidebar);
+    expect(max1280).toBeCloseTo(700, 0);
+    await expect(handle).toHaveAttribute('aria-valuemax', String(Math.round(max1280)));
+    await dragToLeftEdge();
+    const widened1280 = await metrics();
+    expect(Math.abs(widened1280.pane - max1280)).toBeLessThanOrEqual(2);
+    expect(widened1280.chat).toBeGreaterThanOrEqual(280);
+    expect(widened1280.scrollWidth).toBe(widened1280.innerWidth);
+    await expect(handle).toHaveAttribute('aria-valuenow', String(Math.round(widened1280.pane)));
+
+    await page.setViewportSize({ width: 1440, height: 800 });
+    const at1440 = await metrics();
+    const max1440 = expectedMax(1440, at1440.sidebar);
+    expect(max1440).toBeGreaterThan(max1280);
+    expect(max1440).toBeLessThanOrEqual(1000);
+    await expect(handle).toHaveAttribute('aria-valuemax', String(Math.round(max1440)));
+    await dragToLeftEdge();
+    const widened1440 = await metrics();
+    expect(Math.abs(widened1440.pane - max1440)).toBeLessThanOrEqual(2);
+    expect(widened1440.chat).toBeGreaterThanOrEqual(280);
+    expect(widened1440.scrollWidth).toBe(widened1440.innerWidth);
+
+    await page.setViewportSize({ width: 1920, height: 800 });
+    const at1920 = await metrics();
+    expect(expectedMax(1920, at1920.sidebar)).toBe(1000);
+    await expect(handle).toHaveAttribute('aria-valuemax', '1000');
+    await dragToLeftEdge();
+    const widened1920 = await metrics();
+    expect(Math.abs(widened1920.pane - 1000)).toBeLessThanOrEqual(2);
+    expect(widened1920.chat).toBeGreaterThanOrEqual(280);
+    expect(widened1920.scrollWidth).toBe(widened1920.innerWidth);
+
+    // 窗口缩小后，已经拉宽的右栏夹回新上限。
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await expect.poll(() => page.locator('#files-pane').evaluate((element) => element.getBoundingClientRect().width))
+      .toBeCloseTo(700, 0);
+    await expect(handle).toHaveAttribute('aria-valuemax', '700');
+    await expect(handle).toHaveAttribute('aria-valuenow', '700');
+    const clamped = await metrics();
+    expect(clamped.chat).toBeGreaterThanOrEqual(280);
+    expect(clamped.scrollWidth).toBe(clamped.innerWidth);
   });
 
   test('files pane keeps long markdown and source views scrollable', async ({ page }) => {

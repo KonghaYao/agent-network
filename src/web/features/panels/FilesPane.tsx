@@ -38,6 +38,24 @@ function readCssPixels(name: string): number | undefined {
   return Number.isFinite(value) ? value : undefined;
 }
 
+const SIDEBAR_FALLBACK_WIDTH = 300;
+
+/**
+ * 右栏宽度上限：窗口减去真实侧栏与聊天区最小可读宽度，
+ * 夹在 tokens 的下限（440）与上限（1000）之间。
+ */
+function readPaneMaxWidth(): number {
+  const floor = readCssPixels('--app-pane-max') ?? 440;
+  const ceiling = readCssPixels('--app-pane-max-ceiling') ?? 1000;
+  const chatMin = readCssPixels('--app-chat-readable-min') ?? 280;
+  if (typeof window === 'undefined') return floor;
+  const sidebar = document.querySelector<HTMLElement>('.sidebar');
+  const measured = sidebar ? sidebar.getBoundingClientRect().width : 0;
+  const sidebarWidth =
+    measured > 0 ? measured : (readCssPixels('--app-sidebar-width') ?? SIDEBAR_FALLBACK_WIDTH);
+  return Math.min(ceiling, Math.max(floor, window.innerWidth - sidebarWidth - chatMin));
+}
+
 interface FilesPaneProps {
   roomId: string;
   token: string;
@@ -95,20 +113,25 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, preview, onO
   const paneRef = useRef<HTMLElement>(null);
   const resizeStart = useRef<{ x: number; width: number } | null>(null);
   const [paneWidth, setPaneWidth] = useState<number | null>(null);
+  const [paneMax, setPaneMax] = useState<number | null>(null);
 
   const resizePane = (width: number) => {
-    const pane = paneRef.current;
-    const chat = pane?.previousElementSibling;
-    if (!pane || !(chat instanceof HTMLElement)) return;
-    const style = getComputedStyle(pane);
-    const minimum = Number.parseFloat(style.minWidth);
-    const maximum = Math.min(
-      Number.parseFloat(style.maxWidth),
-      pane.getBoundingClientRect().width + chat.getBoundingClientRect().width -
-        Number.parseFloat(getComputedStyle(chat).minWidth),
-    );
+    const minimum = readCssPixels('--app-pane-min') ?? 280;
+    const maximum = paneMax ?? readPaneMaxWidth();
     setPaneWidth(Math.max(minimum, Math.min(maximum, width)));
   };
+
+  // 窗口变化时重算上限，并把已拉宽的右栏夹回新上限。
+  useEffect(() => {
+    const syncPaneMax = () => {
+      const next = readPaneMaxWidth();
+      setPaneMax(next);
+      setPaneWidth((current) => (current === null ? current : Math.min(current, next)));
+    };
+    syncPaneMax();
+    window.addEventListener('resize', syncPaneMax);
+    return () => window.removeEventListener('resize', syncPaneMax);
+  }, []);
 
   const showStatus = useCallback((text: string, options: { error?: boolean; transient?: boolean } = {}) => {
     if (statusTimer.current) clearTimeout(statusTimer.current);
@@ -284,11 +307,18 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, preview, onO
   return (
     <>
       <aside ref={paneRef} className="files-pane" id="files-pane" aria-label="房间文件" hidden={!open}
-        style={paneWidth === null ? undefined : { '--app-pane-width': `${paneWidth}px` } as CSSProperties}>
+        style={
+          paneWidth === null && paneMax === null
+            ? undefined
+            : ({
+                ...(paneWidth === null ? {} : { '--app-pane-width': `${paneWidth}px` }),
+                ...(paneMax === null ? {} : { '--app-pane-max': `${paneMax}px` }),
+              } as CSSProperties)
+        }>
         <div id="files-resizer" className="files-resizer" role="separator" tabIndex={0}
           aria-label="调整文件栏宽度" aria-orientation="vertical" aria-controls="files-pane"
           aria-valuemin={readCssPixels('--app-pane-min')}
-          aria-valuemax={readCssPixels('--app-pane-max')}
+          aria-valuemax={paneMax ?? readCssPixels('--app-pane-max')}
           aria-valuenow={paneWidth ?? readCssPixels('--app-pane-width')}
           onPointerDown={(event) => {
             if (event.button !== 0) return;

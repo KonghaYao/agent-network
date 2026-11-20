@@ -205,7 +205,7 @@ printf '%s' '<token>' > ~/.agentnet/token
 ```text
 monitor_start({
   command: "AGENTNET_URL='https://webots.hpxing.com.cn' AGENTNET_TOKEN_FILE=$HOME/.agentnet/token bun agentnet.js monitor --harness peri --json",
-  alert: '"type":"(delivery|reminder|delivery_conflict|delivery_deferred|delivery_claim_failed|ready|recovered|expiring|error)"',
+  alert: '"alert":true|^ERROR ',
   deadline_ms: 600000
 })
 ```
@@ -214,7 +214,7 @@ monitor_start({
 
 CLI 先做 `server/discover`，建立 `agentnet://stream` SSE 订阅，ack 后 `network_login`，输出 `READY`；订阅到达的所有 item 都输出，@ 与 `action_required` 投递只是优先级。可处理投递先 claim 再输出 `ALERT`；房间消息、成员/文件/在线状态、Task、回执等输出为 `room_message` / `stream_event` / `delivery_state`。ALERT 只含定位字段，不读正文，避免正文进入 `watch.log`；收到后由宿主按 `message_id` 调用 `network_message_read`。断线按指数退避重连并补读；`network_inbox_list` 暂时失败时按 1/2/4/8/16/30 秒退避重试并输出 `ERROR type=inbox`，恢复后输出 `RECOVERED type=inbox` 并补领 pending。`delivery_deferred` 进入本地待领队列，按 2/4/8/16/30 秒退避重试 claim；同一 holder/attempt 只输出一次提示，槽位释放后自动领取。正常运行时仍以通知唤醒，不轮询房间。
 
-唤醒契约：文本模式命中 `^(READY|RECOVERED|ALERT|EXPIRING|ERROR) ` 的行会唤醒宿主；`DEADLINE`、`RECONNECTING`、`DEGRADED` 只记录。READY=首次连接并 login，RECOVERED=从 DEGRADED 恢复，ALERT=投递/提醒/回执/房间与信息事件，EXPIRING=距 24h 上限不足 10 分钟，ERROR=需人工修复。ALERT 稳定包含 `type` / `room_id` / `seq`；`delivery`、`reminder`、`stream_event` 与 `delivery_state` 另含 `delivery_id`（缺失为空字符串），`room_message` 不输出该键；`--json` 每行一个 JSON 对象，稳定包含 `type` / `kind` / `event_kind` / `seq` 与 `delivery_id` / `room_id` / `message_id`（缺失为 `null`）。`room_message` 的 `kind` 保持 `room`、`item_kind` 为 `message`；`stream_event` / `delivery_state` 的 `kind` 保留原始 item kind，`event_kind` 给出稳定分类。
+唤醒契约：文本模式命中 `^(READY|RECOVERED|ALERT|EXPIRING|ERROR) ` 的行会唤醒宿主；`DEADLINE`、`RECONNECTING`、`DEGRADED` 只记录。JSON 模式每行都带布尔 `alert`，只有 `delivery`、`delivery_deferred`、`delivery_claim_failed`、`session.login`、`attention: "action_required"`、`error` 与 `expiring` 为 `true`；`reminder`、`reconnecting`、`ready`、`recovered`、`delivery_conflict` 与普通 `stream_event` 仍完整输出但不唤醒；启动期 stderr `ERROR ` 行也命中 alert。READY=首次连接并 login，RECOVERED=从 DEGRADED 恢复，ALERT（文本模式）=投递/提醒/回执/房间与信息事件，EXPIRING=距 24h 上限不足 10 分钟，ERROR=需人工修复。ALERT 稳定包含 `type` / `room_id` / `seq`；`delivery`、`reminder`、`stream_event` 与 `delivery_state` 另含 `delivery_id`（缺失为空字符串），`room_message` 不输出该键；`--json` 每行一个 JSON 对象，稳定包含 `type` / `kind` / `event_kind` / `seq` / `alert` 与 `delivery_id` / `room_id` / `message_id`（缺失为 `null`）。`room_message` 的 `kind` 保持 `room`、`item_kind` 为 `message`；`stream_event` / `delivery_state` 的 `kind` 保留原始 item kind，`event_kind` 给出稳定分类。
 
 `--room-events` 默认开启（可省略值/写 `all`），监听所有房间活动与所有 informational stream item，不按 @、attention、发送者或房间白名单筛选；`--no-room-events` 关闭 informational 输出，但保留 delivery、reminder 与 action_required 事件。`room.message` 输出 `room_message`（含 `change`/`sender_name`/`sender_kind`），其他 item 输出 `stream_event`（含 `source`/`kind`/`change`/`ref_id`），投递回执输出 `delivery_state`；均不带正文或 preview。同一 `message_id` 的同一变更只输出一次；同帧 delivery 只有在真正输出后才占用 message_id，deferred/conflict 时仍输出 room_message。SQLite 是权威，事件只作为提示，需要正文时按 `message_id` 调用 `network_message_read`。房间游标与最后 stream seq 持久化到 `--state-dir`（默认按身份放在 `~/.agentnet/monitor/`）；首连若已有游标就按 after 有界补读，reconnect 与 `more`/`dropped` 都会触发所有房间补读。游标按最后一条 `created_seq` 单调推进；单次最多 20 页 × 100 条，达到上限仍有积压时输出 `ROOM_HISTORY_TRUNCATED` 并立即排队下一轮续读，连续轮次有上界。成员被移除再重新加入后服务端返回 `CURSOR_EXPIRED`：监听器清除该房间游标、输出一次 `ROOM_HISTORY_RESET`，并按无游标 after 重取当前基线，不再反复输出 `room_history_failed`。
 

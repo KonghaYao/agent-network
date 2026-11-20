@@ -17,8 +17,12 @@
   --app-pane-width-inline: 300px;
   --app-monitor-width: 420px;
   --app-pane-min: 280px;
+  /* 文件栏最大宽度随窗口增长：下限 440，上限 1000，中间值由 React 岛写入。 */
   --app-pane-max: 440px;
+  --app-pane-max-ceiling: 1000px;
   --app-chat-min: 320px;
+  /* 文件栏拉宽时聊天区可以降到的最小可读宽度。 */
+  --app-chat-readable-min: 280px;
 
   /* 圆角决策：20px 只给 Card/Alert/Toast 等独立表面，不统一控件圆角。 */
   --app-radius-xs: 4px;
