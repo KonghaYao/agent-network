@@ -266,6 +266,32 @@ test.describe('会话历史搜索 UI', () => {
     await expect(page.locator('#message-search-status')).toHaveText('没有找到匹配消息');
   });
 
+  test('全局结果：上下文使用命中房间而不是当前会话', async ({ page }) => {
+    await openRoom(page, directRoomId);
+    await openSearch(page);
+    await selectScope(page, '全部会话');
+    await searchNow(page, token('global'));
+    const row = page.locator('#message-search-results .message-search-result').first();
+    await expect(row).toHaveCount(1, { timeout: 10_000 });
+
+    const contextRequest = page.waitForRequest(
+      (request) => request.headers()['mcp-name'] === 'network_message_context',
+    );
+    await row.locator('[data-search-context]').click();
+    const body = (await contextRequest).postDataJSON() as {
+      params?: { arguments?: { room_id?: string } };
+    };
+    expect(body.params?.arguments?.room_id).toBe(groupRoomId);
+
+    await expect(page.locator('#message-context-dialog')).toBeVisible();
+    const focus = page.locator('#message-context-items .message-context-item.is-focus');
+    await expect(focus).toHaveCount(1, { timeout: 10_000 });
+    await expect(focus).toContainText(token('global'));
+    await expect(page.locator('#message-context-status')).toHaveText('');
+    await page.locator('#message-context-close').click();
+    await expect(page.locator('#message-context-dialog')).toHaveCount(0);
+  });
+
   test('加载更多：首屏 25 条后可继续加载', async ({ page }) => {
     await openRoom(page, directRoomId);
     await openSearch(page);
@@ -335,12 +361,64 @@ test.describe('会话历史搜索 UI', () => {
     await page.locator('#message-search-input').press('ArrowDown');
     await expect(rows.nth(1)).toHaveAttribute('data-active', 'true');
     await expect(rows.nth(1)).toHaveCSS('outline-style', 'solid');
-    await page.locator('#message-search-input').press('Shift+Enter');
-    await expect(rows.nth(0)).toHaveAttribute('data-active', 'true');
 
+    // Shift+Enter 定位上一条：从第 2 条回到第 1 条并关闭弹窗。
+    const firstSnippet = await rows.nth(0).locator('.message-search-snippet').innerText();
+    await page.locator('#message-search-input').press('Shift+Enter');
+    await expect(page.locator('#message-search-dialog')).toHaveCount(0);
+    const active = page.locator('#messages [data-message-id][data-search-active="true"]');
+    await expect(active).toHaveCount(1);
+    await expect(active).toContainText(firstSnippet.trim());
+
+    // 重新打开后 Esc 仍只关一层并归还焦点。
+    await page.keyboard.press('Control+f');
+    await expect(page.locator('#message-search-dialog')).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(page.locator('#message-search-dialog')).toHaveCount(0);
     await expect(page.locator('#message-search-button')).toBeFocused();
+  });
+
+  test('输入框 Enter 直接定位选中结果', async ({ page }) => {
+    await openRoom(page, directRoomId);
+    await openSearch(page);
+    await searchNow(page, token('livetarget'));
+    await expect(page.locator('#message-search-results .message-search-result')).toHaveCount(1, {
+      timeout: 10_000,
+    });
+    await page.locator('#message-search-input').focus();
+    await page.locator('#message-search-input').press('Enter');
+    await expect(page.locator('#message-search-dialog')).toHaveCount(0);
+    const target = page.locator('#messages [data-message-id]').filter({
+      hasText: token('livetarget'),
+    });
+    await expect(target).toBeVisible();
+    await expect(target).toHaveAttribute('data-search-active', 'true');
+  });
+
+  test('组合输入期间 Enter 不提交搜索', async ({ page }) => {
+    let searches = 0;
+    page.on('request', (request) => {
+      if (request.headers()['mcp-name'] === 'network_message_search') searches += 1;
+    });
+    await openRoom(page, directRoomId);
+    await openSearch(page);
+    await searchNow(page, token('livetarget'));
+    const row = page.locator('#message-search-results .message-search-result').first();
+    await expect(row).toHaveCount(1, { timeout: 10_000 });
+    const before = searches;
+
+    await page.locator('#message-search-input').evaluate((input) => {
+      input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '' }));
+    });
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(500);
+    expect(searches).toBe(before);
+    await expect(page.locator('#message-search-dialog')).toBeVisible();
+
+    await page.locator('#message-search-input').evaluate((input) => {
+      input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '' }));
+    });
+    await expect(row).toHaveCount(1, { timeout: 10_000 });
   });
 
   test('当前会话：已渲染消息直接定位并短暂高亮', async ({ page }) => {

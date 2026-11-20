@@ -101,7 +101,11 @@ export function MessageSearchDialog({
   const inputRef = useRef<HTMLInputElement | null>(null);
   const resultsRef = useRef<HTMLDivElement | null>(null);
   const contextTrigger = useRef<HTMLButtonElement | null>(null);
-  const [contextId, setContextId] = useState<string | null>(null);
+  // 全局结果可能来自别的会话，上下文必须沿用结果自带的 room_id。
+  const [contextTarget, setContextTarget] = useState<{
+    roomId: string;
+    messageId: string;
+  } | null>(null);
   const [contextItems, setContextItems] = useState<ContextPage['items']>([]);
   const [contextStatus, setContextStatus] = useState('');
 
@@ -128,7 +132,7 @@ export function MessageSearchDialog({
     setSelectedIndex(-1);
     setLocating(false);
     setLocateError('');
-    setContextId(null);
+    setContextTarget(null);
     setContextItems([]);
     setContextStatus('');
   }, [open]);
@@ -141,7 +145,7 @@ export function MessageSearchDialog({
 
   // 搜索已打开时再次 Ctrl/Cmd+F：聚焦并全选查询，不重复开层。
   useEffect(() => {
-    if (!open || contextId !== null) return undefined;
+    if (!open || contextTarget !== null) return undefined;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
       if (event.key.toLowerCase() !== 'f') return;
@@ -152,7 +156,7 @@ export function MessageSearchDialog({
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [contextId, open]);
+  }, [contextTarget, open]);
 
   // 显式接管搜索层的 Escape：Lenso SearchField 可能在输入框层吞掉按键，
   // 不能只依赖 Modal。上下文弹窗打开时让子层先处理。
@@ -167,14 +171,14 @@ export function MessageSearchDialog({
       ) {
         return;
       }
-      if (contextId !== null) return;
+      if (contextTarget !== null) return;
       event.preventDefault();
       event.stopPropagation();
       onOpenChange(false);
     };
     document.addEventListener('keydown', onKeyDown, true);
     return () => document.removeEventListener('keydown', onKeyDown, true);
-  }, [contextId, onOpenChange, open]);
+  }, [contextTarget, onOpenChange, open]);
 
   useEffect(() => {
     setSelectedIndex(resultCount > 0 ? 0 : -1);
@@ -182,13 +186,18 @@ export function MessageSearchDialog({
   }, [search.session]);
 
   useEffect(() => {
-    if (!contextId) return undefined;
+    if (!contextTarget) return undefined;
     let active = true;
     setContextStatus('正在加载上下文…');
     setContextItems([]);
     void callTool<ContextPage>(
       'network_message_context',
-      { room_id: roomId, message_id: contextId, before: 4, after: 4 },
+      {
+        room_id: contextTarget.roomId,
+        message_id: contextTarget.messageId,
+        before: 4,
+        after: 4,
+      },
       { token },
     )
       .then((page) => {
@@ -202,7 +211,7 @@ export function MessageSearchDialog({
     return () => {
       active = false;
     };
-  }, [contextId, roomId, token]);
+  }, [contextTarget, token]);
 
   const revealSelected = useCallback((index: number) => {
     requestAnimationFrame(() => {
@@ -256,6 +265,23 @@ export function MessageSearchDialog({
     [locating, mode, onLocate, query, scope],
   );
 
+  // 输入框 Enter 与结果按钮 Enter 走同一动作：任务打开抽屉，消息滚动/锚点/切房。
+  const activateResult = useCallback(
+    (index: number) => {
+      if (index < 0 || index >= resultCount) return;
+      if (taskOnly) {
+        const entry = search.tasks[index];
+        if (!entry) return;
+        onOpenTask(entry.task.root_message_id, entry.matches[0]?.message_id ?? null);
+        onOpenChange(false);
+        return;
+      }
+      const item = search.hits[index];
+      if (item) void locateHit(item);
+    },
+    [locateHit, onOpenChange, onOpenTask, resultCount, search.hits, search.tasks, taskOnly],
+  );
+
   const submit = (event: FormEvent) => {
     event.preventDefault();
     search.runNow();
@@ -267,13 +293,15 @@ export function MessageSearchDialog({
     const native = event.nativeEvent;
     if (native.isComposing || event.keyCode === 229 || composingRef.current) {
       // IME 组合期间把导航键与 Esc 留给输入法，避免弹窗或表单抢走按键。
+      // Enter 必须同时 preventDefault：合成 compositionstart 而没有真实组合时，
+      // 只 stopPropagation 会让浏览器执行隐式表单提交，多发一次搜索。
       if (
         event.key === 'Escape' ||
         event.key === 'Enter' ||
         event.key === 'ArrowDown' ||
         event.key === 'ArrowUp'
       ) {
-        if (event.key === 'Escape') event.preventDefault();
+        if (event.key === 'Escape' || event.key === 'Enter') event.preventDefault();
         event.stopPropagation();
       }
       return;
@@ -284,9 +312,18 @@ export function MessageSearchDialog({
     }
     if (event.key === 'Enter') {
       event.preventDefault();
-      if (resultCount > 0) {
-        selectIndex(selectedIndex < 0 ? 0 : selectedIndex + (event.shiftKey ? -1 : 1));
+      if (resultCount > 0 && selectedIndex >= 0) {
+        const next = Math.max(
+          0,
+          Math.min(resultCount - 1, selectedIndex + (event.shiftKey ? -1 : 0)),
+        );
+        if (next !== selectedIndex) {
+          setSelectedIndex(next);
+          revealSelected(next);
+        }
+        activateResult(next);
       } else {
+        // 输入后结果尚未返回、或选中项已被重置：Enter 先提交当前查询。
         search.runNow();
       }
       return;
@@ -327,13 +364,18 @@ export function MessageSearchDialog({
         ? '没有匹配的任务'
         : '没有找到匹配消息';
 
+  const activeResultId =
+    selectedIndex >= 0 && selectedIndex < resultCount
+      ? `message-search-result-${selectedIndex}`
+      : undefined;
+
   return (
     <LensoBackendProvider backend={backend}>
       <Modal
         open={open}
         onOpenChange={(next) => {
           // fallback 的父层也可能收到 Escape；上下文打开时只关闭子层。
-          if (!next && contextId !== null) setContextId(null);
+          if (!next && contextTarget !== null) setContextTarget(null);
           else onOpenChange(next);
         }}
         title="搜索聊天记录"
@@ -363,6 +405,7 @@ export function MessageSearchDialog({
               placeholder={scope === 'all' ? '搜索全部会话记录' : '搜索完整聊天记录'}
               value={query}
               aria-controls="message-search-results"
+              aria-activedescendant={activeResultId}
               onChange={(event) => {
                 setQuery(event.target.value);
                 setLocateError('');
@@ -431,6 +474,7 @@ export function MessageSearchDialog({
         <div
           id="message-search-results"
           className="message-search-results"
+          role="listbox"
           aria-label="搜索结果"
           ref={resultsRef}
           onKeyDown={(event) => {
@@ -456,6 +500,9 @@ export function MessageSearchDialog({
                   className={`task-search-result${selectedIndex === index ? ' is-active' : ''}`}
                   style={SEARCH_RESULT_STYLE}
                   key={entry.task.root_message_id}
+                  id={`message-search-result-${index}`}
+                  role="option"
+                  aria-selected={selectedIndex === index}
                   data-search-index={index}
                   data-active={selectedIndex === index ? 'true' : 'false'}
                   aria-current={selectedIndex === index ? 'true' : undefined}
@@ -483,6 +530,9 @@ export function MessageSearchDialog({
                 <article
                   className={`message-search-result${selectedIndex === index ? ' is-active' : ''}`}
                   key={`${item.room_id}:${item.message_id}`}
+                  id={`message-search-result-${index}`}
+                  role="option"
+                  aria-selected={selectedIndex === index}
                   data-search-index={index}
                   data-active={selectedIndex === index ? 'true' : 'false'}
                   aria-current={selectedIndex === index ? 'true' : undefined}
@@ -527,7 +577,7 @@ export function MessageSearchDialog({
                       data-search-context
                       onClick={(event) => {
                         contextTrigger.current = event.currentTarget;
-                        setContextId(item.message_id);
+                        setContextTarget({ roomId: item.room_id, messageId: item.message_id });
                       }}
                     >
                       上下文
@@ -550,9 +600,9 @@ export function MessageSearchDialog({
       </Modal>
       <Modal
         returnFocusRef={contextTrigger}
-        open={contextId !== null}
+        open={contextTarget !== null}
         onOpenChange={(next) => {
-          if (!next) setContextId(null);
+          if (!next) setContextTarget(null);
         }}
         title="查看上下文"
         titleId="message-context-title"
@@ -560,7 +610,11 @@ export function MessageSearchDialog({
         className="message-search-card"
         footer={
           <div className="row modal-actions">
-            <Button id="message-context-close" type="button" onClick={() => setContextId(null)}>
+            <Button
+              id="message-context-close"
+              type="button"
+              onClick={() => setContextTarget(null)}
+            >
               关闭
             </Button>
           </div>
@@ -573,7 +627,7 @@ export function MessageSearchDialog({
           {contextItems.map((item) => (
             <article
               key={item.message_id}
-              className={`message-context-item${item.message_id === contextId ? ' is-focus' : ''}`}
+              className={`message-context-item${item.message_id === contextTarget?.messageId ? ' is-focus' : ''}`}
             >
               <header>
                 <strong>{item.sender_name}</strong>
