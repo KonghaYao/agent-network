@@ -342,7 +342,12 @@ export function Composer({
     };
   };
 
-  const combobox = Ariakit.useComboboxStore({ defaultOpen: false });
+  // 与旧实现一致：上下键在候选间循环，末项继续向下回到首项。
+  const combobox = Ariakit.useComboboxStore({
+    defaultOpen: false,
+    focusLoop: true,
+    compositeElementInFocusOrder: false,
+  });
 
   useEffect(() => {
     mountedRef.current = true;

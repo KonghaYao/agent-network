@@ -494,6 +494,9 @@ test.describe('SPA human group auto mention', () => {
     const movedActive = await page.locator('#body').getAttribute('aria-activedescendant');
     expect(movedActive).toBeTruthy();
     expect(movedActive).not.toBe(initialActive);
+    // 末项继续向下回到首项，不会出现无可选项的空档。
+    await page.keyboard.press('ArrowDown');
+    expect(await page.locator('#body').getAttribute('aria-activedescendant')).toBe(initialActive);
 
     const active = picker.locator('.mention-item[data-active-item]');
     await expect(active).toHaveCount(1);
