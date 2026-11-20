@@ -417,3 +417,178 @@ test('撤回已显示消息时按锚点重读可见窗口', async ({ page }) => 
     .toBe(true);
   await expect(page.locator('#messages')).toContainText('此消息已撤回', { timeout: 10_000 });
 });
+
+test('撤权后遮住旧视图、关闭预览并释放 object URL；晚到历史响应不复活', async ({ page }) => {
+  const base = await baseUrl();
+  const fixture = await createComponentRoom(base);
+  const outsiderToken = crypto.randomUUID();
+  await callTool(base, outsiderToken, 'network_register', {
+    request_id: requestId('e2e_reg'),
+    kind: 'human',
+    name: `旁观者 ${crypto.randomUUID().slice(0, 4)}`,
+    device_id: `e2e-outsider-${crypto.randomUUID()}`,
+  });
+
+  let streamOpens = 0;
+  let streamAborts = 0;
+  page.on('request', (request) => {
+    try {
+      const body = JSON.parse(request.postData() ?? '{}') as { method?: string };
+      if (body.method === 'subscriptions/listen') streamOpens += 1;
+    } catch {
+      // 非 JSON 请求忽略。
+    }
+  });
+  page.on('requestfailed', (request) => {
+    try {
+      const body = JSON.parse(request.postData() ?? '{}') as { method?: string };
+      if (body.method === 'subscriptions/listen') streamAborts += 1;
+    } catch {
+      // 同上。
+    }
+  });
+  await page.route('**/mcp', async (route) => {
+    const request = route.request();
+    let body: RpcBody;
+    try {
+      body = JSON.parse(request.postData() ?? '{}') as RpcBody;
+    } catch {
+      await route.continue();
+      return;
+    }
+    if (body.params?.name === 'network_room_file_list') {
+      await postJson(route, body, {
+        items: [
+          {
+            room_file_id: 'probe-file',
+            file_id: 'probe-file',
+            name: 'probe.txt',
+            mime_type: 'text/plain',
+            preview_kind: 'text',
+            size: 12,
+            preview_url: '/f/probe-file',
+            download_url: '/f/probe-file',
+            created_at: 1_700_000_000_000,
+          },
+        ],
+        next_cursor: null,
+        has_more: false,
+      });
+      return;
+    }
+    if (body.params?.name === 'network_history_list') {
+      await delay(1_500);
+      await postJson(route, body, {
+        items: [],
+        next_cursor: null,
+        has_more: false,
+        snapshot: '999',
+        head_seq: '999',
+        view: 'timeline',
+        timeline_items: [syntheticMessage(fixture.roomId, 999, 'LATE-PRIVATE-CONTENT')],
+        timeline_next_cursor: null,
+        timeline_has_more: false,
+        timeline_snapshot: '999',
+        timeline_resume_cursor: 'late',
+        authorization: AUTHORIZATION,
+      });
+      return;
+    }
+    await route.continue();
+  });
+  await page.route('**/f/probe-file', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'text/plain', body: 'preview secret' });
+  });
+
+  await login(page, base, fixture.tokenB);
+  await openRoom(page, base, fixture.tokenB, fixture.roomId, fixture.roomTitle);
+  await expect(page.locator('.file-item[data-file-id="probe-file"]')).toBeVisible({
+    timeout: 10_000,
+  });
+  await page.locator('.file-item[data-file-id="probe-file"] .file-action').first().click();
+  await expect(page.locator('#file-preview')).toBeVisible();
+  await expect(page.locator('#file-preview-body')).toContainText('preview secret');
+
+  const blobUrl = await page.evaluate(() => {
+    const original = URL.revokeObjectURL.bind(URL);
+    const revoked: string[] = [];
+    (window as unknown as { __revokedObjectUrls: string[] }).__revokedObjectUrls = revoked;
+    URL.revokeObjectURL = (url: string) => {
+      revoked.push(url);
+      original(url);
+    };
+    const url = URL.createObjectURL(new Blob(['probe object']));
+    const image = document.createElement('img');
+    image.id = 'probe-object-url';
+    image.src = url;
+    document.body.append(image);
+    return url;
+  });
+
+  // 长后台/撤权信号：先遮住旧私有视图，再重新鉴权。
+  await page.evaluate((token) => {
+    localStorage.setItem('agent-network-token', token);
+    window.dispatchEvent(
+      new StorageEvent('storage', { key: 'agent-network-token', newValue: token }),
+    );
+  }, outsiderToken);
+
+  await expect(page.locator('#recovery-mask')).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('#messages')).toBeHidden();
+  await expect(page.locator('#file-preview')).toHaveCount(0);
+  await expect
+    .poll(() =>
+      page.evaluate(() => (window as unknown as { __revokedObjectUrls: string[] }).__revokedObjectUrls),
+    )
+    .toContain(blobUrl);
+  expect(await page.locator('#messages').count()).toBe(0);
+  expect(await page.getByText('LATE-PRIVATE-CONTENT').count()).toBe(0);
+  const revokedUrls = await page.evaluate(
+    () => (window as unknown as { __revokedObjectUrls: string[] }).__revokedObjectUrls,
+  );
+  console.log(JSON.stringify({
+    probe: 'revoke-cleanup',
+    masked: true,
+    messagesCount: await page.locator('#messages').count(),
+    previewCount: await page.locator('#file-preview').count(),
+    revokedObjectUrls: revokedUrls.length,
+    lateContentCount: await page.getByText('LATE-PRIVATE-CONTENT').count(),
+    streamOpens,
+    streamAborts,
+  }));
+});
+
+test('同 actor 双标签并发发送不互相覆盖意图', async ({ context }) => {
+  const base = await baseUrl();
+  const fixture = await createComponentRoom(base);
+  const first = await context.newPage();
+  const second = await context.newPage();
+  await login(first, base, fixture.tokenB);
+  await login(second, base, fixture.tokenB);
+  await openRoom(first, base, fixture.tokenB, fixture.roomId, fixture.roomTitle);
+  await openRoom(second, base, fixture.tokenB, fixture.roomId, fixture.roomTitle);
+
+  await context.setOffline(true);
+  await first.fill('#body', '双标签 A 离线意图');
+  await first.press('#body', 'Enter');
+  await expect(first.locator('.msg-outbox', { hasText: '双标签 A 离线意图' })).toBeVisible();
+  await second.fill('#body', '双标签 B 离线意图');
+  await second.press('#body', 'Enter');
+  await expect(second.locator('.msg-outbox', { hasText: '双标签 B 离线意图' })).toBeVisible();
+
+  await expect(
+    first.locator('.msg-outbox', { hasText: '双标签 B 离线意图' }),
+  ).toBeVisible({ timeout: 10_000 });
+  const journalCount = await first.evaluate((actorId) => {
+    const prefix = `agent-network-outbox:v1:${actorId}:i:`;
+    return Object.keys(localStorage).filter((key) => key.startsWith(prefix)).length;
+  }, fixture.actorB);
+  expect(journalCount).toBe(2);
+  const outboxRows = await first.locator('.msg-outbox').count();
+  console.log(JSON.stringify({
+    probe: 'dual-tab-outbox',
+    journalKeys: journalCount,
+    outboxRows,
+  }));
+  await context.setOffline(false);
+});

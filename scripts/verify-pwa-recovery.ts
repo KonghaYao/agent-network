@@ -10,6 +10,21 @@ import {
   catchUpGap,
   type CatchUpPage,
 } from '../src/web/lib/history-recovery';
+import {
+  createOutboxIntent,
+  findReusableIntent,
+  isOutboxStorageKey,
+  outboxStorageKey,
+  readOutbox,
+  removeOutboxIntent,
+  writeOutbox,
+  type OutboxIntent,
+  type OutboxStorage,
+} from '../src/web/lib/outbox';
+import {
+  applySendStatus,
+  reconcileOutboxStatuses,
+} from '../src/web/lib/outbox-reconcile';
 import { RecoveryScheduler, type RecoveryReason } from '../src/web/lib/recovery-coordinator';
 import { check, checkEqual, checksPassed } from './lib/harness';
 
@@ -278,6 +293,150 @@ function verifyWatermark(): void {
   checkEqual('没有消息时为空', renderedWatermark([]), null);
 }
 
+class MemoryStorage implements OutboxStorage {
+  readonly map = new Map<string, string>();
+
+  get length(): number {
+    return this.map.size;
+  }
+
+  getItem(key: string): string | null {
+    return this.map.get(key) ?? null;
+  }
+
+  setItem(key: string, value: string): void {
+    this.map.set(key, value);
+  }
+
+  removeItem(key: string): void {
+    this.map.delete(key);
+  }
+
+  key(index: number): string | null {
+    return [...this.map.keys()][index] ?? null;
+  }
+}
+
+const ACTOR = 'actor-outbox';
+const NOW = 1_700_000_000_000;
+
+function outboxIntent(body: string, at = NOW, id?: string): OutboxIntent {
+  const intent = createOutboxIntent({
+    roomId: 'room-1',
+    body,
+    invoke: [],
+    mentions: [],
+    invokeExplicit: true,
+    replyTo: null,
+  });
+  intent.client_message_id = id ?? intent.client_message_id;
+  intent.updated_at = at;
+  return intent;
+}
+
+function status(intent: OutboxIntent) {
+  return {
+    client_message_id: intent.client_message_id,
+    found: true,
+    message_id: `server-${intent.client_message_id}`,
+    room_id: intent.room_id,
+    created_seq: '10',
+    delivery_ids: ['d1'],
+    body_bytes: new TextEncoder().encode(intent.body).length,
+    created_at: String(NOW),
+  };
+}
+
+function verifyOutboxJournal(): void {
+  const storage = new MemoryStorage();
+  const legacyOnly = outboxIntent('旧版本记录', NOW - 10);
+  storage.setItem(outboxStorageKey(ACTOR), JSON.stringify([legacyOnly]));
+  checkEqual('旧整份 key 仍可读', readOutbox(ACTOR, NOW, storage).length, 1);
+
+  const fromTabA = outboxIntent('标签 A', NOW - 5, 'client-a');
+  const fromTabB = outboxIntent('标签 B', NOW, 'client-b');
+  writeOutbox(ACTOR, [legacyOnly, fromTabA], { now: NOW, storage });
+  writeOutbox(ACTOR, [fromTabB], { now: NOW, storage });
+  const union = readOutbox(ACTOR, NOW, storage);
+  checkEqual('两个标签的意图都在', union.length, 3);
+  check('标签 A 未被覆盖', union.some((item) => item.client_message_id === 'client-a'));
+  check('标签 B 已写入', union.some((item) => item.client_message_id === 'client-b'));
+
+  const newer = { ...fromTabA, status: 'failed' as const, error: '新状态', updated_at: NOW + 10 };
+  writeOutbox(ACTOR, [newer], { now: NOW + 10, storage });
+  writeOutbox(ACTOR, [{ ...fromTabA, status: 'sending' as const, updated_at: NOW - 100 }], {
+    now: NOW + 10,
+    storage,
+  });
+  const winner = readOutbox(ACTOR, NOW + 10, storage).find(
+    (item) => item.client_message_id === 'client-a',
+  );
+  checkEqual('较新 updated_at 胜出', winner?.status, 'failed');
+  checkEqual('较新错误保留', winner?.error, '新状态');
+
+  removeOutboxIntent(ACTOR, 'client-a', { now: NOW + 20, storage });
+  // 模拟旧标签页用旧镜像把已删除意图写回来。
+  storage.setItem(outboxStorageKey(ACTOR), JSON.stringify([fromTabA]));
+  const afterRemove = readOutbox(ACTOR, NOW + 20, storage);
+  check('tombstone 阻止旧镜像复活', !afterRemove.some((item) => item.client_message_id === 'client-a'));
+
+  const committed = {
+    ...outboxIntent('已提交', NOW + 1, 'client-c'),
+    status: 'committed' as const,
+    message_id: 'server-c',
+    committed_at: NOW + 1,
+  };
+  writeOutbox(ACTOR, [committed], { now: NOW + 2, storage });
+  writeOutbox(ACTOR, [], { now: NOW + 3, storage });
+  check(
+    '已提交且从列表移除后写 tombstone',
+    !readOutbox(ACTOR, NOW + 3, storage).some((item) => item.client_message_id === 'client-c'),
+  );
+  check('journal key 识别', isOutboxStorageKey(ACTOR, `${outboxStorageKey(ACTOR)}:i:client-a`));
+  check('其他 actor key 不识别', !isOutboxStorageKey(ACTOR, outboxStorageKey('other')));
+}
+
+function verifyOutboxReconcile(): void {
+  const first = { ...outboxIntent('第一条', NOW, 'm1'), status: 'sending' as const };
+  const second = { ...outboxIntent('第二条', NOW, 'm2'), status: 'sending' as const };
+  const found = new Map([
+    [first.client_message_id, status(first)],
+    [second.client_message_id, status(second)],
+  ]);
+  const reconciled = reconcileOutboxStatuses([first, second], [first, second], found);
+  checkEqual('两条 found 都提交', reconciled.items.filter((item) => item.status === 'committed').length, 2);
+  check('记录 found', reconciled.found);
+  checkEqual('第一条 message_id', reconciled.items[0]?.message_id, 'server-m1');
+  checkEqual('第二条 message_id', reconciled.items[1]?.message_id, 'server-m2');
+
+  const conflict = applySendStatus([first], first, {
+    ...status(first),
+    room_id: 'room-other',
+  });
+  checkEqual('client_message_id 冲突不可重试', conflict[0]?.retryable, false);
+
+  const expired = {
+    ...outboxIntent('过期', NOW - 25 * 60 * 60_000, 'm3'),
+    status: 'failed' as const,
+    retryable: true,
+  };
+  checkEqual('过期意图不复用', findReusableIntent([expired], {
+    roomId: expired.room_id,
+    body: expired.body,
+    invoke: [],
+    mentions: [],
+    invokeExplicit: true,
+    replyTo: null,
+  }, NOW), null);
+  const expiredResult = reconcileOutboxStatuses([expired], [expired], new Map(), NOW);
+  checkEqual('对账发现过期不静默重发', expiredResult.items[0]?.retryable, false);
+  checkEqual('过期错误可读', expiredResult.items[0]?.status, 'failed');
+
+  const unknown = reconcileOutboxStatuses([second], [second], new Map(), NOW);
+  checkEqual('查询成功但未找到的 sending 转为待确认', unknown.items[0]?.retryable, true);
+  checkEqual('待确认不丢行', unknown.items.length, 1);
+}
+
 async function main(): Promise<void> {
   console.log('PWA 恢复单元验收');
   await verifyScheduler();
@@ -285,6 +444,8 @@ async function main(): Promise<void> {
   await verifyCatchUpFailureResume();
   await verifyCatchUpStale();
   verifyWatermark();
+  verifyOutboxJournal();
+  verifyOutboxReconcile();
   console.log(`通过 ${checksPassed()} 项`);
 }
 
