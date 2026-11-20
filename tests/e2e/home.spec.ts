@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
@@ -7,6 +7,71 @@ import { semanticColor } from './fixtures/semantic-colors';
 /**
  * 4B-6 Home e2e：`bun run test:e2e` 直接运行 React 页面。
  */
+
+interface SidebarAccountGeometry {
+  sidebar: { left: number; right: number; width: number; scrollWidth: number; clientWidth: number };
+  brandColor: string;
+  account: { left: number; right: number; width: number; scrollWidth: number; clientWidth: number };
+  actions: {
+    left: number;
+    right: number;
+    width: number;
+    height: number;
+    scrollWidth: number;
+    clientWidth: number;
+  };
+  buttons: { id: string; left: number; right: number; top: number; height: number }[];
+  actionRows: number;
+  docOverflow: number;
+}
+
+async function readBrandColor(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const brand = document.querySelector<HTMLElement>('.brand-row h1');
+    return brand ? getComputedStyle(brand).color : '';
+  });
+}
+
+async function readSidebarAccountGeometry(page: Page): Promise<SidebarAccountGeometry> {
+  return page.evaluate(() => {
+    const read = (selector: string) => {
+      const element = document.querySelector<HTMLElement>(selector);
+      if (!element) throw new Error(`缺少元素：${selector}`);
+      const rect = element.getBoundingClientRect();
+      return {
+        left: rect.left,
+        right: rect.right,
+        width: rect.width,
+        height: rect.height,
+        scrollWidth: element.scrollWidth,
+        clientWidth: element.clientWidth,
+      };
+    };
+    const buttons = [...document.querySelectorAll<HTMLElement>('.account-actions > button')].map(
+      (button) => {
+        const rect = button.getBoundingClientRect();
+        return {
+          id: button.id,
+          left: rect.left,
+          right: rect.right,
+          top: rect.top,
+          height: rect.height,
+        };
+      },
+    );
+    const brand = document.querySelector<HTMLElement>('.brand-row h1');
+    if (!brand) throw new Error('缺少品牌字标');
+    return {
+      sidebar: read('.sidebar'),
+      brandColor: getComputedStyle(brand).color,
+      account: read('.account'),
+      actions: read('.account-actions'),
+      buttons,
+      actionRows: new Set(buttons.map((button) => Math.round(button.top))).size,
+      docOverflow: document.documentElement.scrollWidth - window.innerWidth,
+    };
+  });
+}
 
 async function baseUrl(): Promise<string> {
   if (process.env.E2E_BASE_URL) return process.env.E2E_BASE_URL;
@@ -229,6 +294,94 @@ test.describe('SPA Home', () => {
     expect(errors).toEqual([]);
   });
 
+  test('brand wordmark uses the accessible blue token, not the logo green', async ({ page }) => {
+    await page.goto(`${base}/`);
+    await expect(page.locator('.brand-row h1')).toHaveText('WeBots');
+    // React 水合会替换 SSR 工具栏，用页面内查询避开旧节点。
+    await expect
+      .poll(() => readBrandColor(page))
+      .toBe(await semanticColor(page, '--lenso-tint-text', 'color'));
+    expect(await readBrandColor(page)).not.toBe('rgb(7, 193, 96)');
+  });
+
+  test('account block stays compact inside the sidebar at 240, 300 and 480', async ({ page }) => {
+    await page.goto(`${base}/`);
+    for (const width of [240, 300, 480]) {
+      await page.evaluate((sidebarWidth) => {
+        localStorage.setItem(
+          'agent-network-ui-v1',
+          JSON.stringify({
+            state: { homeLayout: null, sidebarWidth },
+            version: 1,
+          }),
+        );
+      }, width);
+      await page.reload();
+      await expect(page.locator('.account')).toBeVisible();
+      await expect
+        .poll(() =>
+          page.locator('.sidebar').evaluate((element) => element.getBoundingClientRect().width),
+        )
+        .toBeCloseTo(width, 0);
+
+      const geometry = await readSidebarAccountGeometry(page);
+      expect(geometry.docOverflow, `sidebar ${width}`).toBeLessThanOrEqual(0);
+      expect(geometry.sidebar.scrollWidth, `sidebar ${width}`).toBeLessThanOrEqual(
+        geometry.sidebar.clientWidth + 1,
+      );
+      expect(geometry.account.left, `sidebar ${width}`).toBeGreaterThanOrEqual(
+        geometry.sidebar.left - 0.5,
+      );
+      expect(geometry.account.right, `sidebar ${width}`).toBeLessThanOrEqual(
+        geometry.sidebar.right + 0.5,
+      );
+      expect(geometry.actions.right, `sidebar ${width}`).toBeLessThanOrEqual(
+        geometry.sidebar.right + 0.5,
+      );
+      expect(geometry.actions.scrollWidth, `sidebar ${width}`).toBeLessThanOrEqual(
+        geometry.actions.clientWidth + 1,
+      );
+      // 操作行按内容收窄，不铺满整条侧栏。
+      expect(geometry.actions.width, `sidebar ${width}`).toBeLessThan(geometry.account.width);
+      expect(geometry.buttons.map((button) => button.id)).toEqual([
+        'new-agent',
+        'device-handoff',
+        'memory-open',
+        'archived-agents',
+        'logout',
+      ]);
+      for (const button of geometry.buttons) {
+        expect(button.height, `${button.id} @ ${width}`).toBeGreaterThanOrEqual(32);
+        expect(button.left, `${button.id} @ ${width}`).toBeGreaterThanOrEqual(
+          geometry.sidebar.left - 0.5,
+        );
+        expect(button.right, `${button.id} @ ${width}`).toBeLessThanOrEqual(
+          geometry.sidebar.right + 0.5,
+        );
+      }
+      if (width === 240) {
+        expect(geometry.actionRows, '240 下操作行换行而不是横向溢出').toBeGreaterThan(1);
+      }
+    }
+  });
+
+  test('account buttons keep a visible keyboard focus ring', async ({ page }) => {
+    await page.goto(`${base}/`);
+    await expect(page.locator('#new-agent')).toBeVisible();
+    await page.evaluate(() => document.getElementById('new-agent')?.focus());
+    const focus = await page.evaluate(() => {
+      const element = document.getElementById('new-agent');
+      if (!element) throw new Error('缺少新建 Agent 按钮');
+      const style = getComputedStyle(element);
+      return {
+        outlineStyle: style.outlineStyle,
+        outlineWidth: Number.parseFloat(style.outlineWidth),
+      };
+    });
+    expect(focus.outlineStyle).not.toBe('none');
+    expect(focus.outlineWidth).toBeGreaterThanOrEqual(2);
+  });
+
   test('keeps the 44px search hit area focusable', async ({ page }) => {
     await page.goto(`${base}/`);
     await expect(page.locator('#room-search')).toBeVisible();
@@ -442,6 +595,23 @@ test.describe('SPA Home', () => {
       expect(searchInput?.height ?? 0).toBeLessThanOrEqual(32);
       await expect(page.locator('#empty-state')).toBeHidden();
     });
+
+    test('account block fits the single column', async ({ page }) => {
+      await page.goto(`${base}/`);
+      await expect(page.locator('.account')).toBeVisible();
+      await expect(page.locator('#empty-state')).toBeHidden();
+      const geometry = await readSidebarAccountGeometry(page);
+      expect(geometry.docOverflow).toBeLessThanOrEqual(0);
+      expect(geometry.brandColor).toBe(await semanticColor(page, '--lenso-tint-text', 'color'));
+      expect(geometry.account.left).toBeGreaterThanOrEqual(geometry.sidebar.left - 0.5);
+      expect(geometry.account.right).toBeLessThanOrEqual(geometry.sidebar.right + 0.5);
+      expect(geometry.actions.right).toBeLessThanOrEqual(geometry.sidebar.right + 0.5);
+      expect(geometry.actions.scrollWidth).toBeLessThanOrEqual(geometry.actions.clientWidth + 1);
+      for (const button of geometry.buttons) {
+        expect(button.height, button.id).toBeGreaterThanOrEqual(32);
+        expect(button.right, button.id).toBeLessThanOrEqual(geometry.sidebar.right + 0.5);
+      }
+    });
   });
 
   test.describe('dark mode', () => {
@@ -463,6 +633,9 @@ test.describe('SPA Home', () => {
       expect(await search.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe(
         await semanticColor(page, '--wx-search'),
       );
+      const brandColor = await readBrandColor(page);
+      expect(brandColor).toBe(await semanticColor(page, '--lenso-tint-text', 'color'));
+      expect(brandColor).not.toBe('rgb(7, 193, 96)');
     });
   });
 });

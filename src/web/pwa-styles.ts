@@ -5,8 +5,8 @@
  * 双栏规则。安装引导复用 `spa-dialog-content` 的弹窗宿主样式。
  */
 export const PWA_STYLE = `
-  /* 品牌字标：用户确认使用绿色 logo；主题色仍保持蓝色。 */
-  .brand-row h1 { color: #07c160; }
+  /* 品牌字标使用可访问的主题蓝；绿色只保留给图标与 logo。 */
+  .brand-row h1 { color: var(--lenso-tint-text); }
 
   .install-guide-card { width: min(420px, calc(100vw - 32px)); box-sizing: border-box;
     max-height: min(80dvh, 680px); overflow-y: auto; }

@@ -26,23 +26,38 @@ export const DEVICE_HANDOFF_STYLE = `
   .account-edit[hidden] { display: none; }
   .account-edit svg { width: 14px; height: 14px; fill: none; stroke: currentColor;
     stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-  /* 三个文字按钮与单个归档图标在 280–320px 侧栏与 390px 移动端允许换行。 */
-  .account-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px;
-    margin-top: 1px; }
+  /* 操作行按内容收窄，不铺满整条侧栏；空间不足时换行，不裁切。 */
+  .account-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px;
+    width: fit-content; max-width: 100%; margin-top: 1px; }
   .account-actions[hidden] { display: none; }
   /* legacy 基础样式对 button 应用 font: inherit；SPA 壳没有该重置，
      账号文字入口需显式继承，否则浏览器表单控件会回退到 Arial 并改变宽度。 */
   .account-scan { padding: 0; border: 0; background: none; font: inherit;
     color: var(--lenso-tint-text); font-size: 12px; cursor: pointer; }
-  .account-actions .account-scan { height: 22px !important; line-height: 22px !important;
-    padding: 0 !important; border: 0; background: none; font: inherit;
-    font-size: 12px !important; color: var(--lenso-tint-text) !important; }
+  /* 32px 是桌面端的最小可点击高度；Lenso Button 用 :not(#) 提升特异性输出
+     36px min-height，因此这里用 #account 前缀加 important 覆盖。 */
+  #account .account-actions .account-scan { height: 32px !important; min-height: 32px !important;
+    line-height: 32px !important; padding: 0 !important; border: 0; background: none;
+    font: inherit; font-size: 12px !important; color: var(--lenso-tint-text) !important; }
   .account-scan:hover { text-decoration: underline; }
-  .account-icon { flex: 0 0 auto; width: 22px; height: 22px; padding: 0; border: 0;
+  .account-icon { flex: 0 0 auto; width: 24px; height: 32px; min-height: 32px; padding: 0; border: 0;
     border-radius: 4px; background: none; color: var(--wx-muted, #999);
     display: grid; place-items: center; cursor: pointer; }
-  .account-actions .account-icon { width: 22px !important; height: 22px !important;
-    padding: 0 !important; color: var(--wx-muted, #999) !important; }
+  #account .account-actions .account-icon { width: 24px !important; height: 32px !important;
+    min-height: 32px !important; padding: 0 !important; color: var(--wx-muted, #999) !important; }
+  .account-actions .account-scan:focus-visible,
+  .account-actions .account-icon:focus-visible {
+    outline: 2px solid var(--lenso-tint-text);
+    outline-offset: 1px;
+  }
+  /* 触控端保留 44px 命中区；宽度也同步放大，避免图标按钮过窄。 */
+  @media (pointer: coarse) {
+    .account-actions { gap: 2px 8px; }
+    #account .account-actions .account-scan { height: 44px !important; min-height: 44px !important;
+      line-height: 44px !important; }
+    #account .account-actions .account-icon { width: 44px !important; height: 44px !important;
+      min-height: 44px !important; }
+  }
   .account-icon:hover { background: var(--wx-hover, #ececec); color: var(--wx-text, #333); }
   .account-icon[hidden] { display: none; }
   .account-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor;
