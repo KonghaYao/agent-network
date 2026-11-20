@@ -35,6 +35,9 @@ let releaseA = '';
 let releaseB = '';
 let fixture: Awaited<ReturnType<typeof createComponentRoom>>;
 let agentRoomId = '';
+let roomFileId = '';
+let forwardRoomId = '';
+let forwardRoomTitle = '';
 
 function runBun(args: string[]): string {
   const result = spawnSync('bun', args, {
@@ -188,6 +191,95 @@ async function snapshotKeys(page: Page): Promise<string[]> {
   );
 }
 
+async function uploadRoomFile(name: string, body: string): Promise<string> {
+  const response = await fetch(`${base}/mcp-upload`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${fixture.tokenA}`,
+      'MCPP-Files-Version': '1',
+      'MCPP-File-Name': encodeURIComponent(name),
+      'MCPP-File-Size': String(Buffer.byteLength(body)),
+      'content-type': 'text/plain',
+    },
+    body,
+  });
+  if (!response.ok) throw new Error(`文件上传 fixture 失败：HTTP ${response.status}`);
+  const payload = (await response.json()) as { fileId?: string; file_id?: string };
+  const fileId = payload.fileId ?? payload.file_id;
+  if (!fileId) throw new Error('上传 fixture 缺少 fileId');
+  await callTool(base, fixture.tokenA, 'network_room_file_bind', {
+    request_id: requestId('pwa_file_bind'),
+    room_id: fixture.roomId,
+    file_id: fileId,
+  });
+  return fileId;
+}
+
+interface WriteCounts {
+  send: number;
+  upload: number;
+  bind: number;
+  delete: number;
+}
+
+/** 只统计真正发到服务端的写请求；被前端拦下的调用不会出现在这里。 */
+function countWriteRequests(page: Page): WriteCounts {
+  const counts: WriteCounts = { send: 0, upload: 0, bind: 0, delete: 0 };
+  page.on('request', (request) => {
+    const path = new URL(request.url()).pathname;
+    if (path === '/mcp-upload') {
+      counts.upload += 1;
+      return;
+    }
+    if (path !== '/mcp') return;
+    const name = request.headers()['mcp-name'];
+    if (name === 'network_message_send') counts.send += 1;
+    else if (name === 'network_room_file_bind') counts.bind += 1;
+    else if (name === 'network_room_file_delete') counts.delete += 1;
+  });
+  return counts;
+}
+
+function resetWriteCounts(counts: WriteCounts): void {
+  counts.send = 0;
+  counts.upload = 0;
+  counts.bind = 0;
+  counts.delete = 0;
+}
+
+/**
+ * 让页面里第一次指定工具的调用得到可识别失败，之后恢复正常。
+ *
+ * 直接包 `window.fetch` 而不是 Playwright 路由，避免拦截常驻的 SSE
+ * `subscriptions/listen` 请求；失败调用不会到达服务端。
+ */
+async function failToolOnceInPage(page: Page, tool: string, code: string): Promise<void> {
+  await page.evaluate(
+    ({ tool, code }) => {
+      const original = window.fetch.bind(window);
+      let failed = false;
+      window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const headers = new Headers(
+          init?.headers ?? (input instanceof Request ? input.headers : undefined),
+        );
+        if (!failed && headers.get('mcp-name') === tool) {
+          failed = true;
+          return new Response(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              id: 'probe',
+              error: { code: -32000, message: '模拟失败', data: { code } },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return original(input, init);
+      }) as typeof fetch;
+    },
+    { tool, code },
+  );
+}
+
 test.beforeAll(async () => {
   test.setTimeout(300_000);
   releaseRoot = await mkdtemp(join(tmpdir(), 'agentnet-pwa-update-release-'));
@@ -248,6 +340,21 @@ test.beforeAll(async () => {
     body: '**资源加载失败也要保留这条 Markdown 正文**',
     invoke: [],
   });
+
+  roomFileId = await uploadRoomFile('pwa-update-file.txt', '写保护验收文件');
+  forwardRoomTitle = `转发目标 ${crypto.randomUUID().slice(0, 6)}`;
+  const forwardRoom = await callTool<{ room: { room_id: string } }>(
+    base,
+    fixture.tokenA,
+    'network_room_create',
+    {
+      request_id: requestId('pwa_update_forward_room'),
+      kind: 'group',
+      title: forwardRoomTitle,
+      members: [fixture.actorB],
+    },
+  );
+  forwardRoomId = forwardRoom.room.room_id;
 });
 
 test.afterAll(async () => {
@@ -532,6 +639,167 @@ test('版本不同时路由 chunk 失败提供更新后重试且不自动刷新'
   await page.waitForTimeout(400);
   expect(navigations).toBe(after);
   expect(await pageBuildId(page)).toBe(releaseA);
+});
+
+test('写保护：不兼容时文件上传、绑定重试与删除均不发出写请求', async ({ page }) => {
+  await openRoom(page);
+  await expect(page.locator('#files-pane')).toBeVisible();
+  await expect(page.locator(`[data-file-id="${roomFileId}"]`)).toBeVisible();
+
+  // 先制造一次失败，验证「重试加入房间」入口也受写保护。
+  await failToolOnceInPage(page, 'network_room_file_bind', 'INTERNAL');
+  await page.locator('#files-input').setInputFiles({
+    name: 'bind-retry.txt',
+    mimeType: 'text/plain',
+    buffer: Buffer.from('bind retry fixture'),
+  });
+  await expect(page.locator('#files-bind-retry')).toBeVisible();
+
+  const counts = countWriteRequests(page);
+  await routeVersion(page, fakeVersion({ minWebContract: 2, maxWebContract: 2 }));
+  await forceCheck(page);
+  await expect(page.locator('#files-update-block')).toContainText('不兼容');
+  await expect(page.locator('#files-upload')).toBeDisabled();
+  await expect(page.locator('#files-input')).toBeDisabled();
+  await expect(page.locator('#files-bind-retry')).toBeDisabled();
+
+  const fileRow = page.locator(`[data-file-id="${roomFileId}"]`);
+  const deleteButton = fileRow.getByRole('button', { name: '删除', exact: true });
+  await expect(deleteButton).toBeDisabled();
+
+  await page.locator('#files-drop').dispatchEvent('click');
+  await expect(page.locator('#files-status')).toContainText('不兼容');
+  await page.locator('#files-bind-retry').dispatchEvent('click');
+  await deleteButton.dispatchEvent('click');
+  await page.waitForTimeout(400);
+  expect(counts).toMatchObject({ upload: 0, bind: 0, delete: 0 });
+  console.log(JSON.stringify({ probe: 'files-upload-bind-delete', ...counts }));
+});
+
+test('写保护：不兼容时转发入口与已打开的转发弹窗均不发出写请求', async ({ page }) => {
+  await openRoom(page);
+  const message = page.locator('li.msg[data-message-id]').first();
+  await message.getByRole('button', { name: '消息操作', exact: true }).click();
+  await page.locator('#message-action-forward').click();
+  const dialog = page.locator('#forward-modal');
+  await expect(dialog).toBeVisible();
+  await page.locator('#forward-rooms').getByRole('button', { name: new RegExp(forwardRoomTitle) }).click();
+  await expect(page.locator('#forward-send')).toBeEnabled();
+
+  const counts = countWriteRequests(page);
+  await routeVersion(page, fakeVersion({ minWebContract: 2, maxWebContract: 2 }));
+  await forceCheck(page);
+  await expect(page.locator('#forward-update-block')).toContainText('不兼容');
+  await expect(page.locator('#forward-send')).toBeDisabled();
+  await page.locator('#forward-send').dispatchEvent('click');
+  await page.locator('#forward-cancel').click();
+  await expect(dialog).toHaveCount(0);
+
+  await message.getByRole('button', { name: '消息操作', exact: true }).click();
+  const forwardItem = page.locator('#message-action-forward');
+  await expect(forwardItem).toBeVisible();
+  await expect(forwardItem).toHaveAttribute('aria-disabled', 'true');
+  await forwardItem.dispatchEvent('click');
+  await expect(page.locator('#forward-modal')).toHaveCount(0);
+  await page.waitForTimeout(400);
+  expect(counts.send).toBe(0);
+  console.log(JSON.stringify({ probe: 'forward', ...counts }));
+});
+
+test('写保护：稍后隐藏提示后发送仍被阻止且不发出写请求', async ({ page }) => {
+  await openRoom(page);
+  await routeVersion(page, fakeVersion({ minWebContract: 2, maxWebContract: 2 }));
+  await forceCheck(page);
+  await expect(page.locator('#pwa-update-notice')).toContainText('需要更新');
+
+  const counts = countWriteRequests(page);
+  await page.locator('#pwa-update-later').click();
+  await expect(page.locator('#pwa-update-notice')).toHaveCount(0);
+  const marker = page.locator('#pwa-update-marker');
+  await expect(marker).toBeVisible();
+  await expect(marker).toContainText('需要更新');
+  await expect(page.locator('.composer-update-block')).toContainText('不兼容');
+
+  await page.locator('#body').fill('不兼容时不应发送');
+  await expect(page.locator('#send')).toBeDisabled();
+  await page.locator('#body').press('Enter');
+  await page.waitForTimeout(400);
+  expect(counts.send).toBe(0);
+  await expect(page.locator('#status')).toContainText('不兼容');
+
+  await page.locator('#pwa-update-marker-open').click();
+  await expect(page.locator('#pwa-update-notice')).toBeVisible();
+  await expect(page.locator('#pwa-update-notice')).toContainText('需要更新');
+  console.log(JSON.stringify({ probe: 'dismiss-send', ...counts }));
+});
+
+test('写保护：不兼容时 outbox 重试被阻止', async ({ page }) => {
+  await openRoom(page);
+  await failToolOnceInPage(page, 'network_message_send', 'RATE_LIMITED');
+  await page.locator('#body').fill('outbox 失败消息');
+  await page.locator('#send').click();
+  const retry = page.locator('.outbox-retry');
+  await expect(retry).toBeVisible();
+  await expect(retry).toBeEnabled();
+
+  const counts = countWriteRequests(page);
+  await routeVersion(page, fakeVersion({ minWebContract: 2, maxWebContract: 2 }));
+  await forceCheck(page);
+  await expect(retry).toBeDisabled();
+  await retry.dispatchEvent('click');
+  await page.locator('#pwa-update-later').click();
+  await retry.dispatchEvent('click');
+  await page.waitForTimeout(400);
+  expect(counts.send).toBe(0);
+});
+
+test('兼容状态下文件、转发与发送保持可用', async ({ page }) => {
+  await openRoom(page);
+  await expect(page.locator('#files-upload')).toBeEnabled();
+  await expect(
+    page
+      .locator(`[data-file-id="${roomFileId}"]`)
+      .getByRole('button', { name: '删除', exact: true }),
+  ).toBeEnabled();
+
+  const message = page.locator('li.msg[data-message-id]').first();
+  await message.getByRole('button', { name: '消息操作', exact: true }).click();
+  await page.locator('#message-action-forward').click();
+  await expect(page.locator('#forward-modal')).toBeVisible();
+  await page.locator('#forward-cancel').click();
+
+  await page.locator('#body').fill('兼容态可发送');
+  await expect(page.locator('#send')).toBeEnabled();
+});
+
+test('更新提示不遮挡聊天头部操作', async ({ page }) => {
+  await openRoom(page);
+  await routeVersion(page, fakeVersion());
+  await forceCheck(page);
+  const notice = page.locator('#pwa-update-notice');
+  await expect(notice).toBeVisible();
+  await page.waitForFunction(() =>
+    document.documentElement.style.getPropertyValue('--pwa-update-top').length > 0,
+  );
+
+  const hit = await page.locator('#files-toggle').evaluate((button) => {
+    const rect = button.getBoundingClientRect();
+    const target = document.elementFromPoint(
+      rect.left + rect.width / 2,
+      rect.top + rect.height / 2,
+    );
+    return Boolean(target && (target === button || button.contains(target)));
+  });
+  expect(hit).toBe(true);
+
+  const noticeBox = await notice.boundingBox();
+  const headBox = await page.locator('.chat-head').boundingBox();
+  expect(noticeBox).not.toBeNull();
+  expect(headBox).not.toBeNull();
+  expect(noticeBox!.y).toBeGreaterThanOrEqual(headBox!.y + headBox!.height);
+
+  await page.locator('#files-toggle').click();
+  await expect(page.locator('#files-toggle')).toHaveAttribute('aria-expanded', 'false');
 });
 
 test('真实 A/B：旧页提示、点击后加载 B 并恢复草稿', async ({ page }) => {

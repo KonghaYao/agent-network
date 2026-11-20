@@ -5,6 +5,7 @@ import { LIMITS } from '../../../contracts/limits';
 import { copyText } from '../../lib/files';
 import { callTool, type McpError } from '../../lib/mcp-client';
 import { newRequestId } from '../../lib/request-id';
+import { useUpdateWriteBlocked } from '../../pwa/update-store';
 import { confirmDialog } from '../overlays/confirm';
 
 interface ContactLink {
@@ -78,6 +79,7 @@ export function ContactLinksPanel({
   const [policyStatus, setPolicyStatus] = useState('');
   const [policySaving, setPolicySaving] = useState(false);
   const [busy, setBusy] = useState(false);
+  const writeBlocked = useUpdateWriteBlocked();
 
   const load = useCallback(async () => {
     try {
@@ -110,6 +112,11 @@ export function ContactLinksPanel({
   }, [active, load]);
 
   const create = async () => {
+    if (writeBlocked) {
+      setLinkError(true);
+      setLinkStatus('当前页面与服务器版本不兼容，请先更新后再生成好友链接。');
+      return;
+    }
     if (busy) return;
     setBusy(true);
     setLinkError(false);
@@ -154,6 +161,11 @@ export function ContactLinksPanel({
   };
 
   const revoke = async (link: ContactLink) => {
+    if (writeBlocked) {
+      setLinkError(true);
+      setLinkStatus('当前页面与服务器版本不兼容，请先更新后再撤销好友链接。');
+      return;
+    }
     if (busy || !link.can_revoke) return;
     const confirmed = await confirmDialog({
       title: '撤销好友链接',
@@ -191,6 +203,10 @@ export function ContactLinksPanel({
   };
 
   const savePolicy = async (next: 'self_approval' | 'auto_accept') => {
+    if (writeBlocked) {
+      setPolicyStatus('当前页面与服务器版本不兼容，请先更新后再修改接收策略。');
+      return;
+    }
     const previous = policy;
     setPolicy(next);
     setPolicySaving(true);
@@ -229,12 +245,17 @@ export function ContactLinksPanel({
           <h3>好友链接</h3>
         </div>
         <p className="contact-link-hint">一次性链接，24 小时内有效；对方登录后直接成为好友。</p>
+        {writeBlocked ? (
+          <p className="composer-update-block" role="status">
+            当前页面与服务器版本不兼容，请先更新后再管理好友链接。
+          </p>
+        ) : null}
         <div className="contact-link-actions">
           <Button
             id="contact-link-create"
             className="primary"
             type="button"
-            disabled={busy}
+            disabled={busy || writeBlocked}
             onClick={() => void create()}
           >
             {busy ? '正在生成…' : '生成好友链接'}
@@ -276,7 +297,7 @@ export function ContactLinksPanel({
                 {link.can_revoke ? (
                   <Button
                     type="button"
-                    disabled={busy}
+                    disabled={busy || writeBlocked}
                     aria-label={`撤销好友链接 ${link.link_id}`}
                     onClick={() => void revoke(link)}
                   >
@@ -295,7 +316,7 @@ export function ContactLinksPanel({
             id="contact-policy-select"
             aria-label="我的接收策略"
             value={policy}
-            disabled={policySaving}
+            disabled={policySaving || writeBlocked}
             options={POLICY_OPTIONS}
             onChange={(next) =>
               void savePolicy(next === 'auto_accept' ? 'auto_accept' : 'self_approval')

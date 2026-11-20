@@ -10,6 +10,7 @@ import { LIMITS } from '../../contracts/limits';
 import type { McpError } from '../lib/mcp-client';
 import { callTool } from '../lib/mcp-client';
 import { queryKeys } from '../lib/query-keys';
+import { isUpdateWriteBlocked } from '../pwa/update-store';
 import {
   invalidateRoomTasks,
   removeTaskRootFromCache,
@@ -202,6 +203,9 @@ export function useRoomTasks({
   const completeMutation = useMutation({
     mutationFn: async (input: CompleteTaskInput) => {
       if (!token) throw new Error('浏览器身份尚未初始化');
+      if (isUpdateWriteBlocked()) {
+        throw new Error('当前页面与服务器版本不兼容，请先更新后再完成 Task');
+      }
       return callTool(
         'network_task_complete',
         {

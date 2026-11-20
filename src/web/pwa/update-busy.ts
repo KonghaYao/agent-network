@@ -17,7 +17,14 @@ const listeners = new Set<Listener>();
 let snapshot: readonly UpdateBusyReason[] = [];
 
 function publish(): void {
-  const next = [...reasons].map(([source, label]) => ({ source, label }));
+  const seen = new Set<string>();
+  const next: UpdateBusyReason[] = [];
+  for (const [source, label] of reasons) {
+    // Composer 与 outbox 会同时登记发送在途；同一原因只展示一次。
+    if (seen.has(label)) continue;
+    seen.add(label);
+    next.push({ source, label });
+  }
   if (
     next.length === snapshot.length &&
     next.every(
@@ -112,5 +119,5 @@ export function friendInviteUpdateBusy(sending: boolean): string[] {
 }
 
 export function outboxUpdateBusy(sending: boolean): string[] {
-  return sending ? ['请等待发送结果确认'] : [];
+  return sending ? ['请等待消息发送结果确认'] : [];
 }

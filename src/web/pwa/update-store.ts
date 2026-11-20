@@ -17,6 +17,7 @@ import {
   writeUpdateSnapshot,
   type UpdateDraftSource,
 } from './update-snapshot';
+import { setUpdateWriteBlocked } from './update-write-guard';
 import {
   decideVersionCheck,
   fetchWebVersion,
@@ -24,8 +25,11 @@ import {
   versionRelation,
   type PageRelease,
   type VersionCheckTrigger,
+  type VersionRelation,
   type WebVersionInfo,
 } from './version';
+
+export { isUpdateWriteBlocked } from './update-write-guard';
 
 export type UpdatePhase = 'idle' | 'available' | 'incompatible' | 'reloading' | 'error';
 
@@ -40,6 +44,13 @@ export interface UpdateState {
   readonly draftText: string;
   readonly checking: boolean;
   readonly errorKind: UpdateErrorKind;
+  /**
+   * 与提示是否可见无关的粘性写保护：一旦确认页面契约不在服务器区间内，
+   * 只有页面真正切到当前发布（关系变为 `same`）才解除。
+   */
+  readonly contractIncompatible: boolean;
+  /** 用户点了“稍后/留在当前页”；只隐藏提示，不清除任何待恢复信息。 */
+  readonly noticeDismissed: boolean;
 }
 
 const EMPTY_STATE: UpdateState = {
@@ -51,6 +62,8 @@ const EMPTY_STATE: UpdateState = {
   draftText: '',
   checking: false,
   errorKind: null,
+  contractIncompatible: false,
+  noticeDismissed: false,
 };
 
 let state: UpdateState = EMPTY_STATE;
@@ -63,6 +76,8 @@ let draftProvider: (() => UpdateDraftSource | null) | null = null;
 
 function publish(patch: Partial<UpdateState>): UpdateState {
   state = { ...state, ...patch };
+  // 网络层闸门与可见状态共用同一个事实：提示可以隐藏，写保护不能。
+  setUpdateWriteBlocked(state.contractIncompatible);
   for (const listener of listeners) listener();
   return state;
 }
@@ -80,16 +95,22 @@ export function useUpdateState(): UpdateState {
   return useSyncExternalStore(subscribeUpdateState, getUpdateState, getUpdateState);
 }
 
-export function isUpdateWriteBlocked(): boolean {
-  return state.phase === 'incompatible';
-}
-
 export function useUpdateWriteBlocked(): boolean {
   return useSyncExternalStore(
     subscribeUpdateState,
-    () => state.phase === 'incompatible',
+    () => state.contractIncompatible,
     () => false,
   );
+}
+
+/** 关系变化后的写保护：不兼容立即锁定；只有页面已等于当前发布才解除。 */
+export function contractIncompatibleAfter(
+  current: boolean,
+  relation: VersionRelation,
+): boolean {
+  if (relation === 'same') return false;
+  if (relation === 'incompatible') return true;
+  return current;
 }
 
 export function getPageRelease(): PageRelease | null {
@@ -142,7 +163,33 @@ export function checkForUpdate(options: {
     }
     const relation = versionRelation(page, target);
     if (relation === 'same') {
-      return publish({ phase: 'idle', page, target: null, message: '', busy: [] });
+      return publish({
+        phase: 'idle',
+        page,
+        target: null,
+        message: '',
+        draftText: '',
+        errorKind: null,
+        busy: [],
+        contractIncompatible: false,
+        noticeDismissed: false,
+      });
+    }
+    const contractIncompatible = contractIncompatibleAfter(
+      state.contractIncompatible,
+      relation,
+    );
+    const noticeDismissed =
+      state.target?.buildId === target.buildId ? state.noticeDismissed : false;
+    // 快照/存储/已重载失败仍需要用户复制草稿或手动刷新；后台版本检查不能
+    // 把它们覆盖成普通提示，否则复制草稿入口会无声消失。
+    if (
+      state.phase === 'error' &&
+      (state.errorKind === 'snapshot' ||
+        state.errorKind === 'storage' ||
+        state.errorKind === 'reloaded')
+    ) {
+      return publish({ page, target, busy: [], contractIncompatible, noticeDismissed });
     }
     return publish({
       phase: relation === 'incompatible' ? 'incompatible' : 'available',
@@ -152,6 +199,8 @@ export function checkForUpdate(options: {
       draftText: '',
       errorKind: null,
       busy: getUpdateBusyReasons(),
+      contractIncompatible,
+      noticeDismissed,
     });
   })()
     .catch(() => state)
@@ -161,16 +210,19 @@ export function checkForUpdate(options: {
   return inFlight;
 }
 
+/**
+ * 隐藏更新提示。只改变可见性：不兼容写保护、错误信息与待复制的草稿都
+ * 保留，用户仍可通过持久标识重新打开提示。
+ */
 export function dismissUpdate(): void {
-  publish({
-    phase: 'idle',
-    target: null,
-    busy: [],
-    message: '',
-    draftText: '',
-    errorKind: null,
-    checking: false,
-  });
+  if (state.phase === 'idle') return;
+  publish({ noticeDismissed: true, busy: [], checking: false });
+}
+
+/** 从持久标识重新展开提示；不触发版本检查，也不改变写保护。 */
+export function showUpdateNotice(): void {
+  if (state.phase === 'idle') return;
+  publish({ noticeDismissed: false });
 }
 
 export function clearUpdateError(): void {
@@ -201,7 +253,8 @@ export async function requestSafeUpdate(): Promise<UpdateState> {
   if (reloading || state.checking) return state;
   const page = getPageRelease();
   if (!page) return state;
-  publish({ checking: true, message: '', draftText: '', errorKind: null });
+  // 保留 draftText/errorKind：上一次快照失败后点击重试不应丢掉复制草稿入口。
+  publish({ checking: true, message: '' });
 
   const target = await fetchWebVersion();
   if (!target) {
@@ -215,12 +268,19 @@ export async function requestSafeUpdate(): Promise<UpdateState> {
       checking: false,
       message: '当前已是最新版本。',
       busy: [],
+      errorKind: null,
+      contractIncompatible: false,
+      noticeDismissed: false,
     });
   }
 
   const busy = getUpdateBusyReasons();
+  const relation = versionRelation(page, target);
+  const contractIncompatible = contractIncompatibleAfter(
+    state.contractIncompatible,
+    relation,
+  );
   if (busy.length > 0) {
-    const relation = versionRelation(page, target);
     return publish({
       phase: relation === 'incompatible' ? 'incompatible' : 'available',
       page,
@@ -230,6 +290,7 @@ export async function requestSafeUpdate(): Promise<UpdateState> {
       message: `现在不能更新，请先完成或取消：${busy.map((item) => item.label).join('；')}。`,
       draftText: '',
       errorKind: null,
+      contractIncompatible,
     });
   }
 

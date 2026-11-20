@@ -28,6 +28,7 @@ import {
 } from '../../lib/files';
 import { callTool } from '../../lib/mcp-client';
 import { newRequestId } from '../../lib/request-id';
+import { useUpdateWriteBlocked } from '../../pwa/update-store';
 
 const FilePreviewPane = lazy(() => import('./FilePreviewPane').then((module) => ({ default: module.FilePreviewPane })));
 
@@ -112,6 +113,8 @@ interface FailedBind {
 export function FilesPane({ roomId, token, readOnly, open, onClose, preview, onOpenPreview, onBack, files }: FilesPaneProps) {
   const [status, setStatus] = useState('');
   const [statusError, setStatusError] = useState(false);
+  const writeBlocked = useUpdateWriteBlocked();
+  const blockedReason = '当前页面与服务器版本不兼容，请先更新后再上传或删除文件。';
   const [upload, setUpload] = useState<UploadState | null>(null);
   const [failedBind, setFailedBind] = useState<FailedBind | null>(null);
   const [deletePending, setDeletePending] = useState<string | null>(null);
@@ -219,6 +222,10 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, preview, onO
     async (list: File[]) => {
       const filesToSend = list.filter((file) => file.name.length > 0);
       if (filesToSend.length === 0) return;
+      if (writeBlocked) {
+        showStatus(blockedReason, { error: true });
+        return;
+      }
       if (readOnly) {
         showStatus('群已解散，当前为只读归档，不能上传文件。', { error: true });
         return;
@@ -263,7 +270,7 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, preview, onO
         setUpload(null);
       }
     },
-    [files, readOnly, roomId, showStatus, token],
+    [blockedReason, files, readOnly, roomId, showStatus, token, writeBlocked],
   );
 
   const onDrop = useCallback(
@@ -277,6 +284,10 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, preview, onO
   );
 
   const retryBind = useCallback(async () => {
+    if (writeBlocked) {
+      showStatus(blockedReason, { error: true });
+      return;
+    }
     if (!failedBind?.fileId) {
       showStatus('请重新选择文件上传；上次响应没有返回可重试的文件 id。', { error: true });
       return;
@@ -295,10 +306,14 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, preview, onO
     } finally {
       setUpload(null);
     }
-  }, [failedBind, files, roomId, showStatus, token]);
+  }, [blockedReason, failedBind, files, roomId, showStatus, token, writeBlocked]);
 
   const requestDelete = useCallback(
     async (item: RoomFileItem) => {
+      if (writeBlocked) {
+        showStatus(blockedReason, { error: true });
+        return;
+      }
       if (readOnly || busyDelete) return;
       const key = fileKey(item);
       if (deletePending !== key) {
@@ -331,7 +346,7 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, preview, onO
         setBusyDelete(null);
       }
     },
-    [busyDelete, deletePending, files, readOnly, roomId, showStatus, token],
+    [blockedReason, busyDelete, deletePending, files, readOnly, roomId, showStatus, token, writeBlocked],
   );
 
   const copyLink = useCallback(
@@ -426,7 +441,7 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, preview, onO
               type="button"
               variant="prominent"
               size="sm"
-              disabled={readOnly || upload !== null}
+              disabled={readOnly || writeBlocked || upload !== null}
               onClick={() => inputRef.current?.click()}
             >
               上传
@@ -458,12 +473,18 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, preview, onO
           </Suspense>
         ) : null}
         <div className="files-list-view" hidden={preview !== null}>
+        {writeBlocked ? (
+          <p id="files-update-block" className="files-status error" role="status">
+            {blockedReason}
+          </p>
+        ) : null}
         <input
           id="files-input"
           ref={inputRef}
           type="file"
           multiple
           hidden
+          disabled={writeBlocked}
           onChange={(event) => {
             const list = Array.from(event.target.files ?? []);
             event.target.value = '';
@@ -476,14 +497,32 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, preview, onO
           role="button"
           tabIndex={0}
           aria-label="拖拽文件到这里，或点击选择文件"
-          onClick={() => inputRef.current?.click()}
+          aria-disabled={readOnly || writeBlocked ? true : undefined}
+          onClick={() => {
+            if (writeBlocked || readOnly) {
+              showStatus(
+                writeBlocked ? blockedReason : '群已解散，当前为只读归档，不能上传文件。',
+                { error: true },
+              );
+              return;
+            }
+            inputRef.current?.click();
+          }}
           onKeyDown={(event) => {
             if (event.key !== 'Enter' && event.key !== ' ') return;
             event.preventDefault();
+            if (writeBlocked || readOnly) {
+              showStatus(
+                writeBlocked ? blockedReason : '群已解散，当前为只读归档，不能上传文件。',
+                { error: true },
+              );
+              return;
+            }
             inputRef.current?.click();
           }}
           onDragOver={(event) => {
             event.preventDefault();
+            if (writeBlocked || readOnly) return;
             setDragOver(true);
           }}
           onDragLeave={() => setDragOver(false)}
@@ -526,6 +565,7 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, preview, onO
             type="button"
             variant="bordered"
             size="sm"
+            disabled={writeBlocked}
             onClick={() => void retryBind()}
           >
             重试加入房间
@@ -614,7 +654,7 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, preview, onO
                           type="button"
                           variant="borderless"
                           size="sm"
-                          disabled={busyDelete !== null}
+                          disabled={busyDelete !== null || writeBlocked}
                           onClick={() => void requestDelete(item)}
                         >
                           {busyDelete === key ? '删除中…' : deletePending === key ? '确认删除' : '删除'}

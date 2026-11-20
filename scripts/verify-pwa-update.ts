@@ -37,6 +37,14 @@ import {
   type VersionFetch,
   type WebVersionInfo,
 } from '../src/web/pwa/version';
+import {
+  UPDATE_WRITE_BLOCKED_MESSAGE,
+  isUpdateWriteBlocked,
+  resetUpdateWriteBlockForTests,
+  setUpdateWriteBlocked,
+  updateWriteBlockReason,
+} from '../src/web/pwa/update-write-guard';
+import { contractIncompatibleAfter } from '../src/web/pwa/update-store';
 import { BOOT_ERROR_MARKUP, BOOT_ERROR_SCRIPT, renderSpaShell } from '../src/web/spa-shell';
 import { check, checkEqual, checksPassed } from './lib/harness';
 
@@ -382,11 +390,56 @@ function verifySnapshots(): void {
   );
 }
 
+function verifyWriteGuard(): void {
+  resetUpdateWriteBlockForTests();
+  check('默认不拦截写工具', updateWriteBlockReason('network_message_send') === null);
+  setUpdateWriteBlocked(true);
+  for (const tool of [
+    'network_message_send',
+    'network_room_file_bind',
+    'network_room_file_delete',
+    'network_room_create',
+    'network_contact_request',
+    'network_contact_link_redeem',
+    'network_task_mark',
+    'network_task_complete',
+  ]) {
+    check(`不兼容时拦截 ${tool}`, updateWriteBlockReason(tool) === UPDATE_WRITE_BLOCKED_MESSAGE);
+  }
+  for (const tool of [
+    'network_message_send_status',
+    'network_message_read',
+    'network_room_mark_read',
+    'network_room_file_list',
+    'network_me',
+  ]) {
+    check(`不兼容时仍允许读 ${tool}`, updateWriteBlockReason(tool) === null);
+  }
+  check('写保护为同步布尔值', isUpdateWriteBlocked());
+  resetUpdateWriteBlockForTests();
+  check('重置后恢复写入', updateWriteBlockReason('network_message_send') === null);
+
+  check('不兼容后遇到兼容更新仍保持锁定', contractIncompatibleAfter(true, 'update'));
+  check('不兼容持续', contractIncompatibleAfter(true, 'incompatible'));
+  check('页面等于当前发布才解除', !contractIncompatibleAfter(true, 'same'));
+  check('兼容更新不主动加锁', !contractIncompatibleAfter(false, 'update'));
+  check('首次不兼容立即加锁', contractIncompatibleAfter(false, 'incompatible'));
+
+  clearUpdateBusyForTests();
+  setUpdateBusy('composer', '请等待消息发送结果确认');
+  setUpdateBusy('outbox', '请等待消息发送结果确认');
+  checkEqual('发送在途原因按文案去重', getUpdateBusyReasons().length, 1);
+  setUpdateBusy('outbox', '另一条原因');
+  checkEqual('不同原因仍然保留', getUpdateBusyReasons().length, 2);
+  clearUpdateBusyForTests();
+}
+
 async function main(): Promise<void> {
   verifyParsingAndRelation();
   verifyDecision();
   await verifyFetch();
   verifyBusy();
+  verifyWriteGuard();
   verifySnapshots();
   verifyBootShell();
   if (!checksPassed()) process.exit(1);

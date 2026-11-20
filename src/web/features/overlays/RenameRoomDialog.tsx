@@ -10,6 +10,7 @@ import type { RoomView } from '../../lib/chat';
 import { callTool, type McpError } from '../../lib/mcp-client';
 import { queryKeys } from '../../lib/query-keys';
 import { newRequestId } from '../../lib/request-id';
+import { useUpdateWriteBlocked } from '../../pwa/update-store';
 import { Modal } from './Modal';
 
 /** 群改名：`expected_title` 用打开弹窗时的名称，冲突由服务端返回。 */
@@ -25,6 +26,7 @@ export function RenameRoomDialog({
   token: string;
 }) {
   const queryClient = useQueryClient();
+  const writeBlocked = useUpdateWriteBlocked();
   const [submitError, setSubmitError] = useState('');
   const {
     register,
@@ -41,6 +43,10 @@ export function RenameRoomDialog({
   }, [open, reset, room.title]);
 
   const submit = handleSubmit(async (values) => {
+    if (writeBlocked) {
+      setSubmitError('当前页面与服务器版本不兼容，请先更新后再修改群名');
+      return;
+    }
     setSubmitError('');
     try {
       await callTool(
@@ -80,7 +86,7 @@ export function RenameRoomDialog({
             type="submit"
             form="room-rename-form"
             className="primary"
-            disabled={isSubmitting}
+            disabled={isSubmitting || writeBlocked}
           >
             {isSubmitting ? '正在保存…' : '保存'}
           </Button>
@@ -102,6 +108,11 @@ export function RenameRoomDialog({
         </div>
         {errors.title ? (
           <FieldError id="room-rename-input-error">{errors.title.message}</FieldError>
+        ) : null}
+        {writeBlocked ? (
+          <p id="room-rename-update-block" className="composer-update-block" role="status">
+            当前页面与服务器版本不兼容，请先更新后再修改群名。
+          </p>
         ) : null}
         {submitError ? (
           <p id="room-rename-error" className="field-error" role="alert">

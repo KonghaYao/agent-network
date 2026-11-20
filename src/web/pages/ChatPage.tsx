@@ -51,7 +51,7 @@ import { callTool, type McpError } from '../lib/mcp-client';
 import { queryKeys } from '../lib/query-keys';
 import { newRequestId } from '../lib/request-id';
 import { outboxUpdateBusy, setUpdateBusy } from '../pwa/update-busy';
-import { isUpdateWriteBlocked } from '../pwa/update-store';
+import { isUpdateWriteBlocked, useUpdateWriteBlocked } from '../pwa/update-store';
 
 const FilesPane = lazy(() =>
   import('../features/panels/FilesPane').then((module) => ({ default: module.FilesPane })),
@@ -180,6 +180,29 @@ export function ChatPage({ roomId }: ChatPageProps) {
   const desktop = useMediaQuery('(min-width: 1200px)');
   const tablet = useMediaQuery('(min-width: 760px) and (max-width: 1199px)');
   const mobile = useIsMobile();
+  const writeBlocked = useUpdateWriteBlocked();
+  const chatHeadRef = useRef<HTMLElement>(null);
+
+  // 更新提示按真实头部底边定位：桌面 56px、移动端换行后更高，都落在头部
+  // 下方，避免 fixed 提示盖住「文件」等操作按钮。
+  useEffect(() => {
+    const header = chatHeadRef.current;
+    if (!header) return undefined;
+    const root = document.documentElement;
+    const sync = () => {
+      const bottom = header.getBoundingClientRect().bottom;
+      root.style.setProperty('--pwa-update-top', `${Math.round(bottom + 8)}px`);
+    };
+    sync();
+    const observer = new ResizeObserver(sync);
+    observer.observe(header);
+    window.addEventListener('resize', sync);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', sync);
+      root.style.removeProperty('--pwa-update-top');
+    };
+  }, []);
 
   const identity = chat.session?.identity ?? null;
   const token = chat.session?.token ?? null;
@@ -446,7 +469,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
 
   const shownStatus = status || chat.refreshError || chat.streamError || '';
   const ready = chat.status === 'ready' && Boolean(room && identity && token);
-  const dropEnabled = ready && room !== null && !room.read_only;
+  const dropEnabled = ready && room !== null && !room.read_only && !writeBlocked;
   const onDropFiles = useCallback(
     (files: File[]) => {
       if (!dropEnabled) return;
@@ -454,6 +477,14 @@ export function ChatPage({ roomId }: ChatPageProps) {
     },
     [dropEnabled],
   );
+
+  const onForward = useCallback((item: HistoryMessage) => {
+    if (isUpdateWriteBlocked()) {
+      setStatus('当前页面与服务器版本不兼容，请先更新后再转发。');
+      return;
+    }
+    setForwardItem(item);
+  }, []);
   // 单一 dropzone 覆盖整个聊天区：Composer 只在 dropEnabled 时注册上传回调，
   // 只读归档没有 Composer，drop 仍被 preventDefault 吞掉但不会上传。
   const { getRootProps, isDragActive } = useDropzone({
@@ -636,7 +667,11 @@ export function ChatPage({ roomId }: ChatPageProps) {
         main={
           <>
             <section className="chat-pane" aria-label="聊天区">
-              <header className={`chat-head${loadingShell ? ' chat-head--loading' : ''}`} aria-busy={loadingShell}>
+              <header
+                ref={chatHeadRef}
+                className={`chat-head${loadingShell ? ' chat-head--loading' : ''}`}
+                aria-busy={loadingShell}
+              >
                 <Link className="back" id="back" to="/" aria-label="返回会话列表">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M15 6l-6 6 6 6" />
@@ -869,6 +904,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                     onLoadOlder={anchored ? searchNav.navigation.loadOlder : chat.loadOlder}
                     onRetryOutbox={(id) => void onRetryOutbox(id)}
                     onRemoveOutbox={queue.remove}
+                    retryBlocked={writeBlocked}
                     onQuote={onQuote}
                     onStatus={onStatus}
                     onMarkRead={chat.markRead}
@@ -876,7 +912,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                     onOpenTask={openTrace}
                     onOpenFile={openFilePreview}
                     onRecall={(item) => void onRecall(item)}
-                    onForward={setForwardItem}
+                    onForward={onForward}
                     searchNavigation={{
                       activeMessageId: navState.activeMessageId,
                       query: navState.query,

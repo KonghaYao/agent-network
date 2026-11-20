@@ -1,4 +1,5 @@
 import { LIMITS } from '../../contracts/limits';
+import { updateWriteBlockReason } from '../pwa/update-write-guard';
 
 /**
  * 浏览器端最小 MCP 客户端：固定 `2026-07-28`，只调用工具。
@@ -155,6 +156,10 @@ export async function callTool<T>(
   args: Record<string, unknown> = {},
   options: CallToolOptions = {},
 ): Promise<T> {
+  // 契约不兼容时，写工具在发请求前就被拦下；读工具、状态对账与身份恢复
+  // 仍然可用，保证页面还能完成更新或重新登录。
+  const blocked = updateWriteBlockReason(name);
+  if (blocked) throw mcpError(blocked, 'UPDATE_REQUIRED');
   const token = options.token ?? readBrowserToken();
   if (!token) {
     throw mcpError('浏览器身份尚未初始化，请刷新页面后重试', 'CREDENTIAL_INVALID');

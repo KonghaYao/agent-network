@@ -135,6 +135,6 @@ test('room chunk 失败保留可操作错误页', async ({ page }) => {
   await page.route(`**/${roomFile}`, (route) => route.abort('failed'));
   await page.goto(`${base}/c/${roomId}`);
   await expect(page.getByRole('heading', { name: '页面加载失败' })).toBeVisible();
-  await expect(page.getByRole('button', { name: '刷新页面' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '重新加载' })).toBeVisible();
   await expect(page.locator('#body')).toHaveCount(0);
 });

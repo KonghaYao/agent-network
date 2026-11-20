@@ -47,6 +47,8 @@ interface TimelineProps {
   onLoadOlder: () => Promise<void>;
   onRetryOutbox: (clientMessageId: string) => void;
   onRemoveOutbox: (clientMessageId: string) => void;
+  /** 契约不兼容期间禁止任何重发；按钮保持可解释的禁用态。 */
+  retryBlocked?: boolean;
   onQuote: (item: HistoryMessage) => void;
   onStatus: (message: string) => void;
   onMarkRead: (throughSeq: string) => void;
@@ -76,6 +78,7 @@ export function Timeline({
   onLoadOlder,
   onRetryOutbox,
   onRemoveOutbox,
+  retryBlocked = false,
   onQuote,
   onStatus,
   onMarkRead,
@@ -355,6 +358,7 @@ export function Timeline({
                   type="button"
                   variant="borderless"
                   size="sm"
+                  disabled={retryBlocked}
                   onClick={() => onRetryOutbox(item.client_message_id)}
                 >
                   重试

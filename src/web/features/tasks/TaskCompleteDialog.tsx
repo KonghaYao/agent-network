@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type RefObject } from 'react';
 
 import type { McpError } from '../../lib/mcp-client';
 import { newRequestId } from '../../lib/request-id';
+import { useUpdateWriteBlocked } from '../../pwa/update-store';
 import type { TaskListItemView } from './types';
 
 function failureMessage(error: unknown): string {
@@ -40,6 +41,7 @@ export function TaskCompleteDialog({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const writeBlocked = useUpdateWriteBlocked();
   const requestIdRef = useRef<string | null>(null);
   // 父组件关闭时会先清空 item，关闭回调仍需记住最初的完成按钮。
   const returnFocusRef = useRef<HTMLElement | null>(null);
@@ -115,6 +117,11 @@ export function TaskCompleteDialog({
               {error}
             </p>
           ) : null}
+          {writeBlocked ? (
+            <p className="composer-update-block" role="status">
+              当前页面与服务器版本不兼容，请先更新后再完成 Task。
+            </p>
+          ) : null}
           <Separator data-task-divider="" />
           <div className="row modal-actions">
             <AlertDialogPrimitive.Cancel asChild>
@@ -136,7 +143,7 @@ export function TaskCompleteDialog({
               size="md"
               className="spa-dialog-button primary"
               aria-busy={busy ? 'true' : undefined}
-              disabled={busy}
+              disabled={busy || writeBlocked}
               onClick={() => void submit()}
             >
               {busy ? '完成中…' : error ? '重试' : '确认完成'}

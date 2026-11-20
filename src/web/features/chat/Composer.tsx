@@ -688,6 +688,10 @@ export function Composer({
   }, [drawboardError]);
 
   const removeFile = async (file: ComposerFile) => {
+    if (writeBlocked) {
+      onStatus('当前页面与服务器版本不兼容，请先更新后再删除附件。');
+      return;
+    }
     if (file.status === 'ready' && file.fileId) {
       try {
         await callTool(
@@ -855,11 +859,13 @@ export function Composer({
             {
               id: 'attach-menu-file',
               label: '上传文件',
+              disabled: writeBlocked,
               onSelect: () => fileInputRef.current?.click(),
             },
             {
               id: 'attach-menu-draw',
               label: '画板',
+              disabled: writeBlocked,
               onSelect: () => void openDrawboard(),
             },
           ]}

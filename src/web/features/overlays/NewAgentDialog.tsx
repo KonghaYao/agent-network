@@ -9,6 +9,7 @@ import { newAgentFormSchema, type NewAgentForm } from '../../../contracts/web-fo
 import { addLocalAgent, agentConnectPrompt } from '../../lib/agents';
 import { copyText } from '../../lib/files';
 import { callTool, type McpError } from '../../lib/mcp-client';
+import { useUpdateWriteBlocked } from '../../pwa/update-store';
 import { newRequestId } from '../../lib/request-id';
 import { queryKeys } from '../../lib/query-keys';
 import type { WebIdentity } from '../../lib/identity';
@@ -42,6 +43,7 @@ interface NewAgentDialogProps {
  */
 export function NewAgentDialog({ open, onOpenChange, identity, token }: NewAgentDialogProps) {
   const queryClient = useQueryClient();
+  const writeBlocked = useUpdateWriteBlocked();
   const [created, setCreated] = useState<CreatedAgent | null>(null);
   const [prompt, setPrompt] = useState('');
   const [error, setError] = useState('');
@@ -79,6 +81,10 @@ export function NewAgentDialog({ open, onOpenChange, identity, token }: NewAgent
   };
 
   const submit = handleSubmit(async (values) => {
+    if (writeBlocked) {
+      setError('当前页面与服务器版本不兼容，请先更新后再新建 Agent');
+      return;
+    }
     if (!identity || !token) {
       setError('浏览器身份尚未初始化，请刷新页面后重试');
       return;
@@ -175,7 +181,7 @@ export function NewAgentDialog({ open, onOpenChange, identity, token }: NewAgent
             id="new-agent-create"
             type="submit"
             form="new-agent-form"
-            disabled={isSubmitting || created !== null}
+            disabled={isSubmitting || created !== null || writeBlocked}
           >
             {isSubmitting ? '创建中…' : created ? '已创建' : '创建'}
           </Button>
@@ -199,6 +205,11 @@ export function NewAgentDialog({ open, onOpenChange, identity, token }: NewAgent
         </div>
         {errors.name ? (
           <FieldError id="new-agent-name-error">{errors.name.message}</FieldError>
+        ) : null}
+        {writeBlocked ? (
+          <p className="composer-update-block" role="status">
+            当前页面与服务器版本不兼容，请先更新后再新建 Agent。
+          </p>
         ) : null}
         {error ? (
           <p id="new-agent-error" className="form-error" role="status">

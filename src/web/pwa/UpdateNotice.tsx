@@ -6,6 +6,7 @@ import {
   dismissUpdate,
   manualReload,
   requestSafeUpdate,
+  showUpdateNotice,
   startVersionMonitor,
   useUpdateState,
   type UpdateState,
@@ -70,11 +71,47 @@ export function UpdateNotice() {
   }, [state.message, state.errorKind]);
 
   const visible =
-    state.phase === 'available' ||
-    state.phase === 'incompatible' ||
-    state.phase === 'reloading' ||
-    state.phase === 'error';
-  if (!visible) return null;
+    !state.noticeDismissed &&
+    (state.phase === 'available' ||
+      state.phase === 'incompatible' ||
+      state.phase === 'reloading' ||
+      state.phase === 'error');
+  // 提示可以隐藏，但“需要更新”的事实不能消失。不兼容写保护与未完成的
+  // 快照错误都保留一个非阻塞的持久入口，点击后重新展开原提示。
+  const showMarker =
+    state.noticeDismissed && (state.contractIncompatible || state.phase === 'error');
+
+  if (!visible) {
+    if (!showMarker) return null;
+    const blocked = state.contractIncompatible;
+    return (
+      <div
+        id="pwa-update-marker"
+        className="pwa-update-marker"
+        data-update-phase={state.phase}
+        data-write-blocked={blocked ? 'true' : 'false'}
+        role="status"
+        aria-live="polite"
+      >
+        <span className="pwa-update-marker-text">
+          {blocked
+            ? '需要更新：发送与上传已暂停'
+            : state.draftText
+              ? '更新未完成：草稿仍可复制'
+              : '更新未完成：请手动刷新'}
+        </span>
+        <Button
+          id="pwa-update-marker-open"
+          type="button"
+          variant="borderless"
+          size="sm"
+          onClick={showUpdateNotice}
+        >
+          查看
+        </Button>
+      </div>
+    );
+  }
 
   const copyDraft = async () => {
     const copied = await copyText(state.draftText);

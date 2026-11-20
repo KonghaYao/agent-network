@@ -5,6 +5,7 @@ import type { HistoryMessage, RoomView } from '../../lib/chat';
 import { callTool, type McpError } from '../../lib/mcp-client';
 import { queryKeys } from '../../lib/query-keys';
 import { newRequestId } from '../../lib/request-id';
+import { isUpdateWriteBlocked } from '../../pwa/update-store';
 import { invalidateRoomTasks } from '../../lib/task-cache';
 
 export interface TaskTraceTarget {
@@ -56,6 +57,10 @@ export function useRoomTaskController({
   const onToggleTask = useCallback(
     async (item: HistoryMessage) => {
       if (!token || !room || room.read_only) return;
+      if (isUpdateWriteBlocked()) {
+        onStatus('当前页面与服务器版本不兼容，请先更新后再标记 Task。');
+        return;
+      }
       const mark = item.task_root_id !== item.message_id;
       try {
         await callTool(

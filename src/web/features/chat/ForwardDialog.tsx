@@ -7,6 +7,7 @@ import { callTool, type McpError } from '../../lib/mcp-client';
 import { extractFileCards } from '../../lib/files';
 import { readFullMessage } from '../../lib/message-body';
 import { newRequestId } from '../../lib/request-id';
+import { useUpdateWriteBlocked } from '../../pwa/update-store';
 import { Modal } from '../overlays/Modal';
 
 function failureText(error: unknown): string {
@@ -37,6 +38,7 @@ export function ForwardDialog({
   onSent: (roomName: string) => void;
 }) {
   const rooms = useRooms();
+  const writeBlocked = useUpdateWriteBlocked();
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<string | null>(null);
   const [text, setText] = useState<string | null>(null);
@@ -86,6 +88,10 @@ export function ForwardDialog({
   }, [query, rooms.rooms, sourceRoomId]);
 
   const send = async () => {
+    if (writeBlocked) {
+      setStatus('当前页面与服务器版本不兼容，请先更新后再转发。');
+      return;
+    }
     if (!selected || !text || busy) return;
     const target = targets.find((room) => room.room_id === selected);
     if (!target) return;
@@ -138,7 +144,7 @@ export function ForwardDialog({
             type="button"
             variant="prominent"
             size="md"
-            disabled={!selected || text === null || busy}
+            disabled={!selected || text === null || busy || writeBlocked}
             onClick={() => void send()}
           >
             {busy ? '正在转发…' : '确认转发'}
@@ -149,6 +155,11 @@ export function ForwardDialog({
       <p id="forward-preview" className="forward-preview">
         {text ?? '正在读取消息…'}
       </p>
+      {writeBlocked ? (
+        <p id="forward-update-block" className="composer-update-block" role="status">
+          当前页面与服务器版本不兼容，请先更新后再转发。
+        </p>
+      ) : null}
       <div className="field">
         <Label htmlFor="forward-search">选择转发会话</Label>
         <SearchInput
