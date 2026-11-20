@@ -286,6 +286,28 @@ export const GUARDS = {
     code: 'CONFLICT',
     message: '消息已属于另一个 Task；请另选起点或先取消原标记',
   },
+  roomMessagePinLimit: {
+    table: 'guard_room_message_pin_limit',
+    code: 'CONFLICT',
+    message: '每个群最多置顶 3 条消息，请先取消一条',
+    details: {
+      reason: 'pin_limit',
+      max: LIMITS.roomPinnedMessagesMax,
+    },
+  },
+  messageRecalled: {
+    table: 'guard_message_recalled',
+    code: 'CONFLICT',
+    message: '消息已撤回，不能继续执行、重新入队或置顶',
+    details: {
+      reason: 'message_recalled',
+    },
+  },
+  roomMessageUnavailable: {
+    table: 'guard_room_message_unavailable',
+    code: 'NOT_FOUND',
+    message: '消息不存在或当前不可见',
+  },
 } as const satisfies Record<string, GuardDefinition>;
 
 export type GuardName = keyof typeof GUARDS;

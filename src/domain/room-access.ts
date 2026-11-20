@@ -29,7 +29,9 @@ export type RoomCapability =
   | 'transfer_owner'
   | 'approve_joins'
   | 'mention_all'
-  | 'view_role_history';
+  | 'view_role_history'
+  /** 群主管理任意成员消息：不限时软撤回与置顶；admin 不继承。 */
+  | 'manage_messages';
 
 export interface RoomPolicies {
   member_message: GroupMemberPolicy;
@@ -53,6 +55,7 @@ export interface RoomCapabilities {
   /** 群内 `@所有人`；默认仅 owner/admin，策略可放开给普通成员。 */
   mention_all: boolean;
   view_role_history: boolean;
+  manage_messages: boolean;
 }
 
 export interface MemberActions {
@@ -74,6 +77,7 @@ const OWNER_ONLY: ReadonlySet<RoomCapability> = new Set([
   'manage_admins',
   'manage_policy',
   'transfer_owner',
+  'manage_messages',
 ]);
 
 /**
@@ -97,6 +101,7 @@ export const CAPABILITY_PREDICATES: Record<RoomCapability, string> = {
   mention_all:
     "(r.kind = 'direct' OR m.role IN ('owner', 'admin') OR r.member_mention_all_policy = 'members')",
   view_role_history: "(r.kind = 'group' AND m.role IN ('owner', 'admin'))",
+  manage_messages: "(r.kind = 'group' AND m.role = 'owner')",
 };
 
 /** 目标成员移除谓词；调用者别名 m，目标别名 t。 */
@@ -224,6 +229,7 @@ export function roomCapabilitiesFor(
       active &&
       (!group || admin || room.member_mention_all_policy === 'members'),
     view_role_history: active && group && admin,
+    manage_messages: writable && active && group && owner,
   };
 }
 
@@ -357,6 +363,33 @@ export function requireExpectedRoleRevision(
       actual: target.role_revision,
     });
   }
+}
+
+/**
+ * 事务内复核消息仍属于该房间、调用者仍是 active 成员，且消息位于当前
+ * 历史边界内；失败映射 NOT_FOUND，不泄露跨房间/加入前消息的存在性。
+ */
+export function messageAvailabilityGuardStatement(
+  db: D1Database,
+  roomId: string,
+  actorId: string,
+  messageId: string,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      guardSql(
+        'roomMessageUnavailable',
+        `NOT EXISTS (
+           SELECT 1
+             FROM messages m
+             JOIN rooms r ON r.room_id = m.room_id
+             JOIN room_members rm ON rm.room_id = r.room_id AND rm.actor_id = ? AND rm.status = 'active'
+            WHERE m.message_id = ? AND m.room_id = ?
+              AND (r.member_history_policy = 'full' OR m.created_seq >= rm.joined_seq)
+         )`,
+      ),
+    )
+    .bind(actorId, messageId, roomId);
 }
 
 /** 事务内复核调用者能力；owner-only 能力映射 NOT_OWNER，其余映射 PERMISSION_DENIED。 */

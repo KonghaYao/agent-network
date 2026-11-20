@@ -495,7 +495,7 @@ function checkDrizzleBoundary(): void {
 
 async function main() {
   const names = await migrationNames();
-  checkEqual('迁移数量为 46', names.length, 46);
+  checkEqual('迁移数量为 47', names.length, 47);
   const digest = await migrationsDigest(names);
 
   const migrated = new Database(':memory:');
@@ -534,9 +534,9 @@ async function main() {
       0,
     );
     checkEqual(
-      'schema_migrations 行数为 46',
+      'schema_migrations 行数为 47',
       (migrated.prepare('SELECT COUNT(*) AS n FROM schema_migrations').get() as { n: number }).n,
-      46,
+      47,
     );
     checkEqual(
       'Drizzle 不生成 guard 表',
