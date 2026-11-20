@@ -40,8 +40,6 @@ export const APP_STYLE = `
     --pane-resizer-width: 6px;
     /* 桌面端右栏占比，默认一半一半；拖拽岛按 localStorage 覆盖。 */
     --right-pane-ratio: 0.5;
-    /* 品牌图标统一浅色底：单色 SVG 以 currentColor 编码，<img> 中会渲染为黑色。 */
-    --wx-avatar-icon-bg: var(--lenso-background-tertiary);
   }
   /* 暗色下保持柔和红，只提亮文字与未读点以满足可读性。 */
   @media (prefers-color-scheme: dark) {
@@ -336,11 +334,14 @@ export const APP_STYLE = `
   @media (prefers-color-scheme: dark) {
     .group-color-dot { box-shadow: 0 0 0 1px rgb(255 255 255 / 24%); }
   }
-  /* 品牌图标：容器保留首字供图片失败时回退，img 覆盖并遮住首字。 */
-  .avatar-icon { position: relative; background: var(--wx-avatar-icon-bg); color: #1f2329; }
-  .avatar-icon .avatar-img { position: absolute; inset: 0; box-sizing: border-box;
-    width: 100%; height: 100%; padding: 14%; border-radius: inherit;
-    background: var(--wx-avatar-icon-bg); object-fit: contain; display: block; }
+  /*
+   * 品牌图标：容器保持透明并保留首字，图片满铺裁剪后遮住首字；
+   * 加载失败时组件移除 avatar-icon，回退到名称色首字。
+   */
+  .avatar-icon { position: relative; background: transparent; }
+  .avatar-icon .avatar-img { position: absolute; inset: 0; display: block;
+    width: 100%; height: 100%; border-radius: inherit; object-fit: cover;
+    background: transparent; }
 
   .sidebar-foot { position: relative; flex: 0 0 auto; padding: 8px 12px calc(10px + env(safe-area-inset-bottom));
     border-top: 1px solid transparent; background: var(--wx-sidebar); }
