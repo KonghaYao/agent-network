@@ -890,7 +890,11 @@ test.describe.serial('SPA 组件库与状态管理', () => {
       .toBeGreaterThan(0);
 
     // 上下文弹窗复用 message-search-card 的固定头部/滚动正文布局。
-    await page.locator('#message-search-results .message-search-result').first().click();
+    await page
+      .locator('#message-search-results .message-search-result')
+      .first()
+      .locator('[data-search-context]')
+      .click();
     await expect(page.locator('#message-context-dialog')).toBeVisible();
     const context = await page.evaluate(() => {
       const dialog = document.getElementById('message-context-dialog')!;

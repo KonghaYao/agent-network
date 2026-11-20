@@ -195,6 +195,25 @@ test.describe('会话历史搜索 UI', () => {
     await selectScope(page, '当前会话');
     await expect(page.locator('[data-task-only]')).toBeEnabled();
     await expect(page.locator('#message-search-task-note')).toHaveCount(0);
+
+    const desktop = await page.locator('#message-search-dialog').evaluate((dialog) => {
+      const controls = document.getElementById('message-search-controls')!;
+      const results = document.getElementById('message-search-results')!;
+      const rows = Array.from(
+        controls.querySelectorAll<HTMLElement>('.message-search-control-row'),
+      ).map((row) => row.getBoundingClientRect());
+      return {
+        dialogWidth: Math.round(dialog.getBoundingClientRect().width),
+        dialogOverflow: dialog.scrollWidth - dialog.clientWidth,
+        controlsSameLine:
+          rows.length === 2 && Math.abs(rows[0]!.top - rows[1]!.top) <= 1,
+        resultsOverflow: results.scrollWidth - results.clientWidth,
+      };
+    });
+    expect(desktop.dialogWidth).toBe(680);
+    expect(desktop.controlsSameLine).toBe(true);
+    expect(desktop.dialogOverflow).toBeLessThanOrEqual(1);
+    expect(desktop.resultsOverflow).toBeLessThanOrEqual(1);
   });
 
   test('防抖自动搜索、命中高亮与空态', async ({ page }) => {
@@ -322,5 +341,193 @@ test.describe('会话历史搜索 UI', () => {
     await page.keyboard.press('Escape');
     await expect(page.locator('#message-search-dialog')).toHaveCount(0);
     await expect(page.locator('#message-search-button')).toBeFocused();
+  });
+
+  test('当前会话：已渲染消息直接定位并短暂高亮', async ({ page }) => {
+    await openRoom(page, directRoomId);
+    await openSearch(page);
+    await searchNow(page, token('livetarget'));
+    await expect(page.locator('#message-search-results .message-search-result')).toHaveCount(1, {
+      timeout: 10_000,
+    });
+    await page.locator('#message-search-results [data-search-locate]').click();
+    await expect(page.locator('#message-search-dialog')).toHaveCount(0);
+    const target = page.locator(`#messages [data-message-id]`).filter({
+      hasText: token('livetarget'),
+    });
+    await expect(target).toBeVisible();
+    await expect(target).toHaveAttribute('data-search-active', 'true');
+    await expect(page.locator('#search-navigation-bar')).toHaveCount(0);
+    await expect(page.locator('#messages')).toHaveAttribute('data-search-anchored', 'false');
+  });
+
+  test('当前会话：未渲染消息走锚点窗口，不推进已读，返回最新恢复实时', async ({ page }) => {
+    await openRoom(page, directRoomId);
+    const before = await callTool<RoomDetailPage>(
+      base,
+      tokenA,
+      'network_room_get',
+      { room_id: directRoomId },
+    );
+    await openSearch(page);
+    await searchNow(page, token('oldtarget'));
+    await expect(page.locator('#message-search-results .message-search-result')).toHaveCount(1, {
+      timeout: 10_000,
+    });
+    await page.locator('#message-search-results [data-search-locate]').click();
+    await expect(page.locator('#search-navigation-bar')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('#messages')).toHaveAttribute('data-search-anchored', 'true');
+    const target = page.locator('#messages [data-message-id]').filter({
+      hasText: token('oldtarget'),
+    });
+    await expect(target).toBeVisible();
+    await expect(target).toHaveAttribute('data-search-active', 'true');
+    await expect(page.locator('#search-return-latest')).toBeVisible();
+
+    // 历史窗口不因浏览旧消息把最新 head 标已读。
+    await page.waitForTimeout(800);
+    const during = await callTool<RoomDetailPage>(
+      base,
+      tokenA,
+      'network_room_get',
+      { room_id: directRoomId },
+    );
+    expect(during.room.my_last_read_seq).toBe(before.room.my_last_read_seq);
+
+    await page.locator('#search-return-latest').click();
+    await expect(page.locator('#search-navigation-bar')).toHaveCount(0);
+    await expect(page.locator('#messages')).toHaveAttribute('data-search-anchored', 'false');
+    await expect(
+      page.locator('#messages [data-message-id]').filter({ hasText: token('livetarget') }),
+    ).toBeVisible();
+
+    // 订阅仍在：返回最新后新消息应实时出现。
+    const live = token('afterreturn');
+    await send(tokenB, directRoomId, `${live} 返回最新后的实时消息`);
+    await expect(
+      page.locator('#messages [data-message-id]').filter({ hasText: live }),
+    ).toBeVisible({ timeout: 10_000 });
+  });
+
+  test('全局结果：切到目标房间、载入锚点窗口并返回最新', async ({ page }) => {
+    await openRoom(page, directRoomId);
+    await openSearch(page);
+    await selectScope(page, '全部会话');
+    await searchNow(page, token('global'));
+    const row = page.locator('#message-search-results .message-search-result').first();
+    await expect(row).toHaveCount(1, { timeout: 10_000 });
+    await expect(row.locator('.message-search-room')).toHaveText(groupTitle);
+    await row.locator('[data-search-locate]').click();
+    await expect(page).toHaveURL(new RegExp(`/c/${groupRoomId}$`), { timeout: 10_000 });
+    await expect(page.locator('#search-navigation-bar')).toBeVisible({ timeout: 15_000 });
+    await expect(
+      page.locator('#messages [data-message-id]').filter({ hasText: token('global') }),
+    ).toBeVisible();
+    await expect(page.locator('#title')).toHaveText(groupTitle);
+
+    await page.locator('#search-return-latest').click();
+    await expect(page.locator('#search-navigation-bar')).toHaveCount(0);
+    await expect(page.locator('#messages')).toHaveAttribute('data-search-anchored', 'false');
+  });
+
+  test('scan_limited 空批提供继续搜索，并显示空态', async ({ page }) => {
+    const scanQuery = token('scanlimited');
+    let calls = 0;
+    await page.route('**/mcp', async (route) => {
+      const request = route.request();
+      if (request.headers()['mcp-name'] !== 'network_message_search') {
+        await route.continue();
+        return;
+      }
+      const body = JSON.parse(request.postData() ?? '{}') as {
+        id?: string;
+        params?: { arguments?: { query?: string } };
+      };
+      if (body.params?.arguments?.query !== scanQuery) {
+        await route.continue();
+        return;
+      }
+      calls += 1;
+      const first = calls === 1;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: body.id ?? 'scan',
+          result: {
+            structuredContent: {
+              items: [],
+              next_cursor: first ? 'scan_cursor' : null,
+              has_more: first,
+              scan_limited: first,
+              scanned_count: 500,
+              snapshot: '1',
+              authorization: {
+                policy_revision: 0,
+                history_from_seq: '0',
+                member_generation: '0',
+              },
+              scope: 'room',
+              mode: 'fuzzy',
+            },
+          },
+        }),
+      });
+    });
+
+    await openRoom(page, directRoomId);
+    await openSearch(page);
+    await selectMode(page, '模糊');
+    await searchNow(page, scanQuery);
+    await expect(page.locator('#message-search-status')).toHaveText(
+      '本批未命中，可继续搜索更早记录',
+      { timeout: 10_000 },
+    );
+    await expect(page.locator('#message-search-empty')).toHaveText(
+      '本批未命中，可继续搜索更早记录',
+    );
+    await expect(page.locator('#message-search-more')).toHaveText('继续搜索更早记录');
+    await page.locator('#message-search-more').click();
+    await expect(page.locator('#message-search-status')).toHaveText('没有找到匹配消息');
+    await expect(page.locator('#message-search-more')).toHaveCount(0);
+    expect(calls).toBe(2);
+  });
+
+  test('390 暗色：控件换行、结果不横向溢出', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await openRoom(page, directRoomId);
+    await openSearch(page);
+    await searchNow(page, token('case'));
+    await expect(page.locator('#message-search-results .message-search-result')).toHaveCount(1, {
+      timeout: 10_000,
+    });
+    const geometry = await page.locator('#message-search-dialog').evaluate((dialog) => {
+      const controls = document.getElementById('message-search-controls')!;
+      const results = document.getElementById('message-search-results')!;
+      const rows = Array.from(
+        controls.querySelectorAll<HTMLElement>('.message-search-control-row'),
+      ).map((row) => row.getBoundingClientRect());
+      return {
+        dialogWidth: dialog.getBoundingClientRect().width,
+        dialogOverflow: dialog.scrollWidth - dialog.clientWidth,
+        controlsHeight: controls.getBoundingClientRect().height,
+        controlsStacked: rows.length === 2 && rows[1]!.top >= rows[0]!.bottom - 1,
+        resultsOverflow: results.scrollWidth - results.clientWidth,
+        viewport: window.innerWidth,
+      };
+    });
+    expect(geometry.dialogWidth).toBeGreaterThanOrEqual(389);
+    expect(geometry.dialogWidth).toBeLessThanOrEqual(390);
+    expect(geometry.controlsHeight).toBeGreaterThan(0);
+    expect(geometry.controlsStacked).toBe(true);
+    expect(geometry.dialogOverflow).toBeLessThanOrEqual(1);
+    expect(geometry.resultsOverflow).toBeLessThanOrEqual(1);
+    const markBackground = await page
+      .locator('#message-search-results .message-search-mark')
+      .first()
+      .evaluate((node) => getComputedStyle(node).backgroundColor);
+    expect(markBackground).toMatch(/^rgb\(/u);
   });
 });

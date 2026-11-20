@@ -28,6 +28,7 @@ import { useRoomTaskController } from '../features/tasks/useRoomTaskController';
 import { useTaskAskProgress } from '../features/tasks/useTaskAskProgress';
 import { AccountMenu } from '../features/sidebar/AccountMenu';
 import { openAgentMemory } from '../features/memory/memory-store';
+import { useChatSearchNavigation } from '../features/search/useChatSearchNavigation';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 import { useRoomChat } from '../hooks/useRoomChat';
@@ -446,28 +447,20 @@ export function ChatPage({ roomId }: ChatPageProps) {
     onDrop: onDropFiles,
   });
 
-  // 不把 ref 直接挂在 Tooltip as={Button} 上，避免 Lenso 模块晚到时
-  // 原生按钮因提前获得焦点而永久锁定 fallback；关闭弹窗时按 id 取回节点。
-  // 会话就绪时 Ctrl/Cmd+F 打开搜索；输入框内保留浏览器原生查找。
-  useEffect(() => {
-    if (!ready || searchOpen) return undefined;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
-      if (event.key.toLowerCase() !== 'f') return;
-      if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
-      const target = event.target;
-      if (
-        target instanceof HTMLElement &&
-        target.closest('textarea, input, select, [contenteditable="true"]')
-      ) {
-        return;
-      }
-      event.preventDefault();
-      setSearchOpen(true);
-    };
-    document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
-  }, [ready, searchOpen]);
+  // 搜索定位与快捷键；关闭焦点按 id 解析，Lenso 升级替换节点后仍有效。
+  const searchNav = useChatSearchNavigation({
+    roomId,
+    token: token ?? '',
+    humanTimeline: identity?.kind === 'human',
+    ready,
+    roomStatus: chat.status,
+    searchOpen,
+    setSearchOpen,
+    setStatus,
+    forcePin: () => setForcePinToken((value) => value + 1),
+  });
+  const navState = searchNav.navigation.state;
+  const anchored = navState.status === 'anchored';
 
   // 首载骨架与静态输入区：错误态让位给错误页，避免骨架长期占位。
   const loadingShell = !ready && chat.status !== 'error';
@@ -832,7 +825,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                 </Alert>
                 {ready && room && identity ? (
                   <Timeline
-                    items={chat.items}
+                    items={anchored ? navState.items : chat.items}
                     room={room}
                     members={members}
                     identityId={identity.actor_id}
@@ -841,12 +834,16 @@ export function ChatPage({ roomId }: ChatPageProps) {
                     token={token ?? ''}
                     mentions={mentions}
                     outbox={queue.items}
-                    olderLoading={chat.olderLoading}
-                    olderError={chat.olderError}
-                    olderEnded={chat.olderEnded}
-                    hasOlder={chat.hasOlder}
+                    olderLoading={anchored ? navState.olderLoading : chat.olderLoading}
+                    olderError={anchored ? navState.olderError : chat.olderError}
+                    olderEnded={
+                      anchored
+                        ? !navState.olderLoading && navState.nextOlder === null && navState.items.length > 0
+                        : chat.olderEnded
+                    }
+                    hasOlder={anchored ? Boolean(navState.nextOlder) : chat.hasOlder}
                     forcePinToken={forcePinToken}
-                    onLoadOlder={chat.loadOlder}
+                    onLoadOlder={anchored ? searchNav.navigation.loadOlder : chat.loadOlder}
                     onRetryOutbox={(id) => void onRetryOutbox(id)}
                     onRemoveOutbox={queue.remove}
                     onQuote={onQuote}
@@ -857,6 +854,15 @@ export function ChatPage({ roomId }: ChatPageProps) {
                     onOpenFile={openFilePreview}
                     onRecall={(item) => void onRecall(item)}
                     onForward={setForwardItem}
+                    searchNavigation={{
+                      activeMessageId: navState.activeMessageId,
+                      query: navState.query,
+                      mode: navState.mode,
+                      jumpToken: navState.jumpToken,
+                      anchored,
+                      hasNewer: navState.anchorWindow?.has_newer ?? false,
+                      onReturnLatest: searchNav.returnLatest,
+                    }}
                   />
                 ) : null}
                 <p id="status" role="status">
@@ -976,6 +982,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
           searchOpen={searchOpen}
           onSearchOpenChange={setSearchOpen}
           searchReturnFocusRef={searchReturnFocusRef}
+          onLocateSearchResult={searchNav.locate}
           onOpenTrace={openTrace}
           taskTrace={taskTrace}
           onCloseTrace={closeTrace}

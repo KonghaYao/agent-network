@@ -961,6 +961,123 @@ body .memory-drawer {
   box-shadow: inset 3px 0 0 var(--lenso-tint-text) !important;
 }
 
+.message-search-locate {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.message-search-locate:focus-visible {
+  outline: none;
+}
+
+.message-search-result:has(.message-search-locate:focus-visible) {
+  outline: 2px solid var(--lenso-tint-text);
+  outline-offset: -2px;
+}
+
+.message-search-result-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+
+.message-search-context {
+  min-height: 44px;
+  padding: 0 10px;
+  border: 1px solid var(--wx-line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--wx-link);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.message-search-context:hover,
+.message-search-context:focus-visible {
+  background: var(--wx-hover);
+}
+
+.message-search-context:focus-visible {
+  outline: 2px solid var(--lenso-focus-ring);
+  outline-offset: 2px;
+}
+
+.search-navigation-bar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--wx-line);
+  background: var(--wx-panel);
+  color: var(--wx-text);
+  font-size: 12px;
+}
+
+.search-navigation-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.search-return-latest {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--wx-line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--wx-link);
+  font: inherit;
+  cursor: pointer;
+}
+
+.search-return-latest:hover,
+.search-return-latest:focus-visible {
+  background: var(--wx-hover);
+}
+
+.search-return-latest:focus-visible {
+  outline: 2px solid var(--lenso-focus-ring);
+  outline-offset: 2px;
+}
+
+#messages > .msg.search-active {
+  border-radius: 8px;
+  outline: 2px solid var(--lenso-tint-text);
+  outline-offset: 2px;
+}
+
+#messages > .msg.search-flash {
+  animation: message-search-flash var(--app-search-flash-duration, 1600ms) ease-out;
+}
+
+@keyframes message-search-flash {
+  0%,
+  35% {
+    background: color-mix(in srgb, var(--lenso-tint) 22%, transparent);
+  }
+  100% {
+    background: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #messages > .msg.search-flash {
+    animation: none;
+    background: color-mix(in srgb, var(--lenso-tint) 14%, transparent);
+  }
+}
+
 .message-search-result strong {
   display: block;
   font-size: 12px;
@@ -1050,6 +1167,7 @@ body .memory-drawer {
     margin-left: 0;
   }
 }
+
 
 .task-search-main {
   display: block;

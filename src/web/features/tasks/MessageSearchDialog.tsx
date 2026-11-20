@@ -19,8 +19,11 @@ import { Modal } from '../overlays/Modal';
 import { MessageSearchControls } from '../search/MessageSearchControls';
 import { MessageSearchSnippet } from '../search/MessageSearchSnippet';
 import type {
+  LocateResult,
+  MessageSearchHit,
   MessageSearchMode,
   MessageSearchScope,
+  SearchNavigationTarget,
 } from '../search/message-search-types';
 import { useMessageSearchQuery } from '../search/useMessageSearchQuery';
 
@@ -74,6 +77,7 @@ export function MessageSearchDialog({
   roomId,
   token,
   onOpenTask,
+  onLocate,
   returnFocusRef,
 }: {
   open: boolean;
@@ -81,6 +85,7 @@ export function MessageSearchDialog({
   roomId: string;
   token: string;
   onOpenTask: (rootId: string, focusMessageId: string | null) => void;
+  onLocate: (target: SearchNavigationTarget) => Promise<LocateResult>;
   returnFocusRef?: RefObject<HTMLElement | null>;
 }) {
   const backend = useBackendLease(open);
@@ -90,6 +95,8 @@ export function MessageSearchDialog({
   const [taskOnly, setTaskOnly] = useState(false);
   const [composing, setComposing] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(-1);
+  const [locating, setLocating] = useState(false);
+  const [locateError, setLocateError] = useState('');
   const composingRef = useRef(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const resultsRef = useRef<HTMLDivElement | null>(null);
@@ -119,6 +126,8 @@ export function MessageSearchDialog({
     setComposing(false);
     composingRef.current = false;
     setSelectedIndex(-1);
+    setLocating(false);
+    setLocateError('');
     setContextId(null);
     setContextItems([]);
     setContextStatus('');
@@ -132,7 +141,7 @@ export function MessageSearchDialog({
 
   // 搜索已打开时再次 Ctrl/Cmd+F：聚焦并全选查询，不重复开层。
   useEffect(() => {
-    if (!open) return undefined;
+    if (!open || contextId !== null) return undefined;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
       if (event.key.toLowerCase() !== 'f') return;
@@ -143,14 +152,21 @@ export function MessageSearchDialog({
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [open]);
+  }, [contextId, open]);
 
   // 显式接管搜索层的 Escape：Lenso SearchField 可能在输入框层吞掉按键，
   // 不能只依赖 Modal。上下文弹窗打开时让子层先处理。
   useEffect(() => {
     if (!open) return undefined;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return;
+      if (
+        event.key !== 'Escape' ||
+        event.isComposing ||
+        event.keyCode === 229 ||
+        composingRef.current
+      ) {
+        return;
+      }
       if (contextId !== null) return;
       event.preventDefault();
       event.stopPropagation();
@@ -217,6 +233,28 @@ export function MessageSearchDialog({
     [resultCount, revealSelected],
   );
 
+  const locateHit = useCallback(
+    async (item: MessageSearchHit) => {
+      if (locating) return;
+      setLocating(true);
+      setLocateError('');
+      try {
+        const result = await onLocate({
+          room_id: item.room_id,
+          message_id: item.message_id,
+          query: query.trim(),
+          mode,
+          scope,
+        });
+        if (!result.ok) setLocateError(result.error);
+      } catch (failure) {
+        setLocateError(failureText(failure));
+      } finally {
+        setLocating(false);
+      }
+    },
+    [locating, mode, onLocate, query, scope],
+  );
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -228,9 +266,16 @@ export function MessageSearchDialog({
   const onInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     const native = event.nativeEvent;
     if (native.isComposing || event.keyCode === 229 || composingRef.current) {
-      // IME 组合期间把按键留给输入法，避免 Esc/Enter 被弹窗或表单抢走。
-      if (event.key === 'Escape') event.preventDefault();
-      event.stopPropagation();
+      // IME 组合期间把导航键与 Esc 留给输入法，避免弹窗或表单抢走按键。
+      if (
+        event.key === 'Escape' ||
+        event.key === 'Enter' ||
+        event.key === 'ArrowDown' ||
+        event.key === 'ArrowUp'
+      ) {
+        if (event.key === 'Escape') event.preventDefault();
+        event.stopPropagation();
+      }
       return;
     }
     if (event.key === 'Escape') {
@@ -254,6 +299,8 @@ export function MessageSearchDialog({
   };
 
   const status = (() => {
+    if (locateError) return locateError;
+    if (locating) return '正在定位消息…';
     if (search.phase === 'loading') return '正在搜索…';
     if (search.phase === 'loading-more') return '正在加载更多…';
     if (search.error) return search.error;
@@ -318,6 +365,7 @@ export function MessageSearchDialog({
               aria-controls="message-search-results"
               onChange={(event) => {
                 setQuery(event.target.value);
+                setLocateError('');
                 resetSelection();
               }}
               onCompositionStart={() => {
@@ -337,11 +385,13 @@ export function MessageSearchDialog({
             taskOnly={taskOnly}
             onModeChange={(next) => {
               setMode(next);
+              setLocateError('');
               resetSelection();
             }}
             onScopeChange={(next) => {
               setScope(next);
               if (next === 'all') setTaskOnly(false);
+              setLocateError('');
               resetSelection();
             }}
           />
@@ -430,45 +480,60 @@ export function MessageSearchDialog({
                 </Button>
               ))
             : search.hits.map((item, index) => (
-                <Button
-                  type="button"
+                <article
                   className={`message-search-result${selectedIndex === index ? ' is-active' : ''}`}
-                  style={SEARCH_RESULT_STYLE}
                   key={`${item.room_id}:${item.message_id}`}
                   data-search-index={index}
                   data-active={selectedIndex === index ? 'true' : 'false'}
                   aria-current={selectedIndex === index ? 'true' : undefined}
-                  onFocus={() => setSelectedIndex(index)}
-                  onClick={(event) => {
-                    contextTrigger.current = event.currentTarget;
-                    setContextId(item.message_id);
-                  }}
                 >
-                  <span className="message-search-meta">
-                    {scope === 'all' ? (
-                      <>
-                        <span className="message-search-room">{item.room_display_name}</span>
-                        <span className="message-search-kind">
-                          {item.room_kind === 'group' ? '群聊' : '私聊'}
-                        </span>
-                        <span className="message-search-separator" aria-hidden="true">
-                          ·
-                        </span>
-                      </>
-                    ) : null}
-                    <strong>{item.sender_name}</strong>
-                    <span className="message-search-separator" aria-hidden="true">
-                      ·
+                  <button
+                    type="button"
+                    className="message-search-locate"
+                    data-search-locate
+                    disabled={locating}
+                    onFocus={() => setSelectedIndex(index)}
+                    onClick={() => void locateHit(item)}
+                  >
+                    <span className="message-search-meta">
+                      {scope === 'all' ? (
+                        <>
+                          <span className="message-search-room">{item.room_display_name}</span>
+                          <span className="message-search-kind">
+                            {item.room_kind === 'group' ? '群聊' : '私聊'}
+                          </span>
+                          <span className="message-search-separator" aria-hidden="true">
+                            ·
+                          </span>
+                        </>
+                      ) : null}
+                      <strong>{item.sender_name}</strong>
+                      <span className="message-search-separator" aria-hidden="true">
+                        ·
+                      </span>
+                      <time>{timeLabel(item.created_at)}</time>
                     </span>
-                    <time>{timeLabel(item.created_at)}</time>
-                  </span>
-                  <span className="message-search-snippet">
-                    <MessageSearchSnippet
-                      text={item.snippet || item.preview || '（消息已撤回）'}
-                      ranges={item.match_ranges}
-                    />
-                  </span>
-                </Button>
+                    <span className="message-search-snippet">
+                      <MessageSearchSnippet
+                        text={item.snippet || item.preview || '（消息已撤回）'}
+                        ranges={item.match_ranges}
+                      />
+                    </span>
+                  </button>
+                  <div className="message-search-result-actions">
+                    <button
+                      type="button"
+                      className="message-search-context"
+                      data-search-context
+                      onClick={(event) => {
+                        contextTrigger.current = event.currentTarget;
+                        setContextId(item.message_id);
+                      }}
+                    >
+                      上下文
+                    </button>
+                  </div>
+                </article>
               ))}
         </div>
         {search.hasMore ? (
