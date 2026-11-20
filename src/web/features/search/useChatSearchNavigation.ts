@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, type Dispatch, type SetStateAction } fr
 
 import { navigate } from '../../app/router';
 import { useMessageSearchNavigation } from '../../hooks/useMessageSearchNavigation';
+import type { HistoryMessage } from '../../lib/chat';
 import type {
   LocateResult,
   SearchNavigationTarget,
@@ -130,21 +131,20 @@ export function useChatSearchNavigation({
    *
    * 服务端 anchor 请求会拒绝已撤回消息（body_bytes=0），因此不能原地重读
    * 墓碑；这里直接丢弃旧窗口并回到最新页，避免继续展示旧正文缓存。
-   * 返回是否真的丢弃了窗口；调用方据此把滚动位置复位，而不是滚底。
+   * 返回被丢弃的 anchor 消息；调用方据此复位滚动，并在该消息带 Task
+   * 标记时重读 Task 列表。未丢弃窗口或消息不在窗口内时返回 null。
    */
   const onRemoteRecall = useCallback(
-    (messageId: string): boolean => {
+    (messageId: string): HistoryMessage | null => {
       const { state } = navigation;
-      if (state.status !== 'anchored') return false;
-      if (
-        !state.items.some(
-          (item) => item.kind !== 'presence' && item.message_id === messageId,
-        )
-      ) {
-        return false;
-      }
+      if (state.status !== 'anchored') return null;
+      const item = state.items.find(
+        (entry): entry is HistoryMessage =>
+          entry.kind !== 'presence' && entry.message_id === messageId,
+      );
+      if (!item) return null;
       navigation.clear();
-      return true;
+      return item;
     },
     [navigation],
   );

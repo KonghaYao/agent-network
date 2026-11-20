@@ -437,6 +437,82 @@ test.describe.serial('群主消息管理前端', () => {
     }
   });
 
+  test('anchor 内撤回 Task 消息刷新 Dock，普通消息不请求 Task', async ({ browser }) => {
+    const room = await createModerationRoom(base);
+    const taskRoot = await sendMessage(base, room.tokenOwner, room.roomId, '锚点 Task 待撤回消息');
+    await markTask(base, room.tokenOwner, room.roomId, taskRoot);
+    await pinMessage(base, room.tokenOwner, room.roomId, taskRoot);
+    const ordinary = await sendMessage(base, room.tokenOwner, room.roomId, '锚点普通待撤回消息');
+    await pinMessage(base, room.tokenOwner, room.roomId, ordinary);
+    for (let index = 1; index <= 55; index += 1) {
+      await sendMessage(base, room.tokenOwner, room.roomId, `锚点 Task 填充 ${index}`);
+    }
+
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await login(page, base, room.tokenMember);
+    const counts = { history: 0, task: 0 };
+    await page.route('**/mcp', async (route) => {
+      const name = route.request().headers()['mcp-name'];
+      if (name === 'network_history_list') counts.history += 1;
+      if (name === 'network_task_list') counts.task += 1;
+      await route.continue();
+    });
+    const initialTaskList = page
+      .waitForResponse(
+        (response) => response.request().headers()['mcp-name'] === 'network_task_list',
+      )
+      .catch(() => undefined);
+    await page.goto(`${base}/c/${room.roomId}`);
+    await expect(page.locator('#composer')).toBeVisible();
+    await initialTaskList;
+    // 等首屏 ack 与任务查询稳定后再开始计数。
+    await page.waitForTimeout(1000);
+
+    try {
+      await page.locator(`[data-pinned-message-id="${taskRoot}"]`).click();
+      await expect(page.locator('#messages')).toHaveAttribute('data-search-anchored', 'true');
+      await expect(messageNode(page, taskRoot)).toBeVisible();
+      counts.history = 0;
+      counts.task = 0;
+
+      await callTool(base, room.tokenOwner, 'network_message_recall', {
+        request_id: requestId('e2e_mod_recall'),
+        message_id: taskRoot,
+      });
+      await expect(page.locator('#messages')).toHaveAttribute('data-search-anchored', 'false');
+      await expect(page.locator('#messages')).not.toContainText('锚点 Task 待撤回消息');
+      await expect.poll(() => counts.task, { timeout: 10_000 }).toBeGreaterThan(0);
+      expect(counts.history).toBe(0);
+
+      // Dock 不再保留旧 preview，而是服务端返回的墓碑。
+      await expect(page.locator('#task-dock-toggle')).toBeVisible();
+      await page.locator('#task-dock-toggle').click();
+      await expect(page.locator('.task-dock-preview')).toContainText('此消息已撤回');
+
+      // 普通 anchor 消息撤回只丢弃窗口，不触发 Task 请求。
+      counts.history = 0;
+      counts.task = 0;
+      await page.locator(`[data-pinned-message-id="${ordinary}"]`).click();
+      await expect(page.locator('#messages')).toHaveAttribute('data-search-anchored', 'true');
+      await expect(messageNode(page, ordinary)).toBeVisible();
+      counts.history = 0;
+      counts.task = 0;
+
+      await callTool(base, room.tokenOwner, 'network_message_recall', {
+        request_id: requestId('e2e_mod_recall'),
+        message_id: ordinary,
+      });
+      await expect(page.locator('#messages')).toHaveAttribute('data-search-anchored', 'false');
+      await expect(page.locator('#messages')).not.toContainText('锚点普通待撤回消息');
+      await page.waitForTimeout(800);
+      expect(counts.history).toBe(0);
+      expect(counts.task).toBe(0);
+    } finally {
+      await context.close();
+    }
+  });
+
   test('撤回只重读受影响窗口，Task 消息才刷新 Task 列表', async ({ browser }) => {
     const room = await createModerationRoom(base);
     const ordinary = await sendMessage(base, room.tokenOwner, room.roomId, '普通待撤回消息');

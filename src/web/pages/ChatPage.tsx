@@ -36,7 +36,7 @@ import { useRoomFiles } from '../hooks/useRoomFiles';
 import { useRoomMonitor } from '../hooks/useRoomMonitor';
 import { useRoomPreferences } from '../hooks/useRoomPreferences';
 import { useRoomMenuActions, type AgentManagementView } from '../hooks/useRoomMenuActions';
-import { useRoomMessageModeration } from '../hooks/useRoomMessageModeration';
+import { useRoomModerationEvents } from '../hooks/useRoomModerationEvents';
 import { useSendQueue } from '../hooks/useSendQueue';
 import {
   buildSendPlan,
@@ -112,16 +112,13 @@ function onlineLabel(online: boolean | null): string {
  * 确认前持久化，SSE 只作为刷新提示，不直接把通知正文写进页面。
  */
 export function ChatPage({ roomId }: ChatPageProps) {
-  const [scrollResetToken, setScrollResetToken] = useState(0);
-  const searchNavRef = useRef<ReturnType<typeof useChatSearchNavigation> | null>(null);
-  // 单宿主 SSE 只转发撤回提示；anchor 窗口不在 React Query，需要主动收敛。
+  // 撤回事件要等 Task 控制器就绪后才能收敛；先经 ref 转发，避免把
+  // 单宿主 SSE 回调绑死在某一帧的闭包上。
+  const chatEventRef = useRef<(event: Extract<ActorStreamEvent, { type: 'event' }>) => void>(
+    () => {},
+  );
   const onChatEvent = useCallback(
-    (event: Extract<ActorStreamEvent, { type: 'event' }>) => {
-      if (event.change !== 'recalled' || !event.messageId) return;
-      if (searchNavRef.current?.onRemoteRecall(event.messageId)) {
-        setScrollResetToken((value) => value + 1);
-      }
-    },
+    (event: Extract<ActorStreamEvent, { type: 'event' }>) => chatEventRef.current(event),
     [],
   );
   const chat = useRoomChat(roomId, { onEvent: onChatEvent });
@@ -223,6 +220,26 @@ export function ChatPage({ roomId }: ChatPageProps) {
     onToggleTask,
     invalidateTasks,
   } = useRoomTaskController({ roomId, room, token, onStatus: setStatus });
+
+  const moderationEvents = useRoomModerationEvents({
+    room,
+    pinnedMessages: chat.detail?.pinned_messages ?? [],
+    identityId: identity?.actor_id ?? null,
+    token,
+    onStatus: setStatus,
+    refreshModeration: chat.refreshModeration,
+    taskTraceRootId: taskTrace?.rootId ?? null,
+    onCloseTrace: closeTrace,
+    replyMessageId: reply?.messageId ?? null,
+    setReply,
+    setSearchOpen,
+    setForwardItem,
+    invalidateTasks,
+  });
+  const { scrollResetToken, searchNavRef, moderation } = moderationEvents;
+  const onRecall = moderation.recall;
+  const onSetPinned = moderation.setPinned;
+  chatEventRef.current = moderationEvents.onChatEvent;
 
   const refresh = chat.refresh;
   const queue = useSendQueue({
@@ -376,37 +393,6 @@ export function ChatPage({ roomId }: ChatPageProps) {
             room?.peer_can_manage === true,
         }
       : null;
-
-  const onRecalled = useCallback(
-    (item: HistoryMessage) => {
-      if (taskTrace?.rootId === item.message_id) closeTrace();
-      if (reply?.messageId === item.message_id) setReply(null);
-      setSearchOpen(false);
-      setForwardItem((current) =>
-        current?.message_id === item.message_id ? null : current,
-      );
-      // 本地撤回与远端事件走同一条 anchor 收敛路径。
-      if (searchNavRef.current?.onRemoteRecall(item.message_id)) {
-        setScrollResetToken((value) => value + 1);
-      }
-      // 普通消息撤回不触碰 Task 列表；只有带 Task 标记的消息才可能改变任务。
-      if (item.task_root_id) invalidateTasks();
-    },
-    [closeTrace, invalidateTasks, reply, taskTrace],
-  );
-
-  const moderation = useRoomMessageModeration({
-    room,
-    pinnedMessages: chat.detail?.pinned_messages ?? [],
-    identityId: identity?.actor_id ?? null,
-    token,
-    onStatus: setStatus,
-    onRecalled,
-    refreshModeration: chat.refreshModeration,
-  });
-
-  const onRecall = moderation.recall;
-  const onSetPinned = moderation.setPinned;
 
   const onJumpToMessage = useCallback((messageId: string) => {
     for (const node of document.querySelectorAll<HTMLElement>('[data-message-id]')) {
