@@ -1551,7 +1551,7 @@ export function registerTools(
     },
   );
 
-  register(server, 'network_message_search', '在当前有权读取的房间完整持久化消息正文中搜索；mode:"exact"（默认）按连续原文匹配且仅 ASCII 大小写不敏感，mode:"fuzzy" 折叠全角 ASCII/空白/标点后按保序子序列匹配。分页固定快照；exact 的 has_more 表示还有匹配，fuzzy 的 has_more 只表示还有未扫描候选，scan_limited=true 时本页因扫描预算停止、可继续用 next_cursor 搜索更早记录。结果只返回 snippet 与 snippet 内 UTF-16 match_ranges。', messageSearchSchema, messageSearchOutputSchema, async (input) => {
+  register(server, 'network_message_search', '在当前有权读取的完整持久化消息正文中搜索。scope:"room"（默认）需提供 room_id；scope:"all" 跨当前所有可见会话且不得提供 room_id。mode:"exact"（默认）按连续原文匹配且仅 ASCII 大小写不敏感；mode:"fuzzy" 折叠全角 ASCII/空白/标点后按保序子序列匹配，并做离线同义词扩展（如「拉不动」可命中「拖拽失效」）。结果始终带 room_kind 与 room_display_name，无需逐条读取房间详情。分页固定快照；exact 的 has_more 表示还有匹配，fuzzy 的 has_more 只表示还有未扫描候选，scan_limited=true 时本页因扫描预算停止、可继续用 next_cursor 搜索更早记录。结果只返回 snippet 与 snippet 内 UTF-16 match_ranges。', messageSearchSchema, messageSearchOutputSchema, async (input) => {
     requireActor(principal);
     return messageSearch(db, principal, input, {
       ftsEnabled: env.MESSAGE_SEARCH_FTS !== false,

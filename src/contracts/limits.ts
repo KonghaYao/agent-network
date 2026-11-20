@@ -39,6 +39,12 @@ export const LIMITS = {
   messageSearchFuzzyScanBytes: 2 * 1024 * 1024,
   /** 模糊搜索单次读取候选 metadata 的批量上限。 */
   messageSearchFuzzyBatchMax: 32,
+  /** 同义词语义组最多保留的归一化词数。 */
+  messageSearchSynonymGroupMax: 8,
+  /** 同义词单次扩展返回的归一化词数上限。 */
+  messageSearchSynonymExpansionMax: 8,
+  /** 参与同义词匹配的最小归一化码点数，避免短词泛化。 */
+  messageSearchSynonymMinCodePoints: 2,
   /** 搜索游标字符串长度上限。 */
   messageSearchCursorMax: 2048,
   /** 网页搜索输入防抖（毫秒）。 */

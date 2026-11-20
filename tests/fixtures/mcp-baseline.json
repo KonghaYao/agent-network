@@ -2,7 +2,7 @@
   "version": 1,
   "protocolVersion": "2026-07-28",
   "toolCount": 142,
-  "toolsetSha256": "e35d2df5b9ad598ea6a191ca6f2b5bf1cc6d5adf25c7f64835f59fec0ad976da",
+  "toolsetSha256": "0f73735b010853b4b91a9fc92d23e4e10ade607c246778b8f8d363a4535dfee7",
   "instructionsSha256": "ec26290a0a6cbe945cdcad7dc8d860207013de90817b700422d26c8214e577e8",
   "frames": [
     {
@@ -205,8 +205,8 @@
       "response": {
         "result": {
           "toolCount": 142,
-          "toolset_sha256": "e35d2df5b9ad598ea6a191ca6f2b5bf1cc6d5adf25c7f64835f59fec0ad976da",
-          "listing_sha256": "39e75f793e67ef67fc591b00ec5e0e75be32eeef75e7daa88bc25c97a2cd6322",
+          "toolset_sha256": "0f73735b010853b4b91a9fc92d23e4e10ade607c246778b8f8d363a4535dfee7",
+          "listing_sha256": "09dfc9ab6058cd1544f574a565d2e61ba78341dd955d00fea8c3013f3700ce39",
           "tools": [
             {
               "name": "network_issue_token",
@@ -558,7 +558,7 @@
             },
             {
               "name": "network_message_search",
-              "digest": "56a766da5f3f9e602b163558880a99f7ef00e2dd916787d15d1335e385d0b777"
+              "digest": "e359d835389a3155ceb04dab7758e16c6f1cad735cb411957980333ca8e82b5c"
             },
             {
               "name": "network_task_mark",
@@ -808,7 +808,7 @@
           "content": [
             {
               "type": "text",
-              "text": "{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"agent_session_id\":\"sess_parity_owner\",\"name\":\"Parity Owner\",\"metadata\":{},\"pending_count\":0,\"inbox_head_seq\":\"0\",\"created_at\":\"<ts>\",\"share_url\":\"<origin>/a/sess_parity_owner\",\"resources\":[\"agentnet://stream\"],\"service\":{\"protocol_version\":\"2026-07-28\",\"contract_version\":\"2026-11-13.2\",\"toolset_sha256\":\"e35d2df5b9ad598ea6a191ca6f2b5bf1cc6d5adf25c7f64835f59fec0ad976da\",\"tool_count\":142,\"guide_tool\":\"network_client_guide\",\"files_enabled\":true,\"events_enabled\":false,\"memory\":{\"enabled\":false,\"contract_version\":\"2026-11-10.1\",\"capture\":false,\"engine_status\":\"unavailable\",\"host_modes\":[\"tool_only\"],\"recall_modes\":[\"bootstrap\",\"related\",\"task\",\"lookup\",\"reflect\"],\"tools\":[\"network_memory_admit\",\"network_memory_catchup_get\",\"network_memory_catchup_prepare\",\"network_memory_context_get\",\"network_memory_context_list\",\"network_memory_context_pack\",\"network_memory_correct\",\"network_memory_experience_get\",\"network_memory_experience_list\",\"network_memory_forget\",\"network_memory_get\",\"network_memory_host_bind\",\"network_memory_host_close\",\"network_memory_input_prepare\",\"network_memory_input_status\",\"network_memory_list\",\"network_memory_operation_get\",\"network_memory_put\",\"network_memory_recall\",\"network_memory_status\"],\"supported\":[],\"unsupported\":[\"all\"],\"reason\":\"memory_disabled\"},\"connector_refresh\":\"将当前连接器工具名/描述/输入输出 schema 与实时 tools/list 比对；缺失或摘要不同需刷新目录。服务端无法替宿主刷新缓存。\"}}"
+              "text": "{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"agent_session_id\":\"sess_parity_owner\",\"name\":\"Parity Owner\",\"metadata\":{},\"pending_count\":0,\"inbox_head_seq\":\"0\",\"created_at\":\"<ts>\",\"share_url\":\"<origin>/a/sess_parity_owner\",\"resources\":[\"agentnet://stream\"],\"service\":{\"protocol_version\":\"2026-07-28\",\"contract_version\":\"2026-11-13.2\",\"toolset_sha256\":\"0f73735b010853b4b91a9fc92d23e4e10ade607c246778b8f8d363a4535dfee7\",\"tool_count\":142,\"guide_tool\":\"network_client_guide\",\"files_enabled\":true,\"events_enabled\":false,\"memory\":{\"enabled\":false,\"contract_version\":\"2026-11-10.1\",\"capture\":false,\"engine_status\":\"unavailable\",\"host_modes\":[\"tool_only\"],\"recall_modes\":[\"bootstrap\",\"related\",\"task\",\"lookup\",\"reflect\"],\"tools\":[\"network_memory_admit\",\"network_memory_catchup_get\",\"network_memory_catchup_prepare\",\"network_memory_context_get\",\"network_memory_context_list\",\"network_memory_context_pack\",\"network_memory_correct\",\"network_memory_experience_get\",\"network_memory_experience_list\",\"network_memory_forget\",\"network_memory_get\",\"network_memory_host_bind\",\"network_memory_host_close\",\"network_memory_input_prepare\",\"network_memory_input_status\",\"network_memory_list\",\"network_memory_operation_get\",\"network_memory_put\",\"network_memory_recall\",\"network_memory_status\"],\"supported\":[],\"unsupported\":[\"all\"],\"reason\":\"memory_disabled\"},\"connector_refresh\":\"将当前连接器工具名/描述/输入输出 schema 与实时 tools/list 比对；缺失或摘要不同需刷新目录。服务端无法替宿主刷新缓存。\"}}"
             }
           ],
           "structuredContent": {
@@ -827,7 +827,7 @@
             "service": {
               "protocol_version": "2026-07-28",
               "contract_version": "2026-11-13.2",
-              "toolset_sha256": "e35d2df5b9ad598ea6a191ca6f2b5bf1cc6d5adf25c7f64835f59fec0ad976da",
+              "toolset_sha256": "0f73735b010853b4b91a9fc92d23e4e10ade607c246778b8f8d363a4535dfee7",
               "tool_count": 142,
               "guide_tool": "network_client_guide",
               "files_enabled": true,
@@ -1596,7 +1596,7 @@
           "content": [
             {
               "type": "text",
-              "text": "Input validation error: Invalid arguments for tool network_message_search: room_id: Invalid input: expected string, received undefined"
+              "text": "{\"code\":\"INVALID_ARGUMENT\",\"message\":\"scope=room 必须提供 room_id\",\"retryable\":false}"
             }
           ],
           "isError": true,
@@ -1960,8 +1960,8 @@
       "response": {
         "result": {
           "toolCount": 142,
-          "toolset_sha256": "e35d2df5b9ad598ea6a191ca6f2b5bf1cc6d5adf25c7f64835f59fec0ad976da",
-          "listing_sha256": "39e75f793e67ef67fc591b00ec5e0e75be32eeef75e7daa88bc25c97a2cd6322",
+          "toolset_sha256": "0f73735b010853b4b91a9fc92d23e4e10ade607c246778b8f8d363a4535dfee7",
+          "listing_sha256": "09dfc9ab6058cd1544f574a565d2e61ba78341dd955d00fea8c3013f3700ce39",
           "tools": [
             {
               "name": "network_issue_token",
@@ -2313,7 +2313,7 @@
             },
             {
               "name": "network_message_search",
-              "digest": "56a766da5f3f9e602b163558880a99f7ef00e2dd916787d15d1335e385d0b777"
+              "digest": "e359d835389a3155ceb04dab7758e16c6f1cad735cb411957980333ca8e82b5c"
             },
             {
               "name": "network_task_mark",
@@ -3357,5 +3357,5 @@
       "response": ""
     }
   ],
-  "digest": "242861e9616ba34dd5b943138dc7bd4d0efa80e317486f64d6cfcdad9a9e5578"
+  "digest": "ae46624dbc24beee00f2853e17204da0b9e159229858e66245598100ee145ebd"
 }

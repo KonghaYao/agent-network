@@ -24,6 +24,8 @@ const RUN = crypto.randomUUID().replaceAll('-', '').slice(0, 10);
 interface SearchItemView {
   message_id: string;
   room_id: string;
+  room_kind: 'direct' | 'group';
+  room_display_name: string;
   sender_id: string;
   sender_name: string;
   sender_kind: string;
@@ -41,14 +43,17 @@ interface SearchPageView {
   next_cursor: string | null;
   has_more: boolean;
   snapshot: string;
+  scope?: 'room' | 'all';
   mode?: 'exact' | 'fuzzy';
   scan_limited?: boolean;
   scanned_count?: number;
-  authorization: {
-    policy_revision: number;
-    history_from_seq: string;
-    member_generation: string;
-  };
+  authorization:
+    | {
+        policy_revision: number;
+        history_from_seq: string;
+        member_generation: string;
+      }
+    | { scope: 'all'; authorization_digest: string };
 }
 
 interface HistoryPageView {
@@ -157,9 +162,10 @@ export async function runMessageSearchAcceptance(): Promise<void> {
     checkEqual(
       '搜索输出契约字段',
       Object.keys(firstPage).sort().join(','),
-      'authorization,has_more,items,mode,next_cursor,scan_limited,snapshot',
+      'authorization,has_more,items,mode,next_cursor,scan_limited,scope,snapshot',
     );
     checkEqual('缺省 mode 为 exact', firstPage.mode, 'exact');
+    checkEqual('缺省 scope 为 room', firstPage.scope, 'room');
     checkEqual('exact scan_limited=false', firstPage.scan_limited, false);
     checkEqual(
       '搜索 authorization 快照字段',
@@ -167,6 +173,8 @@ export async function runMessageSearchAcceptance(): Promise<void> {
       'history_from_seq,member_generation,policy_revision',
     );
     const firstItem = firstPage.items[0];
+    checkEqual('搜索条目带 direct 展示名', firstItem?.room_display_name, '搜索验收 peer');
+    checkEqual('搜索条目带 room_kind', firstItem?.room_kind, 'direct');
     check(
       '搜索条目字段与类型不变',
       Boolean(firstItem) &&

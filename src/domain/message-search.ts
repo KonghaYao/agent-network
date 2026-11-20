@@ -5,21 +5,31 @@ import { LIMITS } from '../contracts/limits';
 import {
   buildSearchSnippet,
   findExactRanges,
-  findFuzzyMatch,
   normalizeFuzzyQuery,
   type SearchMatchRange,
 } from '../contracts/message-search-match';
+import {
+  FUZZY_MATCHER_VERSION,
+  findFuzzyMatchWithSynonyms,
+} from '../contracts/message-search-synonyms';
 import { sha256Hex } from '../storage/db';
 import { getMessageContextAnchor, listMessageContextWindow } from '../storage/queries';
 import { decodeHistoryCursor, historyBoundary, historyCursorScope } from './room-history';
 import { actorId, type Principal } from './principal';
 import { loadRoomAccess } from './room-access';
 import { messageSearchFtsPhrase } from './message-search-fts';
+import {
+  globalMessageSearch,
+  roomDisplayNameFor,
+  type GlobalSearchInput,
+} from './message-search-global';
 
 const messageSearchModeSchema = z.enum(['exact', 'fuzzy']);
+const messageSearchScopeSchema = z.enum(['room', 'all']);
 
 export const messageSearchSchema = z.object({
-  room_id: z.string().min(1).max(128),
+  room_id: z.string().min(1).max(128).optional(),
+  scope: messageSearchScopeSchema.optional(),
   query: z.string().trim().min(1).max(LIMITS.messageSearchQueryMax),
   mode: messageSearchModeSchema.optional(),
   limit: z.number().int().min(1).max(LIMITS.messageSearchPageMax).optional(),
@@ -36,6 +46,7 @@ const messageViewSchema = z.object({
   body_bytes: z.number().int(), preview: z.string(), created_at: z.number().int(), created_seq: z.number().int(), reply_to: z.string().nullable(),
 }).strict();
 const authorizationSchema = z.object({ policy_revision: z.number().int(), history_from_seq: z.string(), member_generation: z.string() }).strict();
+const globalAuthorizationSchema = z.object({ scope: z.literal('all'), authorization_digest: z.string() }).strict();
 const searchMatchRangeSchema = z
   .object({
     start: z.number().int().min(0),
@@ -48,12 +59,17 @@ const messageSearchItemSchema = messageViewSchema
     snippet: z.string(),
     /** `snippet` 内 UTF-16 左闭右开区间；已排序、合并重叠/相邻区间。 */
     match_ranges: z.array(searchMatchRangeSchema).optional(),
+    room_kind: z.enum(['direct', 'group']),
+    /** 服务端已授权 JOIN 的展示名；direct 为对端名，group 为标题或「群聊」。 */
+    room_display_name: z.string(),
   })
   .strict();
 export const messageSearchOutputSchema = z.object({
-  items: z.array(messageSearchItemSchema), next_cursor: z.string().nullable(), has_more: z.boolean(), snapshot: z.string(), authorization: authorizationSchema,
+  items: z.array(messageSearchItemSchema), next_cursor: z.string().nullable(), has_more: z.boolean(), snapshot: z.string(),
+  authorization: z.union([authorizationSchema, globalAuthorizationSchema]),
+  scope: messageSearchScopeSchema,
   mode: messageSearchModeSchema.optional(),
-  /** 仅 fuzzy 可能为 true：本页因扫描预算停止，不代表房间已搜索完。 */
+  /** 仅 fuzzy 可能为 true：本页因扫描预算停止，不代表房间/全局已搜索完。 */
   scan_limited: z.boolean().optional(),
   /** fuzzy 本页实际完成匹配检查的候选数。 */
   scanned_count: z.number().int().min(0).optional(),
@@ -61,11 +77,12 @@ export const messageSearchOutputSchema = z.object({
 export const messageContextOutputSchema = z.object({ items: z.array(messageViewSchema), authorization: authorizationSchema }).strict();
 
 type SearchInput = z.infer<typeof messageSearchSchema>;
+type RoomSearchInput = SearchInput & { room_id: string };
 type SearchMode = z.infer<typeof messageSearchModeSchema>;
 type ContextInput = z.infer<typeof messageContextSchema>;
 interface MessageRow { message_id: string; room_id: string; sender_id: string; sender_name: string; sender_kind: string; body_bytes: number; preview: string; created_at: number; created_seq: number; reply_to: string | null; }
 interface SearchRow extends MessageRow { snippet: string; }
-interface SearchItem extends SearchRow { match_ranges: SearchMatchRange[]; }
+interface SearchItem extends SearchRow { match_ranges: SearchMatchRange[]; room_kind: 'direct' | 'group'; room_display_name: string; }
 async function authorized(db: D1Database, principal: Principal, roomId: string) {
   const { room, member } = await loadRoomAccess(db, roomId, actorId(principal));
   return { room, boundary: historyBoundary(room, member) };
@@ -102,26 +119,49 @@ export interface MessageSearchOptions {
   ftsEnabled?: boolean;
 }
 
-/** Full-text substring search over persisted message bodies; authorization is recomputed on every page. */
+/**
+ * 搜索消息正文；`scope` 缺省为 `room`，保持旧 `{room_id, query}` 行为。
+ *
+ * `scope='all'` 不接受 `room_id`，授权集合每页由 SQL 重新计算；
+ * `scope='room'` 继续要求 `room_id` 并维持既有房间游标语义。
+ */
 export async function messageSearch(
   db: D1Database,
   principal: Principal,
   input: SearchInput,
   options: MessageSearchOptions = {},
 ) {
-  const { room, boundary } = await authorized(db, principal, input.room_id);
+  const scope = input.scope ?? 'room';
+  if (scope === 'room' && input.room_id === undefined) {
+    throw new BusinessError('INVALID_ARGUMENT', 'scope=room 必须提供 room_id');
+  }
+  if (scope === 'all' && input.room_id !== undefined) {
+    throw new BusinessError('INVALID_ARGUMENT', 'scope=all 不得提供 room_id');
+  }
+  if (scope === 'all') {
+    return globalMessageSearch(
+      db,
+      principal,
+      input as GlobalSearchInput,
+      { ftsEnabled: options.ftsEnabled },
+    );
+  }
+  const roomInput = input as RoomSearchInput;
+  const { room, boundary } = await authorized(db, principal, roomInput.room_id);
   const mode: SearchMode = input.mode ?? 'exact';
+  const displayName = await roomDisplayNameFor(db, room, actorId(principal));
   return mode === 'fuzzy'
-    ? fuzzyMessageSearch(db, room, boundary, input)
-    : exactMessageSearch(db, room, boundary, input, options);
+    ? fuzzyMessageSearch(db, room, boundary, roomInput, displayName)
+    : exactMessageSearch(db, room, boundary, roomInput, options, displayName);
 }
 
 async function exactMessageSearch(
   db: D1Database,
   room: Awaited<ReturnType<typeof authorized>>['room'],
   boundary: Awaited<ReturnType<typeof authorized>>['boundary'],
-  input: SearchInput,
+  input: RoomSearchInput,
   options: MessageSearchOptions,
+  displayName: string,
 ) {
   const queryHash = await sha256Hex(input.query.toLowerCase());
   const scope = `${historyCursorScope('search', room.room_id, boundary.memberGeneration)}:p${boundary.policyRevision}:q${queryHash}`;
@@ -161,6 +201,8 @@ async function exactMessageSearch(
   const items: SearchItem[] = page.map((row) => ({
     ...row,
     match_ranges: findExactRanges(row.snippet, input.query),
+    room_kind: room.kind,
+    room_display_name: displayName,
   }));
   const hasMore = rows.results.length > limit;
   return {
@@ -169,6 +211,7 @@ async function exactMessageSearch(
     has_more: hasMore,
     snapshot: String(snapshot),
     authorization: authorizationOf(boundary),
+    scope: 'room' as const,
     mode: 'exact' as const,
     scan_limited: false,
   } as const;
@@ -199,14 +242,15 @@ async function fuzzyMessageSearch(
   db: D1Database,
   room: Awaited<ReturnType<typeof authorized>>['room'],
   boundary: Awaited<ReturnType<typeof authorized>>['boundary'],
-  input: SearchInput,
+  input: RoomSearchInput,
+  displayName: string,
 ) {
   const normalizedQuery = normalizeFuzzyQuery(input.query);
   if (normalizedQuery.length === 0) {
     throw new BusinessError('INVALID_ARGUMENT', '模糊搜索至少需要一个非空白、非标点字符');
   }
   const queryHash = await sha256Hex(normalizedQuery);
-  const scope = `${historyCursorScope('search', room.room_id, boundary.memberGeneration)}:p${boundary.policyRevision}:mfuzzy-v1:q${queryHash}`;
+  const scope = `${historyCursorScope('search', room.room_id, boundary.memberGeneration)}:p${boundary.policyRevision}:${FUZZY_MATCHER_VERSION}:q${queryHash}`;
   const limit = input.limit ?? LIMITS.messageSearchPageDefault;
   const readHead = Math.min(room.head_seq, boundary.toSeq ?? room.head_seq);
   const cursor = input.cursor ? decodeSearchCursor(input.cursor, scope, room.room_id, readHead) : null;
@@ -295,11 +339,11 @@ async function fuzzyMessageSearch(
       scannedCount += 1;
       scannedBytes += candidate.body_bytes;
       if (body === undefined) continue;
-      const positions = findFuzzyMatch(body, normalizedQuery);
-      if (positions === null) continue;
+      const match = findFuzzyMatchWithSynonyms(body, normalizedQuery);
+      if (match === null) continue;
       const { snippet, match_ranges } = buildSearchSnippet(
         body,
-        positions,
+        match.ranges,
         snippetChars,
         contextChars,
       );
@@ -316,6 +360,8 @@ async function fuzzyMessageSearch(
         reply_to: candidate.reply_to,
         snippet,
         match_ranges,
+        room_kind: room.kind,
+        room_display_name: displayName,
       });
     }
   }
@@ -330,6 +376,7 @@ async function fuzzyMessageSearch(
     has_more: hasMore,
     snapshot: String(snapshot),
     authorization: authorizationOf(boundary),
+    scope: 'room' as const,
     mode: 'fuzzy' as const,
     scan_limited: items.length < limit && hasMore,
     scanned_count: scannedCount,

@@ -690,7 +690,7 @@ async function fuzzyChecks(): Promise<void> {
     const fuzzyCursor = (await search('发版', { limit: 1 })).next_cursor;
     check('fuzzy 首页返回继续游标', fuzzyCursor !== null, fuzzyCursor);
     if (fuzzyCursor) {
-      const fuzzyScope = `room:${directRoom}:search:g${exactFirst.authorization.member_generation}:p${exactFirst.authorization.policy_revision}:mfuzzy-v1:q${await sha256Hex(normalizeFuzzyQuery('发版'))}`;
+      const fuzzyScope = `room:${directRoom}:search:g${exactFirst.authorization.member_generation}:p${exactFirst.authorization.policy_revision}:mfuzzy-v2:q${await sha256Hex(normalizeFuzzyQuery('发版'))}`;
       checkEqual(
         'fuzzy cursor scope 带算法版本与归一 query hash',
         decodeCursor(fuzzyCursor, fuzzyScope).scope,

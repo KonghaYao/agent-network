@@ -28,6 +28,7 @@ import { runRoomInviteReplayUnitChecks } from './lib/room-invite-replay-unit';
 import { runOwnerlessRoomUnitChecks } from './lib/ownerless-room-unit';
 import { runRoomQuotaUnitChecks } from './lib/room-quota-unit';
 import { runMessageSearchFtsUnitChecks } from './lib/message-search-fts-unit';
+import { runMessageSearchGlobalUnitChecks } from './lib/message-search-global-unit';
 import { runMessageQuoteUnitChecks } from './lib/message-quote-unit';
 
 const STREAM_URI = 'agentnet://stream';
@@ -905,15 +906,23 @@ async function main(): Promise<void> {
   const messageSearchInput = JSON.stringify(messageSearchTool?.inputSchema ?? {});
   const messageSearchOutput = JSON.stringify(messageSearchTool?.outputSchema ?? {});
   check(
-    'message_search 输入包含 exact/fuzzy 模式',
-    ['"mode"', '"exact"', '"fuzzy"'].every((marker) => messageSearchInput.includes(marker)),
+    'message_search 输入包含 exact/fuzzy 模式与 room/all 范围',
+    ['"mode"', '"exact"', '"fuzzy"', '"scope"', '"room"', '"all"'].every((marker) =>
+      messageSearchInput.includes(marker),
+    ),
     messageSearchTool?.inputSchema,
   );
   check(
-    'message_search 输出包含高亮区间与模糊预算字段',
-    ['"match_ranges"', '"mode"', '"scan_limited"', '"scanned_count"'].every((marker) =>
-      messageSearchOutput.includes(marker),
-    ),
+    'message_search 输出包含高亮区间、模糊预算与房间展示字段',
+    [
+      '"match_ranges"',
+      '"mode"',
+      '"scan_limited"',
+      '"scanned_count"',
+      '"room_kind"',
+      '"room_display_name"',
+      '"authorization_digest"',
+    ].every((marker) => messageSearchOutput.includes(marker)),
     messageSearchTool?.outputSchema,
   );
 
@@ -4306,6 +4315,7 @@ async function main(): Promise<void> {
   await runDeliverySenderUnitChecks();
   await runRoomInviteReplayUnitChecks();
   await runMessageSearchFtsUnitChecks();
+  await runMessageSearchGlobalUnitChecks();
   runMessageQuoteUnitChecks();
 
   console.log(`协议验收通过: ${checksPassed()} 项`);
