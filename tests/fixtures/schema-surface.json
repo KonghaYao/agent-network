@@ -45,9 +45,10 @@
     "0046_memory_experience_catchup.sql",
     "0047_message_search_fts.sql",
     "0048_message_task_completion.sql",
-    "0049_message_global_order_index.sql"
+    "0049_message_global_order_index.sql",
+    "0050_actor_avatar.sql"
   ],
-  "migrationsDigest": "b781767a4e1db7e1b43e332d78ec1c11e5b01012df71ce5fdd986d33819534b5",
+  "migrationsDigest": "7cf44f1718bc3f801eb7e28ef71e8f6c14ca2c06af8587eda29cf3163af7063f",
   "counts": {
     "tables": 120,
     "guardTables": 48,
@@ -96,7 +97,8 @@
         "archived_by|TEXT|nn=0|d=null|pk=0|h=0",
         "disabled_at|INTEGER|nn=0|d=null|pk=0|h=0",
         "disabled_by|TEXT|nn=0|d=null|pk=0|h=0",
-        "disabled_reason|TEXT|nn=0|d=null|pk=0|h=0"
+        "disabled_reason|TEXT|nn=0|d=null|pk=0|h=0",
+        "avatar_file_id|TEXT|nn=0|d=null|pk=0|h=0"
       ],
       "indexes": [
         "sqlite_autoindex_actors_1|u=1|o=pk|p=0|cols=actor_id|desc=0",
@@ -107,7 +109,7 @@
         "(kind in('human','agent'))",
         "(pending_count>=0)"
       ],
-      "sqlDigest": "5b2d1378394da3700127ed0403f16bb97d3298d4d3097e0c89d24a90d859ca9a"
+      "sqlDigest": "aaaf07bcca8c44ac4124842230ee63668cdc0e43d51d56b629185517005aa31d"
     },
     "agent_claims": {
       "type": "table",
@@ -2842,5 +2844,5 @@
     "message_search_fts_ai": "c0d538ed07edf48bcc8dfff50d1adf2158b1ef1c75e528640877b7ac08b0fe71",
     "message_search_fts_au": "af71582b06026e26c1b0acb0e15b6d4e504f8b85450ac9351d70042408abbaf7"
   },
-  "digest": "f0d2ee21f7a9d71174c36c9b55b591724c6529199d51b1ea4d5e486fad388a21"
+  "digest": "3c7ac0c4e045e419165179a5cf750771288f8755d2c3c62dd9bb92ea296503d2"
 }

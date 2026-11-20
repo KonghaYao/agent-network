@@ -17,6 +17,7 @@ import {
 } from '../../storage/queries';
 import type { ActorRow, MessageRow } from '../../storage/rows';
 import type { HistoryMessageRow } from '../../storage/queries';
+import { avatarUrl } from '../avatar';
 import { deliveryStatesFor, mentionsFor, nullableString } from '../message-view-helpers';
 import { actorId, type Principal } from '../principal';
 import { loadRoomAccess } from '../room-access';
@@ -43,6 +44,9 @@ async function historyViews(
   const senderIds = [...new Set(rows.map((row) => row.sender_id))];
   const senders = await getActorsByIds(db, senderIds);
   const senderKinds = new Map(senders.map((actor) => [actor.actor_id, actor.kind]));
+  const senderAvatars = new Map(
+    senders.map((actor) => [actor.actor_id, avatarUrl(actor.avatar_file_id)]),
+  );
   return rows.map((row) => {
     const summary = states.get(row.message_id);
     return {
@@ -50,6 +54,7 @@ async function historyViews(
       room_id: row.room_id,
       sender_id: row.sender_id,
       sender_kind: senderKinds.get(row.sender_id) ?? null,
+      sender_avatar_url: senderAvatars.get(row.sender_id) ?? null,
       created_seq: String(row.created_seq),
       preview: row.preview,
       body_bytes: row.body_bytes,

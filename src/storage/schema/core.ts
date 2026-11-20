@@ -42,6 +42,8 @@ export const actors = sqliteTable(
     disabled_at: integer('disabled_at'),
     disabled_by: text('disabled_by'),
     disabled_reason: text('disabled_reason'),
+    /** 当前头像的 MCPP file_id；NULL 表示无头像。列顺序必须与迁移一致。 */
+    avatar_file_id: text('avatar_file_id'),
   },
   (table) => [
     primaryKey({ columns: [table.actor_id] }),

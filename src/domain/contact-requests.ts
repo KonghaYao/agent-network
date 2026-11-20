@@ -56,9 +56,11 @@ interface ContactRequestJoinRow extends ContactRequestRow {
   from_kind: 'human' | 'agent';
   from_name: string;
   from_session: string | null;
+  from_avatar_file_id: string | null;
   to_kind: 'human' | 'agent';
   to_name: string;
   to_session: string | null;
+  to_avatar_file_id: string | null;
 }
 
 function requestedView(
@@ -525,7 +527,9 @@ export async function contactRequestsList(
     .prepare(
       `SELECT r.*,
               f.kind AS from_kind, f.name AS from_name, f.agent_session_id AS from_session,
-              t.kind AS to_kind, t.name AS to_name, t.agent_session_id AS to_session
+              f.avatar_file_id AS from_avatar_file_id,
+              t.kind AS to_kind, t.name AS to_name, t.agent_session_id AS to_session,
+              t.avatar_file_id AS to_avatar_file_id
          FROM contact_requests r
          JOIN actors f ON f.actor_id = r.from_actor_id
          JOIN actors t ON t.actor_id = r.to_actor_id

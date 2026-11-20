@@ -73,10 +73,11 @@ export async function getActorBySession(db: D1Like, sessionId: string): Promise<
   return toD1(db, query).first<ActorRow>();
 }
 
-/** 历史/时间线只判定发送者类型；不要在这里读取 metadata 或管理字段。 */
+/** 历史/时间线只判定发送者类型与头像；不要在这里读取 metadata 或管理字段。 */
 export interface ActorKindRow {
   actor_id: string;
   kind: 'human' | 'agent';
+  avatar_file_id: string | null;
 }
 
 /**
@@ -90,14 +91,18 @@ export function visibleActorSql(alias: string): string {
   return `(${alias}.kind <> 'agent' OR ${alias}.archived_at IS NULL)`;
 }
 
-/** 只按已知 actor_id 批量读取展示类型；调用方负责去重与数量上限。 */
+/** 只按已知 actor_id 批量读取展示类型与头像；调用方负责去重与数量上限。 */
 export async function getActorsByIds(
   db: D1Like,
   actorIds: string[],
 ): Promise<ActorKindRow[]> {
   if (actorIds.length === 0) return [];
   const query = orm(db)
-    .select({ actor_id: schema.actors.actor_id, kind: schema.actors.kind })
+    .select({
+      actor_id: schema.actors.actor_id,
+      kind: schema.actors.kind,
+      avatar_file_id: schema.actors.avatar_file_id,
+    })
     .from(schema.actors)
     .where(inArray(schema.actors.actor_id, actorIds));
   const result = await toD1(db, query).all<ActorKindRow>();
@@ -533,6 +538,7 @@ export interface RoomPeerRow {
   actor_id: string;
   name: string;
   kind: 'human' | 'agent';
+  avatar_file_id: string | null;
 }
 
 /**
@@ -553,6 +559,7 @@ export async function listActiveRoomPeers(
       actor_id: schema.actors.actor_id,
       name: schema.actors.name,
       kind: schema.actors.kind,
+      avatar_file_id: schema.actors.avatar_file_id,
     })
     .from(schema.roomMembers)
     .innerJoin(schema.actors, eq(schema.actors.actor_id, schema.roomMembers.actor_id))
@@ -628,6 +635,7 @@ export interface PendingDirectInvitationMemberRow {
   actor_id: string;
   kind: 'human' | 'agent';
   name: string;
+  avatar_file_id: string | null;
   invited_by: string;
   created_at: number;
   expires_at: number;
@@ -651,6 +659,7 @@ export async function listPendingDirectInvitationMembers(
       actor_id: sql<string>`${schema.roomInvitations.target_actor_id}`.as('actor_id'),
       kind: schema.actors.kind,
       name: schema.actors.name,
+      avatar_file_id: schema.actors.avatar_file_id,
       invited_by: sql<string>`${schema.roomInvitations.inviter_id}`.as('invited_by'),
       created_at: schema.roomInvitations.created_at,
       expires_at: schema.roomInvitations.expires_at,

@@ -8,6 +8,7 @@ import { nowMs } from '../../storage/db';
 import { countActiveRoomMembers, getMessage, listActiveRoomPeers, visibleActorSql } from '../../storage/queries';
 import { type ActorRow, type MessageRow, type RoomManagementAuditRow, type RoomMemberRow, type RoomRow } from '../../storage/rows';
 import { manageableAgentIds } from '../agent-access';
+import { avatarUrl } from '../avatar';
 import { relationEndedByBlockSql } from '../contact-relations';
 import { type OwnerTransferView } from '../owner-transfers';
 import { actorId, type Principal } from '../principal';
@@ -90,6 +91,8 @@ export interface RoomPeerView {
   name: string;
   kind: 'human' | 'agent';
   online: boolean | null;
+  /** 同源 `/f/<fileId>`；无头像为 null。 */
+  avatar_url: string | null;
 }
 
 export interface MemberView {
@@ -97,6 +100,8 @@ export interface MemberView {
   kind: 'human' | 'agent';
   name: string;
   agent_session_id: string | null;
+  /** 同源 `/f/<fileId>`；无头像为 null。 */
+  avatar_url: string | null;
   role: 'owner' | 'admin' | 'member';
   role_revision: number;
   /** 成员代次；重新加入后递增，旧游标/旧票据不能跨代次。 */
@@ -143,6 +148,7 @@ export interface RoomCreateMemberResult {
   actor_id: string;
   kind: 'human' | 'agent';
   name: string;
+  avatar_url: string | null;
   status: RoomCreateMemberStatus;
   /** 失败时的稳定错误码；成功加入或邀请为 null。 */
   code: BusinessErrorCode | null;
@@ -288,7 +294,7 @@ export async function loadMembers(
   const archivedFilter = room.kind === 'group' ? `AND ${visibleActorSql('a')}` : '';
   const rows = await db
     .prepare(
-      `SELECT m.*, a.kind, a.name, a.agent_session_id
+      `SELECT m.*, a.kind, a.name, a.agent_session_id, a.avatar_file_id
          FROM room_members m
          JOIN actors a ON a.actor_id = m.actor_id
         WHERE m.room_id = ? AND m.status = 'active' ${archivedFilter}
@@ -296,12 +302,13 @@ export async function loadMembers(
                  m.joined_at ASC, m.actor_id ASC`,
     )
     .bind(room.room_id)
-    .all<RoomMemberRow & Pick<ActorRow, 'kind' | 'name' | 'agent_session_id'>>();
+    .all<RoomMemberRow & Pick<ActorRow, 'kind' | 'name' | 'agent_session_id' | 'avatar_file_id'>>();
   return rows.results.map((row) => ({
     actor_id: row.actor_id,
     kind: row.kind,
     name: row.name,
     agent_session_id: row.agent_session_id,
+    avatar_url: avatarUrl(row.avatar_file_id),
     role: row.role,
     role_revision: row.role_revision,
     member_generation: row.member_generation,
@@ -351,6 +358,7 @@ export async function listRoomPeers(
       name: row.name,
       kind: row.kind,
       online: null,
+      avatar_url: avatarUrl(row.avatar_file_id),
     });
   }
   return peers;

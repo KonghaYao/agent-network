@@ -2,7 +2,7 @@
   "version": 1,
   "protocolVersion": "2026-07-28",
   "toolCount": 142,
-  "toolsetSha256": "0f73735b010853b4b91a9fc92d23e4e10ade607c246778b8f8d363a4535dfee7",
+  "toolsetSha256": "17dbb0e80ed7511714458c8b4cf0e15196db40ae4c5677cee58e0953cddbd334",
   "instructionsSha256": "ec26290a0a6cbe945cdcad7dc8d860207013de90817b700422d26c8214e577e8",
   "frames": [
     {
@@ -36,7 +36,7 @@
           "content": [
             {
               "type": "text",
-              "text": "{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"agent_session_id\":\"sess_parity_owner\",\"name\":\"Parity Owner\",\"metadata\":{},\"pending_count\":0,\"inbox_head_seq\":\"0\",\"created_at\":\"<ts>\",\"share_url\":\"<origin>/a/sess_parity_owner\",\"resources\":[\"agentnet://stream\"]}"
+              "text": "{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"agent_session_id\":\"sess_parity_owner\",\"name\":\"Parity Owner\",\"metadata\":{},\"pending_count\":0,\"inbox_head_seq\":\"0\",\"created_at\":\"<ts>\",\"share_url\":\"<origin>/a/sess_parity_owner\",\"avatar_url\":null,\"resources\":[\"agentnet://stream\"]}"
             }
           ],
           "structuredContent": {
@@ -49,6 +49,7 @@
             "inbox_head_seq": "0",
             "created_at": "<ts>",
             "share_url": "<origin>/a/sess_parity_owner",
+            "avatar_url": null,
             "resources": [
               "agentnet://stream"
             ]
@@ -97,7 +98,7 @@
           "content": [
             {
               "type": "text",
-              "text": "{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"agent_session_id\":\"sess_parity_peer\",\"name\":\"Parity Peer\",\"metadata\":{},\"pending_count\":0,\"inbox_head_seq\":\"0\",\"created_at\":\"<ts>\",\"share_url\":\"<origin>/a/sess_parity_peer\",\"resources\":[\"agentnet://stream\"]}"
+              "text": "{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"agent_session_id\":\"sess_parity_peer\",\"name\":\"Parity Peer\",\"metadata\":{},\"pending_count\":0,\"inbox_head_seq\":\"0\",\"created_at\":\"<ts>\",\"share_url\":\"<origin>/a/sess_parity_peer\",\"avatar_url\":null,\"resources\":[\"agentnet://stream\"]}"
             }
           ],
           "structuredContent": {
@@ -110,6 +111,7 @@
             "inbox_head_seq": "0",
             "created_at": "<ts>",
             "share_url": "<origin>/a/sess_parity_peer",
+            "avatar_url": null,
             "resources": [
               "agentnet://stream"
             ]
@@ -205,8 +207,8 @@
       "response": {
         "result": {
           "toolCount": 142,
-          "toolset_sha256": "0f73735b010853b4b91a9fc92d23e4e10ade607c246778b8f8d363a4535dfee7",
-          "listing_sha256": "09dfc9ab6058cd1544f574a565d2e61ba78341dd955d00fea8c3013f3700ce39",
+          "toolset_sha256": "17dbb0e80ed7511714458c8b4cf0e15196db40ae4c5677cee58e0953cddbd334",
+          "listing_sha256": "38c70caf919aff22888ef8145101d9122394fe0a4c1deb23872f81c1eece37ce",
           "tools": [
             {
               "name": "network_issue_token",
@@ -214,11 +216,11 @@
             },
             {
               "name": "network_register",
-              "digest": "bbded00300c4979db160aa7bd6e2761e0c97a71afba59a7a042f323be27ec870"
+              "digest": "53fb67676360a4f8227a1b61b07ef503e79884992e5c880d0e0e15aa01692789"
             },
             {
               "name": "network_me",
-              "digest": "7ea0d3953a4571a7ef889b8630b5ad8676da663f0b991d984eb911b9aae06118"
+              "digest": "59e701067881d4eeb95154321d473ff0abeb4281b3ee6527267bda123aff33a6"
             },
             {
               "name": "network_client_guide",
@@ -226,11 +228,11 @@
             },
             {
               "name": "network_login",
-              "digest": "970625f3af0269dff948ad94bb8510511db9709619e4789db5f2277d4c700748"
+              "digest": "0d2b369d1efbd6fe5e28e883840408c9f03c534c258a1fa0ddd3106886cfbe9c"
             },
             {
               "name": "network_profile_update",
-              "digest": "de126b4adc0dfad2751ce8170b87098dd7423e74e596a13ff928586fac2c84d0"
+              "digest": "7c655fad106b668fee70b507d8f04b8630083798c5e92633b9141e10ed619dc5"
             },
             {
               "name": "network_me_rename",
@@ -326,7 +328,7 @@
             },
             {
               "name": "network_recovery_redeem",
-              "digest": "9a550c1210ce7f3704be1e43acd5c42996de27234dc318fc619c925bd06849c3"
+              "digest": "4090db1cf91f92c1fb467fb1fd6e348c0d61c76450d01bf80d65df572f589106"
             },
             {
               "name": "network_device_pairing_create",
@@ -350,7 +352,7 @@
             },
             {
               "name": "network_device_pairing_redeem",
-              "digest": "990579234c42050896e7b11f4e410430c98d9ad6c33be67a09283cb839380a0c"
+              "digest": "980bd09a334e8d5ceb1da56b601e9abde1ea20b252e95946dbbab7c94d9dfa60"
             },
             {
               "name": "network_device_list",
@@ -362,15 +364,15 @@
             },
             {
               "name": "network_contacts_list",
-              "digest": "c2ca166d0032b391b09ec76c773283f95624c463a88c3a24efcbc3fdf0bc1dfb"
+              "digest": "ec09b860da6b2f64fb3f171790040bf56f1f738391cadcb0be861ba50ce081b2"
             },
             {
               "name": "network_contact_search",
-              "digest": "fcaea8498ae0719d2862dc75912a4db1f3e12b247cab3cef12f2fbbeab547f64"
+              "digest": "17bfe7d80c0ab5ee01b347e18c06c86e1af280b5d3c7c8b401dabf5d5b2f504e"
             },
             {
               "name": "network_contact_add",
-              "digest": "54006372c42992afb2923ae353b10330e0f7648670558aee3c5ae65f9a3f86f8"
+              "digest": "b53f910d00751f6f88198346cfc08ac33ad2f1db386aed2f7564c8fcf5095813"
             },
             {
               "name": "network_contact_remove",
@@ -378,39 +380,39 @@
             },
             {
               "name": "network_contact_request",
-              "digest": "719510926900cde48b71f46621ceadc40235d318d4c58e54d522ddc0d67ceb7b"
+              "digest": "02b0dbf792d09dba9f693dd63fce6c5b90d53a0b8d2b8362853eb417b6b1aa76"
             },
             {
               "name": "network_contact_requests_list",
-              "digest": "7b69e073b98bf1e658c0def02d274bb22bf349cfd85b805fee7fde8ef08c7fad"
+              "digest": "840ff497448b1d083cbbc477d7893171ddf827cadf2b8c0e9c0314041ac0a614"
             },
             {
               "name": "network_contact_request_respond",
-              "digest": "d7882c76eb80f4c148353ead79ba3c3c382ac6974fa722de46243355347971dc"
+              "digest": "a11a5a65f8e9f8785f496ac503efff59d2942f43ab9dfce7f7f023f53eb3ccd6"
             },
             {
               "name": "network_contact_request_cancel",
-              "digest": "e1f1d627c7628f18765537766b2b30b701427f10013447ab58847a7175584fbd"
+              "digest": "53628a4972b11396e9c24a26fe7c92962f8fbf8aa929ea13cd53116c4eb22c8f"
             },
             {
               "name": "network_contact_link_create",
-              "digest": "57caa7e3b3dbd9a0c05e9c682e2e30aa08cdab0fe131326a0c06c15282bcaf72"
+              "digest": "1799cf9fed83b6118f2f58fb0c61b13b804fd90cb826985afca04a613593e5b7"
             },
             {
               "name": "network_contact_link_preview",
-              "digest": "d72deccaef5cad3791e3424af18df90f43e9fd24de58d3f1512e448042a360bc"
+              "digest": "9549dfc09d196a23284963848e4ee26debe4eea2e8048e8234d7e47ceb4cfb4a"
             },
             {
               "name": "network_contact_link_redeem",
-              "digest": "5054d89396b23a8d5f73d8dfb8fde0a6a1e8ab1f86d73444f09605fc20cea0b9"
+              "digest": "045649aca35831998b675b64ba601b13cac18084faefede4b22991b39a5af00e"
             },
             {
               "name": "network_contact_link_list",
-              "digest": "34594e64297759b338fa28d705782fae77bf5d387e5827665015f6310990f547"
+              "digest": "536ffcfe080e7ca3a155b769749f40704f3f1af0b867247a28c3d2a0286a2915"
             },
             {
               "name": "network_contact_link_revoke",
-              "digest": "9a3044c6f82632be9e703e3005d8ea485803ae8b1a259e445a7408c7ed121fa6"
+              "digest": "8ef447f69b54378fcc56877dac67ed49e8f0e7a760b0962abeb27166106a2651"
             },
             {
               "name": "network_contact_policy_get",
@@ -422,35 +424,35 @@
             },
             {
               "name": "network_contact_block",
-              "digest": "81a8d6b9621bfefa0711f5aefd508c7e031870944b3c729ecc80399077e35d1d"
+              "digest": "1543094e80532087ac6efdbef3b62b170060d0b9be5e5f024a50eb69921ba593"
             },
             {
               "name": "network_contact_unblock",
-              "digest": "fdd93442dfafeb5bdce07d4a7e44a22abc45b4b19ed96860a63cf2c5fb1549dc"
+              "digest": "a671aa60a128536b3efca3c3f3b1efcd8bf2c8d03d6b328db878f678b7397bb1"
             },
             {
               "name": "network_contact_blocks_list",
-              "digest": "37332a8aaecca1661f6f681466b8d4b0ca9867a0100366fe32041e243492fe83"
+              "digest": "1c033a25a02361cffd371d5902a7d69ba0e800d0e2b8657e4671a57374558718"
             },
             {
               "name": "network_contact_report",
-              "digest": "9c820a04a62229e9d7630060fb3325fc4f6ad76e4452e19c040a3aad9c601e6b"
+              "digest": "71c9c8f9edd5cf478797ee2b288384b8db6e1e3b728ec02df3884fa7b7c735b8"
             },
             {
               "name": "network_contact_reports_list",
-              "digest": "51a4382fe468a23ad1cadd15cea3680522b6baade1084a59f3bb7e2e5e0a0c3c"
+              "digest": "ef8085f0f3967e7313ed9b1e6fb9e8e10b5a35938424f090ed5a970c9ccac2fa"
             },
             {
               "name": "network_room_create",
-              "digest": "ef89613ee282185143f1960723aefdd1a06f7cfb5a7d8e0e7ce07673b39192eb"
+              "digest": "279093389e3659d6c20cd68bd81c11f12469f1eb491adb8e7deacce3cc00b62e"
             },
             {
               "name": "network_rooms_list",
-              "digest": "bc54ac4aee2465e7994041dd5066d70a9c1262ff1696348c7b4d749fbc522bad"
+              "digest": "04eff5704e69f87d2ea186b5db3aae162d9582a2c1b78310242edffe062149f0"
             },
             {
               "name": "network_room_get",
-              "digest": "3b0146f4fe644af6ade86cb6286f0c9cff4b255004879e055cb5e2f777f38e42"
+              "digest": "2bebff711f308ddc2d728c6fd06f3b12a28b3b6a6a3ce1ca8e3e76c53a1745de"
             },
             {
               "name": "network_room_invite_get",
@@ -486,39 +488,39 @@
             },
             {
               "name": "network_room_members_update",
-              "digest": "27fbcc5b849b95abce872382b25013792f38f31779d742665d9ee6bb9ea9e7f0"
+              "digest": "c8fec707bba72d0aa34eb2f22a45a7035591690a5c0e10124e628439b34f3466"
             },
             {
               "name": "network_room_role_set",
-              "digest": "9775eac0ddb7b4c92a419602b1ea1e7bd6ac0a0b064cb5c99eefae0fe1c45815"
+              "digest": "72dd9e187a0994656a46898c0331ac4fd85d9668a4c40c645acbeab80ad876c4"
             },
             {
               "name": "network_room_owner_transfer",
-              "digest": "9f1255948cfece58b5d8ceebce6d9a707f32ee2ebd5d6d3952d325ae3b2d2ab7"
+              "digest": "cb27a8ec55b4d54f48c178a520b97573d1c5903ab7d2ba3767b81464a168d6e3"
             },
             {
               "name": "network_room_owner_transfer_propose",
-              "digest": "acb282da3c3364666c96a816ab3092eaf0f5efefa049a21f1acb7cd2f62fc26e"
+              "digest": "fe299dae5ca893e0fb2197c89ad7091dedf8783fe5fa7677787a45313d2242c0"
             },
             {
               "name": "network_room_owner_transfer_respond",
-              "digest": "8c13a0f35ca4bd0c68fea05d6f30c975d7e28b06eb62584ba4715a01ad888acf"
+              "digest": "7ec8a50834518d88d138d4a5aaca02b605fa57061d7edaadbdf41da2add3cd27"
             },
             {
               "name": "network_room_owner_transfer_cancel",
-              "digest": "f730ca9fe6439b744557ba9996e85e9a4282a496f8d96cb4db78e44cb3e91c16"
+              "digest": "c2470d4256c0683c2a8b9fa8498ca59f3be1565a208436abc7bc75064ca3337c"
             },
             {
               "name": "network_room_policy_set",
-              "digest": "d9948892296ffbdf9f9d540853db8139bf38bf90787e438714a3eacf59e13419"
+              "digest": "433488e9adf916b0fb79f6995653a689c0895481aab2dfa19a4182e5a3b8b42d"
             },
             {
               "name": "network_room_rename",
-              "digest": "bac8c7a8d8076f94b59e116d109f59f8283fd3cb7a01f619f0a54b3d7f03b86c"
+              "digest": "76e56f3c2fbca8b98b64f156f1c49f7563dc3109b538da35144c1f9ebf5b6276"
             },
             {
               "name": "network_room_announcement_set",
-              "digest": "9122a41af98067f13774a725f9b680a7b677ef39967516deecf8e34eb2c6e457"
+              "digest": "fe900b4d14f6b22e62df7efe4dc30cfe31ba3e1f8e3f6936a507fb70b202f1cd"
             },
             {
               "name": "network_room_role_history",
@@ -538,7 +540,7 @@
             },
             {
               "name": "network_room_dissolve",
-              "digest": "a208426659a26b7361123166682aa25df8260fc09cef20d804e21a3496b7ac2c"
+              "digest": "d03983de5c3a4270350bd34e67941262bf5c589f083706be795a0c99bdf9f106"
             },
             {
               "name": "network_message_send",
@@ -554,11 +556,11 @@
             },
             {
               "name": "network_history_list",
-              "digest": "2a7ec6130effd5cffd614a4b04fa0e68854224e27f95fe28e64e7b7dde89d1b6"
+              "digest": "67a17789618095480e0fe57f00c4b92986c5b4af93d9fa1ca6cd2ca9786325fd"
             },
             {
               "name": "network_message_search",
-              "digest": "e359d835389a3155ceb04dab7758e16c6f1cad735cb411957980333ca8e82b5c"
+              "digest": "f80dc80383475df0323cb7955cf50fde21122f2affe8cff457cceedd3a5343e6"
             },
             {
               "name": "network_task_mark",
@@ -808,7 +810,7 @@
           "content": [
             {
               "type": "text",
-              "text": "{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"agent_session_id\":\"sess_parity_owner\",\"name\":\"Parity Owner\",\"metadata\":{},\"pending_count\":0,\"inbox_head_seq\":\"0\",\"created_at\":\"<ts>\",\"share_url\":\"<origin>/a/sess_parity_owner\",\"resources\":[\"agentnet://stream\"],\"service\":{\"protocol_version\":\"2026-07-28\",\"contract_version\":\"2026-11-13.2\",\"toolset_sha256\":\"0f73735b010853b4b91a9fc92d23e4e10ade607c246778b8f8d363a4535dfee7\",\"tool_count\":142,\"guide_tool\":\"network_client_guide\",\"files_enabled\":true,\"events_enabled\":false,\"memory\":{\"enabled\":false,\"contract_version\":\"2026-11-10.1\",\"capture\":false,\"engine_status\":\"unavailable\",\"host_modes\":[\"tool_only\"],\"recall_modes\":[\"bootstrap\",\"related\",\"task\",\"lookup\",\"reflect\"],\"tools\":[\"network_memory_admit\",\"network_memory_catchup_get\",\"network_memory_catchup_prepare\",\"network_memory_context_get\",\"network_memory_context_list\",\"network_memory_context_pack\",\"network_memory_correct\",\"network_memory_experience_get\",\"network_memory_experience_list\",\"network_memory_forget\",\"network_memory_get\",\"network_memory_host_bind\",\"network_memory_host_close\",\"network_memory_input_prepare\",\"network_memory_input_status\",\"network_memory_list\",\"network_memory_operation_get\",\"network_memory_put\",\"network_memory_recall\",\"network_memory_status\"],\"supported\":[],\"unsupported\":[\"all\"],\"reason\":\"memory_disabled\"},\"connector_refresh\":\"将当前连接器工具名/描述/输入输出 schema 与实时 tools/list 比对；缺失或摘要不同需刷新目录。服务端无法替宿主刷新缓存。\"}}"
+              "text": "{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"agent_session_id\":\"sess_parity_owner\",\"name\":\"Parity Owner\",\"metadata\":{},\"pending_count\":0,\"inbox_head_seq\":\"0\",\"created_at\":\"<ts>\",\"share_url\":\"<origin>/a/sess_parity_owner\",\"avatar_url\":null,\"resources\":[\"agentnet://stream\"],\"service\":{\"protocol_version\":\"2026-07-28\",\"contract_version\":\"2026-11-13.2\",\"toolset_sha256\":\"17dbb0e80ed7511714458c8b4cf0e15196db40ae4c5677cee58e0953cddbd334\",\"tool_count\":142,\"guide_tool\":\"network_client_guide\",\"files_enabled\":true,\"events_enabled\":false,\"memory\":{\"enabled\":false,\"contract_version\":\"2026-11-10.1\",\"capture\":false,\"engine_status\":\"unavailable\",\"host_modes\":[\"tool_only\"],\"recall_modes\":[\"bootstrap\",\"related\",\"task\",\"lookup\",\"reflect\"],\"tools\":[\"network_memory_admit\",\"network_memory_catchup_get\",\"network_memory_catchup_prepare\",\"network_memory_context_get\",\"network_memory_context_list\",\"network_memory_context_pack\",\"network_memory_correct\",\"network_memory_experience_get\",\"network_memory_experience_list\",\"network_memory_forget\",\"network_memory_get\",\"network_memory_host_bind\",\"network_memory_host_close\",\"network_memory_input_prepare\",\"network_memory_input_status\",\"network_memory_list\",\"network_memory_operation_get\",\"network_memory_put\",\"network_memory_recall\",\"network_memory_status\"],\"supported\":[],\"unsupported\":[\"all\"],\"reason\":\"memory_disabled\"},\"connector_refresh\":\"将当前连接器工具名/描述/输入输出 schema 与实时 tools/list 比对；缺失或摘要不同需刷新目录。服务端无法替宿主刷新缓存。\"}}"
             }
           ],
           "structuredContent": {
@@ -821,13 +823,14 @@
             "inbox_head_seq": "0",
             "created_at": "<ts>",
             "share_url": "<origin>/a/sess_parity_owner",
+            "avatar_url": null,
             "resources": [
               "agentnet://stream"
             ],
             "service": {
               "protocol_version": "2026-07-28",
               "contract_version": "2026-11-13.2",
-              "toolset_sha256": "0f73735b010853b4b91a9fc92d23e4e10ade607c246778b8f8d363a4535dfee7",
+              "toolset_sha256": "17dbb0e80ed7511714458c8b4cf0e15196db40ae4c5677cee58e0953cddbd334",
               "tool_count": 142,
               "guide_tool": "network_client_guide",
               "files_enabled": true,
@@ -1016,7 +1019,7 @@
               "resources": [
                 {
                   "uri": "skill://agent-network/agent-network/SKILL.md",
-                  "digest": "sha256:1a21137943b5f837cb725e8169a85a1ef228b249f26185678d2beb2fd216f538"
+                  "digest": "sha256:57a745efb7f65aa8d971c410b81f0567791914105b87417a68a1e9cb2a766166"
                 }
               ]
             }
@@ -1060,7 +1063,7 @@
             "resources": [
               {
                 "uri": "skill://agent-network/agent-network/SKILL.md",
-                "digest": "sha256:1a21137943b5f837cb725e8169a85a1ef228b249f26185678d2beb2fd216f538"
+                "digest": "sha256:57a745efb7f65aa8d971c410b81f0567791914105b87417a68a1e9cb2a766166"
               }
             ]
           },
@@ -1094,7 +1097,7 @@
             {
               "uri": "skill://agent-network/agent-network/SKILL.md",
               "mimeType": "text/markdown",
-              "text": "<text:sha256:1a21137943b5f837:len=46227>"
+              "text": "<text:sha256:57a745efb7f65aa8:len=46425>"
             }
           ],
           "resultType": "complete",
@@ -1145,7 +1148,7 @@
           "content": [
             {
               "type": "text",
-              "text": "{\"room\":{\"room_id\":\"<rm>\",\"kind\":\"group\",\"owner_id\":\"<agt>\",\"title\":\"Parity Room\",\"head_seq\":\"1\",\"member_seq\":\"0\",\"member_count\":2,\"my_role\":\"owner\",\"my_role_revision\":1,\"my_last_read_seq\":\"1\",\"my_member_generation\":1,\"history_from_seq\":\"0\",\"authorization\":\"<redacted>\",\"policy_revision\":1,\"policies\":{\"member_message\":\"members\",\"member_invite\":\"owner_admin\",\"member_history\":\"full\",\"member_join\":\"open\",\"member_profile\":\"owner_admin\",\"member_mention_all\":\"owner_admin\"},\"announcement\":\"\",\"announcement_revision\":1,\"announcement_updated_at\":null,\"announcement_updated_by\":null,\"capabilities\":{\"send_message\":true,\"invite_members\":true,\"remove_members\":true,\"manage_admins\":true,\"edit_profile\":true,\"manage_announcement\":true,\"manage_policy\":true,\"transfer_owner\":true,\"approve_joins\":true,\"mention_all\":true,\"view_role_history\":true},\"last_message\":null,\"status\":\"active\",\"dissolved_at\":null,\"dissolved_by\":null,\"dissolve_reason\":null,\"archived_head_seq\":null,\"owner_missing\":false,\"read_only\":false,\"can_leave\":false,\"can_dissolve\":true,\"created_at\":\"<ts>\",\"updated_at\":\"<ts>\"},\"members\":[{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"name\":\"Parity Owner\",\"agent_session_id\":\"sess_parity_owner\",\"role\":\"owner\",\"role_revision\":1,\"member_generation\":1,\"joined_seq\":\"1\",\"joined_at\":\"<ts>\",\"last_read_seq\":\"0\",\"online\":null,\"actions\":{\"can_remove\":false,\"can_set_admin\":false,\"can_revoke_admin\":false,\"can_transfer_owner\":false}},{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"name\":\"Parity Peer\",\"agent_session_id\":\"sess_parity_peer\",\"role\":\"member\",\"role_revision\":1,\"member_generation\":1,\"joined_seq\":\"1\",\"joined_at\":\"<ts>\",\"last_read_seq\":\"0\",\"online\":null,\"actions\":{\"can_remove\":true,\"can_set_admin\":true,\"can_revoke_admin\":false,\"can_transfer_owner\":true}}],\"invited\":[],\"owner_transfer\":null,\"results\":[{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"name\":\"Parity Peer\",\"status\":\"active\",\"code\":null,\"message\":null}]}"
+              "text": "{\"room\":{\"room_id\":\"<rm>\",\"kind\":\"group\",\"owner_id\":\"<agt>\",\"title\":\"Parity Room\",\"head_seq\":\"1\",\"member_seq\":\"0\",\"member_count\":2,\"my_role\":\"owner\",\"my_role_revision\":1,\"my_last_read_seq\":\"1\",\"my_member_generation\":1,\"history_from_seq\":\"0\",\"authorization\":\"<redacted>\",\"policy_revision\":1,\"policies\":{\"member_message\":\"members\",\"member_invite\":\"owner_admin\",\"member_history\":\"full\",\"member_join\":\"open\",\"member_profile\":\"owner_admin\",\"member_mention_all\":\"owner_admin\"},\"announcement\":\"\",\"announcement_revision\":1,\"announcement_updated_at\":null,\"announcement_updated_by\":null,\"capabilities\":{\"send_message\":true,\"invite_members\":true,\"remove_members\":true,\"manage_admins\":true,\"edit_profile\":true,\"manage_announcement\":true,\"manage_policy\":true,\"transfer_owner\":true,\"approve_joins\":true,\"mention_all\":true,\"view_role_history\":true},\"last_message\":null,\"status\":\"active\",\"dissolved_at\":null,\"dissolved_by\":null,\"dissolve_reason\":null,\"archived_head_seq\":null,\"owner_missing\":false,\"read_only\":false,\"can_leave\":false,\"can_dissolve\":true,\"created_at\":\"<ts>\",\"updated_at\":\"<ts>\"},\"members\":[{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"name\":\"Parity Owner\",\"agent_session_id\":\"sess_parity_owner\",\"avatar_url\":null,\"role\":\"owner\",\"role_revision\":1,\"member_generation\":1,\"joined_seq\":\"1\",\"joined_at\":\"<ts>\",\"last_read_seq\":\"0\",\"online\":null,\"actions\":{\"can_remove\":false,\"can_set_admin\":false,\"can_revoke_admin\":false,\"can_transfer_owner\":false}},{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"name\":\"Parity Peer\",\"agent_session_id\":\"sess_parity_peer\",\"avatar_url\":null,\"role\":\"member\",\"role_revision\":1,\"member_generation\":1,\"joined_seq\":\"1\",\"joined_at\":\"<ts>\",\"last_read_seq\":\"0\",\"online\":null,\"actions\":{\"can_remove\":true,\"can_set_admin\":true,\"can_revoke_admin\":false,\"can_transfer_owner\":true}}],\"invited\":[],\"owner_transfer\":null,\"results\":[{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"name\":\"Parity Peer\",\"avatar_url\":null,\"status\":\"active\",\"code\":null,\"message\":null}]}"
             }
           ],
           "structuredContent": {
@@ -1208,6 +1211,7 @@
                 "kind": "agent",
                 "name": "Parity Owner",
                 "agent_session_id": "sess_parity_owner",
+                "avatar_url": null,
                 "role": "owner",
                 "role_revision": 1,
                 "member_generation": 1,
@@ -1227,6 +1231,7 @@
                 "kind": "agent",
                 "name": "Parity Peer",
                 "agent_session_id": "sess_parity_peer",
+                "avatar_url": null,
                 "role": "member",
                 "role_revision": 1,
                 "member_generation": 1,
@@ -1249,6 +1254,7 @@
                 "actor_id": "<agt>",
                 "kind": "agent",
                 "name": "Parity Peer",
+                "avatar_url": null,
                 "status": "active",
                 "code": null,
                 "message": null
@@ -1296,7 +1302,7 @@
           "content": [
             {
               "type": "text",
-              "text": "{\"room\":{\"room_id\":\"<rm>\",\"kind\":\"group\",\"owner_id\":\"<agt>\",\"title\":\"Parity Room\",\"head_seq\":\"1\",\"member_seq\":\"0\",\"member_count\":2,\"my_role\":\"owner\",\"my_role_revision\":1,\"my_last_read_seq\":\"1\",\"my_member_generation\":1,\"history_from_seq\":\"0\",\"authorization\":\"<redacted>\",\"policy_revision\":1,\"policies\":{\"member_message\":\"members\",\"member_invite\":\"owner_admin\",\"member_history\":\"full\",\"member_join\":\"open\",\"member_profile\":\"owner_admin\",\"member_mention_all\":\"owner_admin\"},\"announcement\":\"\",\"announcement_revision\":1,\"announcement_updated_at\":null,\"announcement_updated_by\":null,\"capabilities\":{\"send_message\":true,\"invite_members\":true,\"remove_members\":true,\"manage_admins\":true,\"edit_profile\":true,\"manage_announcement\":true,\"manage_policy\":true,\"transfer_owner\":true,\"approve_joins\":true,\"mention_all\":true,\"view_role_history\":true},\"last_message\":null,\"status\":\"active\",\"dissolved_at\":null,\"dissolved_by\":null,\"dissolve_reason\":null,\"archived_head_seq\":null,\"owner_missing\":false,\"read_only\":false,\"can_leave\":false,\"can_dissolve\":true,\"created_at\":\"<ts>\",\"updated_at\":\"<ts>\"},\"members\":[{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"name\":\"Parity Owner\",\"agent_session_id\":\"sess_parity_owner\",\"role\":\"owner\",\"role_revision\":1,\"member_generation\":1,\"joined_seq\":\"1\",\"joined_at\":\"<ts>\",\"last_read_seq\":\"0\",\"online\":true,\"actions\":{\"can_remove\":false,\"can_set_admin\":false,\"can_revoke_admin\":false,\"can_transfer_owner\":false}},{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"name\":\"Parity Peer\",\"agent_session_id\":\"sess_parity_peer\",\"role\":\"member\",\"role_revision\":1,\"member_generation\":1,\"joined_seq\":\"1\",\"joined_at\":\"<ts>\",\"last_read_seq\":\"0\",\"online\":false,\"actions\":{\"can_remove\":true,\"can_set_admin\":true,\"can_revoke_admin\":false,\"can_transfer_owner\":true}}],\"invited\":[],\"owner_transfer\":null}"
+              "text": "{\"room\":{\"room_id\":\"<rm>\",\"kind\":\"group\",\"owner_id\":\"<agt>\",\"title\":\"Parity Room\",\"head_seq\":\"1\",\"member_seq\":\"0\",\"member_count\":2,\"my_role\":\"owner\",\"my_role_revision\":1,\"my_last_read_seq\":\"1\",\"my_member_generation\":1,\"history_from_seq\":\"0\",\"authorization\":\"<redacted>\",\"policy_revision\":1,\"policies\":{\"member_message\":\"members\",\"member_invite\":\"owner_admin\",\"member_history\":\"full\",\"member_join\":\"open\",\"member_profile\":\"owner_admin\",\"member_mention_all\":\"owner_admin\"},\"announcement\":\"\",\"announcement_revision\":1,\"announcement_updated_at\":null,\"announcement_updated_by\":null,\"capabilities\":{\"send_message\":true,\"invite_members\":true,\"remove_members\":true,\"manage_admins\":true,\"edit_profile\":true,\"manage_announcement\":true,\"manage_policy\":true,\"transfer_owner\":true,\"approve_joins\":true,\"mention_all\":true,\"view_role_history\":true},\"last_message\":null,\"status\":\"active\",\"dissolved_at\":null,\"dissolved_by\":null,\"dissolve_reason\":null,\"archived_head_seq\":null,\"owner_missing\":false,\"read_only\":false,\"can_leave\":false,\"can_dissolve\":true,\"created_at\":\"<ts>\",\"updated_at\":\"<ts>\"},\"members\":[{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"name\":\"Parity Owner\",\"agent_session_id\":\"sess_parity_owner\",\"avatar_url\":null,\"role\":\"owner\",\"role_revision\":1,\"member_generation\":1,\"joined_seq\":\"1\",\"joined_at\":\"<ts>\",\"last_read_seq\":\"0\",\"online\":true,\"actions\":{\"can_remove\":false,\"can_set_admin\":false,\"can_revoke_admin\":false,\"can_transfer_owner\":false}},{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"name\":\"Parity Peer\",\"agent_session_id\":\"sess_parity_peer\",\"avatar_url\":null,\"role\":\"member\",\"role_revision\":1,\"member_generation\":1,\"joined_seq\":\"1\",\"joined_at\":\"<ts>\",\"last_read_seq\":\"0\",\"online\":false,\"actions\":{\"can_remove\":true,\"can_set_admin\":true,\"can_revoke_admin\":false,\"can_transfer_owner\":true}}],\"invited\":[],\"owner_transfer\":null}"
             }
           ],
           "structuredContent": {
@@ -1359,6 +1365,7 @@
                 "kind": "agent",
                 "name": "Parity Owner",
                 "agent_session_id": "sess_parity_owner",
+                "avatar_url": null,
                 "role": "owner",
                 "role_revision": 1,
                 "member_generation": 1,
@@ -1378,6 +1385,7 @@
                 "kind": "agent",
                 "name": "Parity Peer",
                 "agent_session_id": "sess_parity_peer",
+                "avatar_url": null,
                 "role": "member",
                 "role_revision": 1,
                 "member_generation": 1,
@@ -1517,7 +1525,7 @@
           "content": [
             {
               "type": "text",
-              "text": "{\"items\":[{\"message_id\":\"<msg>\",\"room_id\":\"<rm>\",\"sender_id\":\"<agt>\",\"sender_kind\":\"agent\",\"created_seq\":\"4\",\"preview\":\"<redacted>\",\"body_bytes\":11,\"created_at\":\"<ts>\",\"reply_to\":null,\"root_id\":null,\"task_root_id\":null,\"hop\":0,\"delivery_states\":{\"pending\":1},\"mentions\":[{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"source\":\"explicit\"}],\"delivery_claimed_at\":null,\"delivery_updated_at\":null}],\"next_cursor\":null,\"has_more\":false,\"snapshot\":\"4\",\"head_seq\":\"4\",\"authorization\":\"<redacted>\"}"
+              "text": "{\"items\":[{\"message_id\":\"<msg>\",\"room_id\":\"<rm>\",\"sender_id\":\"<agt>\",\"sender_kind\":\"agent\",\"sender_avatar_url\":null,\"created_seq\":\"4\",\"preview\":\"<redacted>\",\"body_bytes\":11,\"created_at\":\"<ts>\",\"reply_to\":null,\"root_id\":null,\"task_root_id\":null,\"hop\":0,\"delivery_states\":{\"pending\":1},\"mentions\":[{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"source\":\"explicit\"}],\"delivery_claimed_at\":null,\"delivery_updated_at\":null}],\"next_cursor\":null,\"has_more\":false,\"snapshot\":\"4\",\"head_seq\":\"4\",\"authorization\":\"<redacted>\"}"
             }
           ],
           "structuredContent": {
@@ -1527,6 +1535,7 @@
                 "room_id": "<rm>",
                 "sender_id": "<agt>",
                 "sender_kind": "agent",
+                "sender_avatar_url": null,
                 "created_seq": "4",
                 "preview": "<redacted>",
                 "body_bytes": 11,
@@ -1786,7 +1795,7 @@
           "content": [
             {
               "type": "text",
-              "text": "{\"actor_id\":\"<agt>\",\"online\":true,\"logged_in_at\":\"<ts>\",\"pending_count\":0,\"inbox_head_seq\":\"2\"}"
+              "text": "{\"actor_id\":\"<agt>\",\"online\":true,\"logged_in_at\":\"<ts>\",\"pending_count\":0,\"inbox_head_seq\":\"2\",\"avatar_url\":null}"
             }
           ],
           "structuredContent": {
@@ -1794,7 +1803,8 @@
             "online": true,
             "logged_in_at": "<ts>",
             "pending_count": 0,
-            "inbox_head_seq": "2"
+            "inbox_head_seq": "2",
+            "avatar_url": null
           },
           "resultType": "complete",
           "_meta": {
@@ -1960,8 +1970,8 @@
       "response": {
         "result": {
           "toolCount": 142,
-          "toolset_sha256": "0f73735b010853b4b91a9fc92d23e4e10ade607c246778b8f8d363a4535dfee7",
-          "listing_sha256": "09dfc9ab6058cd1544f574a565d2e61ba78341dd955d00fea8c3013f3700ce39",
+          "toolset_sha256": "17dbb0e80ed7511714458c8b4cf0e15196db40ae4c5677cee58e0953cddbd334",
+          "listing_sha256": "38c70caf919aff22888ef8145101d9122394fe0a4c1deb23872f81c1eece37ce",
           "tools": [
             {
               "name": "network_issue_token",
@@ -1969,11 +1979,11 @@
             },
             {
               "name": "network_register",
-              "digest": "bbded00300c4979db160aa7bd6e2761e0c97a71afba59a7a042f323be27ec870"
+              "digest": "53fb67676360a4f8227a1b61b07ef503e79884992e5c880d0e0e15aa01692789"
             },
             {
               "name": "network_me",
-              "digest": "7ea0d3953a4571a7ef889b8630b5ad8676da663f0b991d984eb911b9aae06118"
+              "digest": "59e701067881d4eeb95154321d473ff0abeb4281b3ee6527267bda123aff33a6"
             },
             {
               "name": "network_client_guide",
@@ -1981,11 +1991,11 @@
             },
             {
               "name": "network_login",
-              "digest": "970625f3af0269dff948ad94bb8510511db9709619e4789db5f2277d4c700748"
+              "digest": "0d2b369d1efbd6fe5e28e883840408c9f03c534c258a1fa0ddd3106886cfbe9c"
             },
             {
               "name": "network_profile_update",
-              "digest": "de126b4adc0dfad2751ce8170b87098dd7423e74e596a13ff928586fac2c84d0"
+              "digest": "7c655fad106b668fee70b507d8f04b8630083798c5e92633b9141e10ed619dc5"
             },
             {
               "name": "network_me_rename",
@@ -2081,7 +2091,7 @@
             },
             {
               "name": "network_recovery_redeem",
-              "digest": "9a550c1210ce7f3704be1e43acd5c42996de27234dc318fc619c925bd06849c3"
+              "digest": "4090db1cf91f92c1fb467fb1fd6e348c0d61c76450d01bf80d65df572f589106"
             },
             {
               "name": "network_device_pairing_create",
@@ -2105,7 +2115,7 @@
             },
             {
               "name": "network_device_pairing_redeem",
-              "digest": "990579234c42050896e7b11f4e410430c98d9ad6c33be67a09283cb839380a0c"
+              "digest": "980bd09a334e8d5ceb1da56b601e9abde1ea20b252e95946dbbab7c94d9dfa60"
             },
             {
               "name": "network_device_list",
@@ -2117,15 +2127,15 @@
             },
             {
               "name": "network_contacts_list",
-              "digest": "c2ca166d0032b391b09ec76c773283f95624c463a88c3a24efcbc3fdf0bc1dfb"
+              "digest": "ec09b860da6b2f64fb3f171790040bf56f1f738391cadcb0be861ba50ce081b2"
             },
             {
               "name": "network_contact_search",
-              "digest": "fcaea8498ae0719d2862dc75912a4db1f3e12b247cab3cef12f2fbbeab547f64"
+              "digest": "17bfe7d80c0ab5ee01b347e18c06c86e1af280b5d3c7c8b401dabf5d5b2f504e"
             },
             {
               "name": "network_contact_add",
-              "digest": "54006372c42992afb2923ae353b10330e0f7648670558aee3c5ae65f9a3f86f8"
+              "digest": "b53f910d00751f6f88198346cfc08ac33ad2f1db386aed2f7564c8fcf5095813"
             },
             {
               "name": "network_contact_remove",
@@ -2133,39 +2143,39 @@
             },
             {
               "name": "network_contact_request",
-              "digest": "719510926900cde48b71f46621ceadc40235d318d4c58e54d522ddc0d67ceb7b"
+              "digest": "02b0dbf792d09dba9f693dd63fce6c5b90d53a0b8d2b8362853eb417b6b1aa76"
             },
             {
               "name": "network_contact_requests_list",
-              "digest": "7b69e073b98bf1e658c0def02d274bb22bf349cfd85b805fee7fde8ef08c7fad"
+              "digest": "840ff497448b1d083cbbc477d7893171ddf827cadf2b8c0e9c0314041ac0a614"
             },
             {
               "name": "network_contact_request_respond",
-              "digest": "d7882c76eb80f4c148353ead79ba3c3c382ac6974fa722de46243355347971dc"
+              "digest": "a11a5a65f8e9f8785f496ac503efff59d2942f43ab9dfce7f7f023f53eb3ccd6"
             },
             {
               "name": "network_contact_request_cancel",
-              "digest": "e1f1d627c7628f18765537766b2b30b701427f10013447ab58847a7175584fbd"
+              "digest": "53628a4972b11396e9c24a26fe7c92962f8fbf8aa929ea13cd53116c4eb22c8f"
             },
             {
               "name": "network_contact_link_create",
-              "digest": "57caa7e3b3dbd9a0c05e9c682e2e30aa08cdab0fe131326a0c06c15282bcaf72"
+              "digest": "1799cf9fed83b6118f2f58fb0c61b13b804fd90cb826985afca04a613593e5b7"
             },
             {
               "name": "network_contact_link_preview",
-              "digest": "d72deccaef5cad3791e3424af18df90f43e9fd24de58d3f1512e448042a360bc"
+              "digest": "9549dfc09d196a23284963848e4ee26debe4eea2e8048e8234d7e47ceb4cfb4a"
             },
             {
               "name": "network_contact_link_redeem",
-              "digest": "5054d89396b23a8d5f73d8dfb8fde0a6a1e8ab1f86d73444f09605fc20cea0b9"
+              "digest": "045649aca35831998b675b64ba601b13cac18084faefede4b22991b39a5af00e"
             },
             {
               "name": "network_contact_link_list",
-              "digest": "34594e64297759b338fa28d705782fae77bf5d387e5827665015f6310990f547"
+              "digest": "536ffcfe080e7ca3a155b769749f40704f3f1af0b867247a28c3d2a0286a2915"
             },
             {
               "name": "network_contact_link_revoke",
-              "digest": "9a3044c6f82632be9e703e3005d8ea485803ae8b1a259e445a7408c7ed121fa6"
+              "digest": "8ef447f69b54378fcc56877dac67ed49e8f0e7a760b0962abeb27166106a2651"
             },
             {
               "name": "network_contact_policy_get",
@@ -2177,35 +2187,35 @@
             },
             {
               "name": "network_contact_block",
-              "digest": "81a8d6b9621bfefa0711f5aefd508c7e031870944b3c729ecc80399077e35d1d"
+              "digest": "1543094e80532087ac6efdbef3b62b170060d0b9be5e5f024a50eb69921ba593"
             },
             {
               "name": "network_contact_unblock",
-              "digest": "fdd93442dfafeb5bdce07d4a7e44a22abc45b4b19ed96860a63cf2c5fb1549dc"
+              "digest": "a671aa60a128536b3efca3c3f3b1efcd8bf2c8d03d6b328db878f678b7397bb1"
             },
             {
               "name": "network_contact_blocks_list",
-              "digest": "37332a8aaecca1661f6f681466b8d4b0ca9867a0100366fe32041e243492fe83"
+              "digest": "1c033a25a02361cffd371d5902a7d69ba0e800d0e2b8657e4671a57374558718"
             },
             {
               "name": "network_contact_report",
-              "digest": "9c820a04a62229e9d7630060fb3325fc4f6ad76e4452e19c040a3aad9c601e6b"
+              "digest": "71c9c8f9edd5cf478797ee2b288384b8db6e1e3b728ec02df3884fa7b7c735b8"
             },
             {
               "name": "network_contact_reports_list",
-              "digest": "51a4382fe468a23ad1cadd15cea3680522b6baade1084a59f3bb7e2e5e0a0c3c"
+              "digest": "ef8085f0f3967e7313ed9b1e6fb9e8e10b5a35938424f090ed5a970c9ccac2fa"
             },
             {
               "name": "network_room_create",
-              "digest": "ef89613ee282185143f1960723aefdd1a06f7cfb5a7d8e0e7ce07673b39192eb"
+              "digest": "279093389e3659d6c20cd68bd81c11f12469f1eb491adb8e7deacce3cc00b62e"
             },
             {
               "name": "network_rooms_list",
-              "digest": "bc54ac4aee2465e7994041dd5066d70a9c1262ff1696348c7b4d749fbc522bad"
+              "digest": "04eff5704e69f87d2ea186b5db3aae162d9582a2c1b78310242edffe062149f0"
             },
             {
               "name": "network_room_get",
-              "digest": "3b0146f4fe644af6ade86cb6286f0c9cff4b255004879e055cb5e2f777f38e42"
+              "digest": "2bebff711f308ddc2d728c6fd06f3b12a28b3b6a6a3ce1ca8e3e76c53a1745de"
             },
             {
               "name": "network_room_invite_get",
@@ -2241,39 +2251,39 @@
             },
             {
               "name": "network_room_members_update",
-              "digest": "27fbcc5b849b95abce872382b25013792f38f31779d742665d9ee6bb9ea9e7f0"
+              "digest": "c8fec707bba72d0aa34eb2f22a45a7035591690a5c0e10124e628439b34f3466"
             },
             {
               "name": "network_room_role_set",
-              "digest": "9775eac0ddb7b4c92a419602b1ea1e7bd6ac0a0b064cb5c99eefae0fe1c45815"
+              "digest": "72dd9e187a0994656a46898c0331ac4fd85d9668a4c40c645acbeab80ad876c4"
             },
             {
               "name": "network_room_owner_transfer",
-              "digest": "9f1255948cfece58b5d8ceebce6d9a707f32ee2ebd5d6d3952d325ae3b2d2ab7"
+              "digest": "cb27a8ec55b4d54f48c178a520b97573d1c5903ab7d2ba3767b81464a168d6e3"
             },
             {
               "name": "network_room_owner_transfer_propose",
-              "digest": "acb282da3c3364666c96a816ab3092eaf0f5efefa049a21f1acb7cd2f62fc26e"
+              "digest": "fe299dae5ca893e0fb2197c89ad7091dedf8783fe5fa7677787a45313d2242c0"
             },
             {
               "name": "network_room_owner_transfer_respond",
-              "digest": "8c13a0f35ca4bd0c68fea05d6f30c975d7e28b06eb62584ba4715a01ad888acf"
+              "digest": "7ec8a50834518d88d138d4a5aaca02b605fa57061d7edaadbdf41da2add3cd27"
             },
             {
               "name": "network_room_owner_transfer_cancel",
-              "digest": "f730ca9fe6439b744557ba9996e85e9a4282a496f8d96cb4db78e44cb3e91c16"
+              "digest": "c2470d4256c0683c2a8b9fa8498ca59f3be1565a208436abc7bc75064ca3337c"
             },
             {
               "name": "network_room_policy_set",
-              "digest": "d9948892296ffbdf9f9d540853db8139bf38bf90787e438714a3eacf59e13419"
+              "digest": "433488e9adf916b0fb79f6995653a689c0895481aab2dfa19a4182e5a3b8b42d"
             },
             {
               "name": "network_room_rename",
-              "digest": "bac8c7a8d8076f94b59e116d109f59f8283fd3cb7a01f619f0a54b3d7f03b86c"
+              "digest": "76e56f3c2fbca8b98b64f156f1c49f7563dc3109b538da35144c1f9ebf5b6276"
             },
             {
               "name": "network_room_announcement_set",
-              "digest": "9122a41af98067f13774a725f9b680a7b677ef39967516deecf8e34eb2c6e457"
+              "digest": "fe900b4d14f6b22e62df7efe4dc30cfe31ba3e1f8e3f6936a507fb70b202f1cd"
             },
             {
               "name": "network_room_role_history",
@@ -2293,7 +2303,7 @@
             },
             {
               "name": "network_room_dissolve",
-              "digest": "a208426659a26b7361123166682aa25df8260fc09cef20d804e21a3496b7ac2c"
+              "digest": "d03983de5c3a4270350bd34e67941262bf5c589f083706be795a0c99bdf9f106"
             },
             {
               "name": "network_message_send",
@@ -2309,11 +2319,11 @@
             },
             {
               "name": "network_history_list",
-              "digest": "2a7ec6130effd5cffd614a4b04fa0e68854224e27f95fe28e64e7b7dde89d1b6"
+              "digest": "67a17789618095480e0fe57f00c4b92986c5b4af93d9fa1ca6cd2ca9786325fd"
             },
             {
               "name": "network_message_search",
-              "digest": "e359d835389a3155ceb04dab7758e16c6f1cad735cb411957980333ca8e82b5c"
+              "digest": "f80dc80383475df0323cb7955cf50fde21122f2affe8cff457cceedd3a5343e6"
             },
             {
               "name": "network_task_mark",
@@ -2802,7 +2812,7 @@
           "content": [
             {
               "type": "text",
-              "text": "{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"agent_session_id\":\"sess_parity_events\",\"name\":\"Parity Events\",\"metadata\":{},\"pending_count\":0,\"inbox_head_seq\":\"0\",\"created_at\":\"<ts>\",\"share_url\":\"<origin>/a/sess_parity_events\",\"resources\":[\"agentnet://stream\"]}"
+              "text": "{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"agent_session_id\":\"sess_parity_events\",\"name\":\"Parity Events\",\"metadata\":{},\"pending_count\":0,\"inbox_head_seq\":\"0\",\"created_at\":\"<ts>\",\"share_url\":\"<origin>/a/sess_parity_events\",\"avatar_url\":null,\"resources\":[\"agentnet://stream\"]}"
             }
           ],
           "structuredContent": {
@@ -2815,6 +2825,7 @@
             "inbox_head_seq": "0",
             "created_at": "<ts>",
             "share_url": "<origin>/a/sess_parity_events",
+            "avatar_url": null,
             "resources": [
               "agentnet://stream"
             ]
@@ -3357,5 +3368,5 @@
       "response": ""
     }
   ],
-  "digest": "ae46624dbc24beee00f2853e17204da0b9e159229858e66245598100ee145ebd"
+  "digest": "511f02dc1911fcc4ebdf88da6a3ad2fb772fc3b09427ab2fbdde6a9a2b165386"
 }

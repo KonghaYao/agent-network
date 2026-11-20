@@ -23,6 +23,7 @@ import {
 import type { ActorRow, ContactRelationRow, ContactRequestRow } from '../storage/rows';
 import { mapBatchError } from '../storage/transactions/runner';
 import { getActiveManagement } from './agent-access';
+import { avatarUrl } from './avatar';
 import { contactBlockGuardStatement } from './contact-blocks';
 import { resolveContactTarget } from './contact-target';
 import { directRoomIdFor, directRoomStatements } from './direct-room';
@@ -48,6 +49,7 @@ export interface ContactActorView {
   kind: 'human' | 'agent';
   name: string;
   agent_session_id: string | null;
+  avatar_url: string | null;
 }
 
 export interface ContactRequestView {
@@ -97,6 +99,7 @@ export function actorView(actor: ActorRow): ContactActorView {
     kind: actor.kind,
     name: actor.name,
     agent_session_id: actor.agent_session_id,
+    avatar_url: avatarUrl(actor.avatar_file_id),
   };
 }
 
@@ -505,9 +508,11 @@ export function joinedRequestView(
     from_kind: 'human' | 'agent';
     from_name: string;
     from_session: string | null;
+    from_avatar_file_id: string | null;
     to_kind: 'human' | 'agent';
     to_name: string;
     to_session: string | null;
+    to_avatar_file_id: string | null;
   },
   viewer: string,
 ): ContactRequestView {
@@ -522,12 +527,14 @@ export function joinedRequestView(
       kind: row.from_kind,
       name: row.from_name,
       agent_session_id: row.from_session,
+      avatar_url: avatarUrl(row.from_avatar_file_id),
     },
     to_actor: {
       actor_id: row.to_actor_id,
       kind: row.to_kind,
       name: row.to_name,
       agent_session_id: row.to_session,
+      avatar_url: avatarUrl(row.to_avatar_file_id),
     },
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),

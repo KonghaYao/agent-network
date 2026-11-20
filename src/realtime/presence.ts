@@ -1,4 +1,5 @@
 import { BusinessError } from '../contracts/errors';
+import { avatarUrl } from '../domain/avatar';
 import type { Principal } from '../domain/principal';
 import type { Env } from '../env';
 import { provisionAgentOnLogin } from '../memory/provision';
@@ -10,6 +11,8 @@ export interface LoginView {
   logged_in_at: string;
   pending_count: number;
   inbox_head_seq: string;
+  /** 同源 `/f/<fileId>`；无头像为 null。 */
+  avatar_url: string | null;
 }
 
 export interface ActorPresence {
@@ -57,6 +60,7 @@ export async function login(env: Env, principal: Principal): Promise<LoginView> 
     logged_in_at: String(presence.since),
     pending_count: actor.pending_count,
     inbox_head_seq: String(actor.inbox_head_seq),
+    avatar_url: avatarUrl(actor.avatar_file_id),
   };
 }
 

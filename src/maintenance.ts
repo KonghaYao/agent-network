@@ -13,8 +13,10 @@ interface ExpiredScope {
 /**
  * 文件保留与 GC。
  *
- * 权威引用状态在 `file_references` / `artifacts` / `room_files.retained`：
- * 1. 只有无 active 引用、无 delivered 成果且未被 retained 的过期文件才软删；
+ * 权威引用状态在 `file_references` / `artifacts` / `room_files.retained` /
+ * `actors.avatar_file_id`：
+ * 1. 只有无 active 引用、无 delivered 成果、无头像引用且未被 retained 的过期
+ *    文件才软删；
  * 2. 软删后保留 `LIMITS.fileGcGraceMs` 再删除载荷，业务元数据永久保留；
  * 3. 删除载荷前再次检查引用，绑定/提交与 GC 由 SQLite 事务串行化，成果不会
  *    指向已清理字节。
@@ -48,7 +50,9 @@ async function maintainFiles(env: Env, now: number): Promise<void> {
           AND NOT EXISTS (SELECT 1 FROM file_references fr
                            WHERE fr.file_id = drive_files.file_id AND fr.state = 'active')
           AND NOT EXISTS (SELECT 1 FROM artifacts a
-                           WHERE a.file_id = drive_files.file_id AND a.status = 'delivered')`,
+                           WHERE a.file_id = drive_files.file_id AND a.status = 'delivered')
+          AND NOT EXISTS (SELECT 1 FROM actors av
+                           WHERE av.avatar_file_id = drive_files.file_id)`,
     )
     .bind(now, now + LIMITS.roomFileTtlMs)
     .run();
@@ -66,6 +70,8 @@ async function maintainFiles(env: Env, now: number): Promise<void> {
                               WHERE fr.file_id = df.file_id AND fr.state = 'active')
              AND NOT EXISTS (SELECT 1 FROM artifacts a
                               WHERE a.file_id = df.file_id AND a.status = 'delivered')
+             AND NOT EXISTS (SELECT 1 FROM actors av
+                              WHERE av.avatar_file_id = df.file_id)
              AND NOT EXISTS (SELECT 1 FROM room_files rf
                               WHERE rf.file_id = df.file_id
                                 AND rf.retained = 1 AND rf.deleted_at IS NULL)
@@ -100,7 +106,11 @@ async function maintainFiles(env: Env, now: number): Promise<void> {
         )
         .bind(row.file_id)
         .first<{ n: number }>();
-      if (active || delivered) continue;
+      const avatar = await db
+        .prepare('SELECT 1 AS n FROM actors WHERE avatar_file_id = ? LIMIT 1')
+        .bind(row.file_id)
+        .first<{ n: number }>();
+      if (active || delivered || avatar) continue;
       const complete = await purgeFilePayloads(env.FILES, row.file_id);
       if (!complete) continue;
       await db

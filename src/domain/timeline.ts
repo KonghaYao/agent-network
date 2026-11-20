@@ -5,6 +5,7 @@ import type { HistoryListInput } from '../contracts/schemas';
 import { getActorsByIds, getMessage, listHistoryMessagesByIds } from '../storage/queries';
 import type { RoomRow } from '../storage/rows';
 import { deliveryStatesFor, mentionsFor, nullableString } from './message-view-helpers';
+import { avatarUrl } from './avatar';
 import type { AnchorWindow, HistoryMessageView } from './messages/view';
 import {
   decodeHistoryCursor,
@@ -276,6 +277,9 @@ async function materialize(
   const senderIds = [...new Set(messageRows.map((row) => row.sender_id))];
   const senders = await getActorsByIds(db, senderIds);
   const senderKinds = new Map(senders.map((actor) => [actor.actor_id, actor.kind]));
+  const senderAvatars = new Map(
+    senders.map((actor) => [actor.actor_id, avatarUrl(actor.avatar_file_id)]),
+  );
   const states = await deliveryStatesFor(db, messageIds);
   const mentions = await mentionsFor(db, messageIds);
 
@@ -306,6 +310,7 @@ async function materialize(
       room_id: row.room_id,
       sender_id: row.sender_id,
       sender_kind: senderKinds.get(row.sender_id) ?? null,
+      sender_avatar_url: senderAvatars.get(row.sender_id) ?? null,
       created_seq: String(row.created_seq),
       preview: row.preview,
       body_bytes: row.body_bytes,

@@ -10,6 +10,8 @@ export const identitySchema = z.object({
   inbox_head_seq: z.string(),
   created_at: z.string(),
   share_url: z.string().nullable(),
+  /** 同源 `/f/<fileId>`；无头像为 null。不返回文件元数据。 */
+  avatar_url: z.string().nullable(),
   resources: z.array(z.string()),
 });
 
@@ -59,6 +61,8 @@ export const messageSchema = messagePreviewSchema.extend({
 /** 历史页额外返回权威 sender_kind；send/complete 的消息结构保持不变。 */
 export const historyMessageSchema = messageSchema.extend({
   sender_kind: z.enum(['human', 'agent']).nullable(),
+  /** 发送者头像；未知 actor 或无头像为 null。 */
+  sender_avatar_url: z.string().nullable(),
 });
 
 const roomMemberActionsSchema = z.object({
@@ -82,6 +86,8 @@ export const memberSchema = z.object({
   last_read_seq: z.string(),
   /** Agent 在线状态；null 表示未知，人类成员恒为 null。 */
   online: z.boolean().nullable(),
+  /** 同源 `/f/<fileId>`；无头像为 null。 */
+  avatar_url: z.string().nullable(),
   /** 服务端按调用者角色与目标角色计算的成员操作；前端只据此显示入口。 */
   actions: roomMemberActionsSchema,
 });
@@ -190,6 +196,7 @@ export const roomDetailSchema = z.object({
       actor_id: z.string(),
       kind: z.enum(['human', 'agent']),
       name: z.string(),
+      avatar_url: z.string().nullable(),
       invited_by: z.string(),
       invited_at: z.string(),
       expires_at: z.string(),
@@ -203,6 +210,7 @@ export const roomCreateMemberResultSchema = z.object({
   actor_id: z.string(),
   kind: z.enum(['human', 'agent']),
   name: z.string(),
+  avatar_url: z.string().nullable(),
   status: z.enum(['active', 'invited', 'failed']),
   code: z.string().nullable(),
   message: z.string().nullable(),
@@ -332,6 +340,8 @@ export const contactSchema = z.object({
   kind: z.enum(['human', 'agent']),
   name: z.string(),
   agent_session_id: z.string().nullable(),
+  /** 同源 `/f/<fileId>`；无头像为 null。 */
+  avatar_url: z.string().nullable(),
   /** active 表示双方已建立好友关系；none 只是自己的历史收藏。 */
   relation: z.enum(['active', 'none']),
   created_at: z.string(),
@@ -342,6 +352,8 @@ export const contactActorSchema = z.object({
   kind: z.enum(['human', 'agent']),
   name: z.string(),
   agent_session_id: z.string().nullable(),
+  /** 同源 `/f/<fileId>`；无头像为 null。 */
+  avatar_url: z.string().nullable(),
 });
 
 export const contactSearchItemSchema = z.object({
@@ -554,6 +566,8 @@ export const roomPageSchema = z.object({
           name: z.string(),
           kind: z.enum(['human', 'agent']),
           online: z.boolean().nullable(),
+          /** 同源 `/f/<fileId>`；无头像为 null。 */
+          avatar_url: z.string().nullable(),
         })
         .nullable()
         .optional(),
@@ -1217,6 +1231,8 @@ export const loginResultSchema = z.object({
   logged_in_at: z.string(),
   pending_count: z.number(),
   inbox_head_seq: z.string(),
+  /** 同源 `/f/<fileId>`；无头像为 null。 */
+  avatar_url: z.string().nullable(),
 });
 
 export const removedResultSchema = z.object({

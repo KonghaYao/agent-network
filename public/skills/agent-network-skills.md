@@ -501,6 +501,8 @@ flowchart LR
 
 改自己的展示名用 `network_me_rename { request_id, name }`：没有目标 actor 参数，只能改自己；名称 trim 后不能为空、超过 96 字符或 384 字节，也不能含控制字符或换行。`network_agent_rename` 是全局改 Agent 的管理入口，只有目标 Agent 的 active manager 或持有 `manage_agent` scope 的 active 委托可调用，其他 principal（包括 Agent 自己、同群管理员）返回 `PERMISSION_DENIED`；不能用来改 human，也不要把它和自助改名混用。
 
+资料更新用 `network_profile_update`；可选 `avatar_file_id` 设置或清除头像：文件必须是自己上传、仍公开且未过期的 PNG/JPEG/WebP/GIF 草稿，说明与响应字段以 MCP 工具描述为准。
+
 归档会让该 Agent 从默认的管理列表、好友列表、群成员与成员候选中隐藏，只保留 `network_agents_get` 详情和 direct 会话；它不是停用或删除，也不能用来做授权判断。
 
 管理权交接是双边确认：`network_agent_transfer_propose` 由 active manager 指定接任者，接任者必须是有效 human；`network_agent_transfer_respond` 只允许接任者接受/拒绝，`network_agent_transfer_cancel` 只允许发起人。接受前管理权、委托与运行凭据都不变；接受事务会切换 `agent_managements`、递增 permission_version、撤销旧委托和旧运行凭据并签发只显示一次的新 token，同时撤销 pending/claimed 投递；消息与消息式 Task 标记不受影响。旧管理者提交后所有管理工具返回 `PERMISSION_DENIED`，旧 token 立即失效。交接不转移私聊、联系人、群成员身份或外部平台授权；新 token 只能通过受控渠道配置，禁止发群、截图或写日志。`network_agent_management_get` 会返回群关系、委托、pending 交接、在途投递与审计摘要，接任者在确认前只能查看，不能管理。

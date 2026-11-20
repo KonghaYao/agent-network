@@ -10,6 +10,7 @@ import { getActor, getActorRowsByIds } from '../../storage/queries';
 import { type ActorRow } from '../../storage/rows';
 import { operationsStatement, runIdempotent } from '../../storage/transactions/runner';
 import { getActiveManagement } from '../agent-access';
+import { avatarUrl } from '../avatar';
 import { isBlockedBetween } from '../contact-blocks';
 import { directRelationStatements, getActiveRelation } from '../contact-relations';
 import { directRoomIdFor, directRoomStatements } from '../direct-room';
@@ -121,6 +122,7 @@ export function evaluationResult(evaluation: CreateTargetEvaluation): RoomCreate
     actor_id: evaluation.actor.actor_id,
     kind: evaluation.actor.kind,
     name: evaluation.actor.name,
+    avatar_url: avatarUrl(evaluation.actor.avatar_file_id),
     status: evaluation.status,
     code: evaluation.code,
     message: evaluation.message,

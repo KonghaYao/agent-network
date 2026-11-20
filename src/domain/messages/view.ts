@@ -59,6 +59,8 @@ export interface MessagePage {
  */
 export interface HistoryMessageView extends MessageView {
   sender_kind: 'human' | 'agent' | null;
+  /** 发送者头像；未知 actor 或无头像为 null。 */
+  sender_avatar_url: string | null;
 }
 
 export interface DeliverySeed {

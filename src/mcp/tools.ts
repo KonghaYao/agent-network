@@ -538,7 +538,7 @@ export function registerTools(
   register(
     server,
     'network_profile_update',
-    '更新自己的展示名称与小体积 metadata。',
+    '更新自己的展示名称与小体积 metadata；可选 avatar_file_id 设置或清除头像。avatar_file_id 必须是自己通过 POST /mcp-upload 上传、仍为公开且未过期的 PNG/JPEG/WebP/GIF 草稿，传 null 清除；其他文件、SVG/HTML 或已过期文件返回 INVALID_ARGUMENT。已解绑的公开草稿会被长期保留，替换/清除后旧文件解除保留并按普通 TTL 回收。返回更新后的身份与同源 avatar_url（无头像为 null）。',
     profileUpdateSchema,
     identitySchema,
     async (input) => {

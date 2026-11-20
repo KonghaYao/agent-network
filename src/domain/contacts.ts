@@ -13,6 +13,7 @@ import type { ActorRow } from '../storage/rows';
 import { operationsStatement, runIdempotent } from '../storage/transactions/runner';
 import { endRelationStatements, getActiveRelation, relationEndedByBlockSql } from './contact-relations';
 import { resolveContactTarget } from './contact-target';
+import { avatarUrl } from './avatar';
 import { actorId, type Principal } from './principal';
 
 export interface ContactView {
@@ -20,6 +21,7 @@ export interface ContactView {
   kind: 'human' | 'agent';
   name: string;
   agent_session_id: string | null;
+  avatar_url: string | null;
   relation: 'active' | 'none';
   created_at: string;
 }
@@ -40,6 +42,7 @@ function contactView(
     kind: actor.kind,
     name: actor.name,
     agent_session_id: actor.agent_session_id,
+    avatar_url: avatarUrl(actor.avatar_file_id),
     relation,
     created_at: String(createdAt),
   };

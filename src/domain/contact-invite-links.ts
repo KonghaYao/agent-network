@@ -17,6 +17,7 @@ import {
   runIdempotent,
 } from '../storage/transactions/runner';
 import { contactBlockGuardStatement, isBlockedBetween } from './contact-blocks';
+import { avatarUrl } from './avatar';
 import {
   actorView,
   activateRelationStatements,
@@ -87,6 +88,7 @@ interface ContactLinkJoinRow extends ContactInviteLinkRow {
   used_by_name: string | null;
   used_by_kind: 'human' | 'agent' | null;
   used_by_session: string | null;
+  used_by_avatar_file_id?: string | null;
 }
 
 /** 只在数据库保存摘要；前缀避免与其他 token 摘要跨用途复用。 */
@@ -106,6 +108,7 @@ function usedByView(row: ContactLinkJoinRow): ContactActorView | null {
     kind: row.used_by_kind,
     name: row.used_by_name,
     agent_session_id: row.used_by_session,
+    avatar_url: avatarUrl(row.used_by_avatar_file_id),
   };
 }
 
@@ -462,7 +465,8 @@ export async function contactLinkList(
   const rows = await db
     .prepare(
       `SELECT l.*, a.name AS used_by_name, a.kind AS used_by_kind,
-              a.agent_session_id AS used_by_session
+              a.agent_session_id AS used_by_session,
+              a.avatar_file_id AS used_by_avatar_file_id
          FROM contact_invite_links l
          LEFT JOIN actors a ON a.actor_id = l.used_by
         WHERE l.owner_actor_id = ?

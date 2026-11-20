@@ -8,6 +8,8 @@ const id = (max = 128) => z.string().min(1).max(max);
 const requestId = z.string().min(1).max(128);
 const cursor = z.string().min(1).max(2048).optional();
 const seq = z.union([z.number().int().nonnegative(), z.string().regex(/^\d{1,18}$/u)]);
+/** file_id 来自 MCPP Files v1 上传响应；只接受该扩展的格式。 */
+const fileId = z.string().regex(new RegExp(FILE_ID_PATTERN));
 
 export const registerSchema = z.object({
   request_id: requestId,
@@ -31,6 +33,8 @@ export const profileUpdateSchema = z.object({
   request_id: requestId,
   name: z.string().min(1).max(LIMITS.actorNameMax).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
+  /** null 清除头像；字符串必须是当前身份上传的公开光栅图片草稿。 */
+  avatar_file_id: fileId.nullable().optional(),
 });
 
 /** 全局重命名一个 Agent actor；任何已注册身份都可调用。 */
@@ -742,9 +746,6 @@ export const deliveryRetrySchema = z.object({
   delivery_id: id(),
   expected_attempt: z.number().int().nonnegative(),
 });
-
-/** file_id 来自 MCPP Files v1 上传响应；只接受该扩展的格式。 */
-const fileId = z.string().regex(new RegExp(FILE_ID_PATTERN));
 
 export const roomFileBindSchema = z.object({
   request_id: requestId,

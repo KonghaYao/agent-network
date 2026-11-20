@@ -43,6 +43,7 @@
     "test:memory-contracts": "bun scripts/verify-memory-contracts.ts",
     "test:client": "bun scripts/verify-client-cli.ts",
     "test:drive": "bun scripts/verify-drive.ts",
+    "test:avatar": "bun scripts/verify-avatar.ts",
     "test:m07": "bun scripts/verify-m07.ts",
     "test:events": "bun scripts/verify-events.ts",
     "test:ts-monitor": "bun scripts/verify-ts-monitor.ts",

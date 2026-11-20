@@ -23,6 +23,7 @@ import {
 import { sha256Hex } from '../storage/db';
 import { listActiveRoomPeers } from '../storage/queries';
 import type { RoomMemberRow, RoomRow } from '../storage/rows';
+import { avatarUrl } from './avatar';
 import { actorId, type Principal } from './principal';
 import { historyBoundary, type HistoryBoundary } from './room-history';
 import { messageSearchFtsPhrase } from './message-search-fts';
@@ -301,6 +302,7 @@ interface GlobalRawItem {
   sender_id: string;
   sender_name: string;
   sender_kind: string;
+  avatar_file_id: string | null;
   body_bytes: number;
   preview: string;
   created_at: number;
@@ -318,6 +320,7 @@ export interface GlobalSearchItem {
   sender_id: string;
   sender_name: string;
   sender_kind: string;
+  sender_avatar_url: string | null;
   body_bytes: number;
   preview: string;
   created_at: number;
@@ -353,6 +356,7 @@ async function decorateItems(
     sender_id: row.sender_id,
     sender_name: row.sender_name,
     sender_kind: row.sender_kind,
+    sender_avatar_url: avatarUrl(row.avatar_file_id),
     body_bytes: row.body_bytes,
     preview: row.preview,
     created_at: row.created_at,
@@ -375,6 +379,7 @@ interface GlobalExactRow {
   sender_id: string;
   sender_name: string;
   sender_kind: string;
+  avatar_file_id: string | null;
   body_bytes: number;
   preview: string;
   created_at: number;
@@ -444,7 +449,7 @@ async function exactGlobalSearch(
             ${ftsSql}
        )
        SELECT vm.message_id, vm.room_id, vm.sender_id, a.name AS sender_name,
-              a.kind AS sender_kind,
+              a.kind AS sender_kind, a.avatar_file_id,
               substr(vm.body, max(1, instr(lower(vm.body), lower(?)) - ?), ?) AS snippet,
               vm.body_bytes, vm.preview, vm.created_at, vm.created_seq, vm.reply_to,
               vm.room_kind, vm.room_title
@@ -507,6 +512,7 @@ interface GlobalFuzzyCandidate {
   sender_id: string;
   sender_name: string;
   sender_kind: string;
+  avatar_file_id: string | null;
   body_bytes: number;
   preview: string;
   created_at: number;
@@ -570,7 +576,7 @@ async function fuzzyGlobalSearch(
       .prepare(
         `WITH ${ACCESSIBLE_ROOMS_CTE}
          SELECT m.message_id, m.room_id, m.sender_id, a.name AS sender_name,
-                a.kind AS sender_kind, m.body_bytes, m.preview, m.created_at,
+                a.kind AS sender_kind, a.avatar_file_id, m.body_bytes, m.preview, m.created_at,
                 m.created_seq, m.reply_to, ar.kind AS room_kind, ar.title AS room_title
            FROM messages m INDEXED BY idx_messages_global_order
            CROSS JOIN accessible_rooms ar ON ar.room_id = m.room_id
@@ -672,6 +678,7 @@ async function fuzzyGlobalSearch(
         sender_id: candidate.sender_id,
         sender_name: candidate.sender_name,
         sender_kind: candidate.sender_kind,
+        avatar_file_id: candidate.avatar_file_id,
         body_bytes: candidate.body_bytes,
         preview: candidate.preview,
         created_at: candidate.created_at,

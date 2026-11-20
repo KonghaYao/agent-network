@@ -23,11 +23,13 @@ import {
   getActor,
   getActorBySession,
   getCredentialByHash,
+  getDriveFile,
 } from '../storage/queries';
 import type { ActorRow, CredentialRow, RecoveryTicketRow } from '../storage/rows';
 import { operationsStatement, runIdempotent } from '../storage/transactions/runner';
 import { managementEventStatements } from './agent-management';
 import { memoryInitialSpaceStatements } from '../memory/statements';
+import { avatarFileUsable, avatarInvalid, avatarUrl, AVATAR_MIME_TYPES } from './avatar';
 import {
   managementPermissionGuard,
   managementVersionGuard,
@@ -47,6 +49,8 @@ export interface IdentityView {
   inbox_head_seq: string;
   created_at: string;
   share_url: string | null;
+  /** 同源 `/f/<fileId>`；无头像时为 null。 */
+  avatar_url: string | null;
   resources: string[];
 }
 
@@ -61,6 +65,7 @@ export function identityView(actor: ActorRow, origin: string): IdentityView {
     inbox_head_seq: String(actor.inbox_head_seq),
     created_at: String(actor.created_at),
     share_url: actor.agent_session_id ? `${origin}/a/${encodeURIComponent(actor.agent_session_id)}` : null,
+    avatar_url: avatarUrl(actor.avatar_file_id),
     resources: actorResources(actor.actor_id),
   };
 }
@@ -208,7 +213,12 @@ export async function me(db: D1Database, principal: Principal, origin: string): 
 export async function updateProfile(
   db: D1Database,
   principal: Principal,
-  input: { request_id: string; name?: string; metadata?: Record<string, unknown> },
+  input: {
+    request_id: string;
+    name?: string;
+    metadata?: Record<string, unknown>;
+    avatar_file_id?: string | null;
+  },
   origin: string,
 ): Promise<IdentityView> {
   const id = actorId(principal);
@@ -216,33 +226,122 @@ export async function updateProfile(
   if (input.metadata && utf8Bytes(JSON.stringify(input.metadata)) > LIMITS.actorMetadataBytes) {
     throw new BusinessError('PAYLOAD_TOO_LARGE', 'actor metadata 超过 4 KiB');
   }
+  const avatarProvided = input.avatar_file_id !== undefined;
+  const avatarFileId = input.avatar_file_id ?? null;
+  const ownerScope = `actor:${id}`;
+  if (avatarProvided && avatarFileId !== null) {
+    const drive = await getDriveFile(db, avatarFileId);
+    if (!avatarFileUsable(drive, ownerScope, id, at)) {
+      throw avatarInvalid(
+        'avatar_file_id 必须是当前身份上传、公开、未过期的 PNG/JPEG/WebP/GIF 图片草稿',
+      );
+    }
+  }
   const eventKey = `profile:${id}:${input.request_id}`;
   const result = { actor_id: id, updated: true };
   const payloadHash = await sha256Hex(stableStringify(input));
-
-  await runIdempotent(db, {
-    actorId: id,
-    requestId: input.request_id,
-    payloadHash,
-    result,
-    build: (resultJson) => [
-      operationsStatement(db, id, input.request_id, payloadHash, resultJson, at),
-      db.prepare(guardSql('notMember', 'NOT EXISTS (SELECT 1 FROM actors WHERE actor_id = ?)')).bind(id),
-      db
+  const mimeList = AVATAR_MIME_TYPES.map((mime) => `'${mime}'`).join(', ');
+  const avatarGuard =
+    avatarProvided && avatarFileId !== null
+      ? db
+          .prepare(
+            guardSql(
+              'fileUnavailable',
+              `NOT EXISTS (
+                 SELECT 1 FROM drive_files
+                  WHERE file_id = ? AND state = 'draft' AND room_id IS NULL
+                    AND owner_scope = ? AND uploader_id = ? AND visibility = 'public'
+                    AND lower(mime_type) IN (${mimeList})
+                    AND (retained = 1 OR expires_at IS NULL OR expires_at > ?)
+               )`,
+            ),
+          )
+          .bind(avatarFileId, ownerScope, id, at)
+      : null;
+  // 先释放旧引用再更新 actors；用子查询读取旧值，避免并发替换时把中间头像
+  // 永久留在 retained=1。新头像与旧头像相同时跳过释放。
+  const releaseOldAvatar = avatarProvided
+    ? db
         .prepare(
-          `UPDATE actors SET name = COALESCE(?, name), metadata = COALESCE(?, metadata), updated_at = ?
-           WHERE actor_id = ?`,
+          `UPDATE drive_files
+              SET retained = 0,
+                  expires_at = CASE
+                    WHEN expires_at IS NULL OR expires_at <= ? THEN ?
+                    ELSE expires_at END
+            WHERE file_id = (SELECT avatar_file_id FROM actors WHERE actor_id = ?)
+              AND file_id != ?
+              AND state != 'deleted'
+              AND NOT EXISTS (SELECT 1 FROM actors
+                               WHERE avatar_file_id = drive_files.file_id AND actor_id != ?)
+              AND NOT EXISTS (SELECT 1 FROM file_references
+                               WHERE file_id = drive_files.file_id AND state = 'active')
+              AND NOT EXISTS (SELECT 1 FROM artifacts
+                               WHERE file_id = drive_files.file_id AND status = 'delivered')`,
         )
-        .bind(input.name ?? null, input.metadata ? JSON.stringify(input.metadata) : null, at, id),
-      eventStatement(
-        db,
-        { eventKey, scopeKind: 'inbox', scopeId: id, eventType: 'profile_updated', refId: id },
-        at,
-      ),
-      outboxStatement(db, { topic: inboxTopic(id), eventKey }, at),
-      inboxHeadStatement(db, id, eventKey, at, 0),
-    ],
-  });
+        .bind(at, at + LIMITS.roomFileTtlMs, id, avatarFileId ?? '', id)
+    : null;
+
+  try {
+    await runIdempotent(db, {
+      actorId: id,
+      requestId: input.request_id,
+      payloadHash,
+      result,
+      build: (resultJson) => [
+        operationsStatement(db, id, input.request_id, payloadHash, resultJson, at),
+        db.prepare(guardSql('notMember', 'NOT EXISTS (SELECT 1 FROM actors WHERE actor_id = ?)')).bind(id),
+        ...(avatarGuard ? [avatarGuard] : []),
+        ...(releaseOldAvatar ? [releaseOldAvatar] : []),
+        db
+          .prepare(
+            `UPDATE actors
+                SET name = COALESCE(?, name),
+                    metadata = COALESCE(?, metadata),
+                    updated_at = ?${avatarProvided ? ', avatar_file_id = ?' : ''}
+              WHERE actor_id = ?`,
+          )
+          .bind(
+            input.name ?? null,
+            input.metadata ? JSON.stringify(input.metadata) : null,
+            at,
+            ...(avatarProvided ? [avatarFileId] : []),
+            id,
+          ),
+        ...(avatarProvided && avatarFileId !== null
+          ? [
+              db
+                .prepare(
+                  `UPDATE drive_files
+                      SET retained = 1, expires_at = NULL
+                    WHERE file_id = ? AND state != 'deleted'`,
+                )
+                .bind(avatarFileId),
+            ]
+          : []),
+        eventStatement(
+          db,
+          { eventKey, scopeKind: 'inbox', scopeId: id, eventType: 'profile_updated', refId: id },
+          at,
+        ),
+        outboxStatement(db, { topic: inboxTopic(id), eventKey }, at),
+        inboxHeadStatement(db, id, eventKey, at, 0),
+      ],
+    });
+  } catch (error) {
+    // 预检与 guard 之间文件可能被并发删除/回收；对调用方保持同一
+    // INVALID_ARGUMENT 语义，不把内部 guard 表名或存储状态暴露出去。
+    if (
+      error instanceof BusinessError &&
+      error.code === 'FILE_UNAVAILABLE' &&
+      avatarProvided &&
+      avatarFileId !== null
+    ) {
+      throw avatarInvalid(
+        'avatar_file_id 必须是当前身份上传、公开、未过期的 PNG/JPEG/WebP/GIF 图片草稿',
+      );
+    }
+    throw error;
+  }
 
   const actor = await getActor(db, id);
   if (!actor) throw new BusinessError('NOT_FOUND', 'actor 不存在');

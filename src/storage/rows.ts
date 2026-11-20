@@ -14,6 +14,8 @@ export interface ActorRow {
   disabled_at: number | null;
   disabled_by: string | null;
   disabled_reason: string | null;
+  /** 当前头像的 MCPP file_id；NULL 表示无头像。 */
+  avatar_file_id: string | null;
   created_at: number;
   updated_at: number;
 }

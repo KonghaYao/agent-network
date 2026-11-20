@@ -6,6 +6,7 @@ import type {
   RoomInviteRespondInput,
 } from '../contracts/schemas';
 import { newId, nowMs, sha256Hex, stableStringify } from '../storage/db';
+import { avatarUrl } from './avatar';
 import {
   eventStatement,
   eventStatementIfAbsent,
@@ -93,6 +94,7 @@ export interface InvitedMemberView {
   actor_id: string;
   kind: 'human' | 'agent';
   name: string;
+  avatar_url: string | null;
   invited_by: string;
   invited_at: string;
   expires_at: string;
@@ -135,6 +137,7 @@ export async function loadInvitedMembers(
     actor_id: row.actor_id,
     kind: row.kind,
     name: row.name,
+    avatar_url: avatarUrl(row.avatar_file_id),
     invited_by: row.invited_by,
     invited_at: String(row.created_at),
     expires_at: String(row.expires_at),

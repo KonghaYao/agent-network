@@ -14,6 +14,7 @@ import {
 } from '../contracts/message-search-synonyms';
 import { sha256Hex } from '../storage/db';
 import { getMessageContextAnchor, listMessageContextWindow } from '../storage/queries';
+import { avatarUrl } from './avatar';
 import { decodeHistoryCursor, historyBoundary, historyCursorScope } from './room-history';
 import { actorId, type Principal } from './principal';
 import { loadRoomAccess } from './room-access';
@@ -62,6 +63,8 @@ const messageSearchItemSchema = messageViewSchema
     room_kind: z.enum(['direct', 'group']),
     /** 服务端已授权 JOIN 的展示名；direct 为对端名，group 为标题或「群聊」。 */
     room_display_name: z.string(),
+    /** 发送者头像；无头像为 null，不返回文件元数据。 */
+    sender_avatar_url: z.string().nullable(),
   })
   .strict();
 export const messageSearchOutputSchema = z.object({
@@ -80,9 +83,9 @@ type SearchInput = z.infer<typeof messageSearchSchema>;
 type RoomSearchInput = SearchInput & { room_id: string };
 type SearchMode = z.infer<typeof messageSearchModeSchema>;
 type ContextInput = z.infer<typeof messageContextSchema>;
-interface MessageRow { message_id: string; room_id: string; sender_id: string; sender_name: string; sender_kind: string; body_bytes: number; preview: string; created_at: number; created_seq: number; reply_to: string | null; }
+interface MessageRow { message_id: string; room_id: string; sender_id: string; sender_name: string; sender_kind: string; avatar_file_id: string | null; body_bytes: number; preview: string; created_at: number; created_seq: number; reply_to: string | null; }
 interface SearchRow extends MessageRow { snippet: string; }
-interface SearchItem extends SearchRow { match_ranges: SearchMatchRange[]; room_kind: 'direct' | 'group'; room_display_name: string; }
+interface SearchItem extends Omit<SearchRow, 'avatar_file_id'> { match_ranges: SearchMatchRange[]; room_kind: 'direct' | 'group'; room_display_name: string; sender_avatar_url: string | null; }
 async function authorized(db: D1Database, principal: Principal, roomId: string) {
   const { room, member } = await loadRoomAccess(db, roomId, actorId(principal));
   return { room, boundary: historyBoundary(room, member) };
@@ -193,17 +196,22 @@ async function exactMessageSearch(
     limit + 1,
   ];
   const columns = `m.message_id, m.room_id, m.sender_id, a.name AS sender_name, a.kind AS sender_kind,
-    substr(m.body, max(1, instr(lower(m.body), lower(?))-?), ?) AS snippet, m.body_bytes, m.preview, m.created_at, m.created_seq, m.reply_to`;
+    a.avatar_file_id, substr(m.body, max(1, instr(lower(m.body), lower(?))-?), ?) AS snippet,
+    m.body_bytes, m.preview, m.created_at, m.created_seq, m.reply_to`;
   const rows = await db.prepare(`SELECT ${columns} FROM messages m JOIN actors a ON a.actor_id=m.sender_id
     WHERE m.room_id=? AND m.body_bytes>0 AND m.created_seq<=? AND ${matchSql} AND ${lowerSql} AND m.created_seq<?
     ORDER BY m.created_seq DESC LIMIT ?`).bind(...binds).all<SearchRow>();
   const page = rows.results.slice(0, limit);
-  const items: SearchItem[] = page.map((row) => ({
-    ...row,
-    match_ranges: findExactRanges(row.snippet, input.query),
-    room_kind: room.kind,
-    room_display_name: displayName,
-  }));
+  const items: SearchItem[] = page.map((row) => {
+    const { avatar_file_id, ...rest } = row;
+    return {
+      ...rest,
+      sender_avatar_url: avatarUrl(avatar_file_id),
+      match_ranges: findExactRanges(row.snippet, input.query),
+      room_kind: room.kind,
+      room_display_name: displayName,
+    };
+  });
   const hasMore = rows.results.length > limit;
   return {
     items,
@@ -224,6 +232,7 @@ interface FuzzyCandidateRow {
   sender_id: string;
   sender_name: string;
   sender_kind: string;
+  avatar_file_id: string | null;
   body_bytes: number;
   preview: string;
   created_at: number;
@@ -272,7 +281,7 @@ async function fuzzyMessageSearch(
     const rows = await db
       .prepare(
         `SELECT m.message_id, m.room_id, m.sender_id, a.name AS sender_name, a.kind AS sender_kind,
-                m.body_bytes, m.preview, m.created_at, m.created_seq, m.reply_to
+                a.avatar_file_id, m.body_bytes, m.preview, m.created_at, m.created_seq, m.reply_to
            FROM messages m JOIN actors a ON a.actor_id=m.sender_id
           WHERE m.room_id=? AND m.body_bytes>0 AND m.created_seq<=?${lowerPredicate}
             AND m.created_seq<?
@@ -353,6 +362,7 @@ async function fuzzyMessageSearch(
         sender_id: candidate.sender_id,
         sender_name: candidate.sender_name,
         sender_kind: candidate.sender_kind,
+        sender_avatar_url: avatarUrl(candidate.avatar_file_id),
         body_bytes: candidate.body_bytes,
         preview: candidate.preview,
         created_at: candidate.created_at,
