@@ -115,6 +115,41 @@
 ) [data-material-lens] canvas[data-lenso-live-rim] {
   display: none !important;
 }
+/*
+ * Lenso 右键菜单先按最终尺寸铺好玻璃面，再在动画后段淡入条目；玻璃面的
+ * backdrop-filter 首帧就会绘制，浅色下表现为一整块空白白板，深色下是同
+ * 尺寸的暗块，肉眼就是一次瞬态闪烁。
+ *
+ * 让背景与条目同一时刻出现：覆盖 Lenso 写入 surface/content 的内联位移、
+ * 模糊和透明度，只保留 popup 自身的整体淡入。定位、尺寸与命中区仍由 Lenso
+ * 与适配器的 position() 决定；`!important` 只用于压过内联动画帧。
+ */
+:is(#room-row-menu, #message-context-menu, #memory-avatar-menu)[data-lenso-slot='context-menu-layout']
+  > [data-lenso-slot='menu-popup'] > :is(
+    [data-lenso-slot='menu-surface'],
+    [data-lenso-slot='menu-content']
+  ) {
+  opacity: 1 !important;
+  filter: none !important;
+  transform: none !important;
+  clip-path: none !important;
+}
+
+:is(#room-row-menu, #message-context-menu, #memory-avatar-menu)[data-lenso-slot='context-menu-layout']
+  > [data-lenso-slot='menu-popup'] {
+  animation: app-context-menu-in 120ms ease-out;
+}
+
+@keyframes app-context-menu-in {
+  from { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :is(#room-row-menu, #message-context-menu, #memory-avatar-menu)[data-lenso-slot='context-menu-layout']
+    > [data-lenso-slot='menu-popup'] {
+    animation: none;
+  }
+}
 
 .mention-picker.spa-floating {
   left: auto;
