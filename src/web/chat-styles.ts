@@ -1,4 +1,5 @@
 import { GROUP_STYLE } from './chat-group-styles';
+import { MODERATION_STYLE } from './chat-moderation-styles';
 import { GROUP_COLORS } from './lib/group-colors';
 
 /** 调色板首色，仅作为 `--group-color` 缺失时的 CSS 回退。 */
@@ -652,6 +653,7 @@ export const APP_STYLE = `
   .contact-list { display: flex; flex-direction: column; gap: 2px; max-height: 240px;
     overflow-y: auto; margin: 0 0 8px; }
 ${GROUP_STYLE}
+${MODERATION_STYLE}
   .room-announcement, #room-announcement { margin: 8px 16px 0; padding: 8px 12px;
     border-radius: 6px; border: 1px solid var(--wx-line); background: var(--wx-panel);
     color: var(--wx-text); font-size: 12px; line-height: 1.6; white-space: pre-wrap;

@@ -105,10 +105,48 @@ export function useChatSearchNavigation({
     });
   }, [navigation, ready, roomId, roomStatus, setStatus]);
 
+  const locatePin = useCallback(
+    async (pin: { message_id: string }) => {
+      const result = await locate({
+        room_id: roomId,
+        message_id: pin.message_id,
+        query: '',
+        mode: 'exact',
+        scope: 'room',
+      });
+      if (!result.ok) setStatus(result.error);
+    },
+    [locate, roomId, setStatus],
+  );
+
   const returnLatest = useCallback(() => {
     navigation.clear();
     forcePin();
   }, [forcePin, navigation]);
+
+  /**
+   * 远端撤回只收敛已打开的 anchor 窗口；当前在实时列表时不改变滚动位置，
+   * 由 React Query 的历史刷新在后台完成。
+   *
+   * 服务端 anchor 请求会拒绝已撤回消息（body_bytes=0），因此不能原地重读
+   * 墓碑；这里直接丢弃旧窗口并回到最新页，避免继续展示旧正文缓存。
+   */
+  const onRemoteRecall = useCallback(
+    (messageId: string) => {
+      const { state } = navigation;
+      if (state.status !== 'anchored') return;
+      if (
+        !state.items.some(
+          (item) => item.kind !== 'presence' && item.message_id === messageId,
+        )
+      ) {
+        return;
+      }
+      navigation.clear();
+      forcePin();
+    },
+    [forcePin, navigation],
+  );
 
   // 搜索弹窗已关闭的历史窗口：Esc 返回最新；弹窗、全屏预览或输入中不接管。
   useEffect(() => {
@@ -139,5 +177,5 @@ export function useChatSearchNavigation({
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [ready, searchOpen, setSearchOpen]);
 
-  return { navigation, locate, returnLatest };
+  return { navigation, locate, locatePin, returnLatest, onRemoteRecall };
 }

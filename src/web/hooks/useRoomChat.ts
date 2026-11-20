@@ -64,6 +64,10 @@ export interface HistoryCatchUpView {
   notice: string | null;
 }
 
+export interface RoomChatOptions {
+  /** 单宿主转发当前房间的 SSE 提示；anchor 等非 React Query 窗口据此收敛。 */
+  onEvent?: (event: Extract<ActorStreamEvent, { type: 'event' }>) => void;
+}
 export interface ModerationRefresh {
   messageId?: string;
   pinsOnly?: boolean;
@@ -251,6 +255,12 @@ function markPendingRefresh(
   if (source === 'room.read' || kind === 'read') {
     return;
   }
+  // 置顶只改变房间详情里的 pinned_messages：不重读历史、不重置 Task，
+  // 也不推进未读或滚动。必须先于通用 `kind === 'room'` 分支处理。
+  if (source === 'room.pins') {
+    pending.detail = true;
+    return;
+  }
   // 撤回与回执可能落在已加载但不在最新页的旧消息上；锚点重读权威结果，
   // 不能只靠 append 增量流把旧 preview/delivery_states 留在窗口里。
   if (messageId && (kind === 'message' || kind === 'receipt')) {
@@ -289,13 +299,15 @@ function markPendingRefresh(
   }
 }
 
-export function useRoomChat(roomId: string) {
+export function useRoomChat(roomId: string, options: RoomChatOptions = {}) {
   const queryClient = useQueryClient();
   const sessionState = useWebSession();
   const session = sessionState.session;
   const token = session?.token ?? null;
   const actorId = session?.identity.actor_id ?? null;
   const humanTimeline = session?.identity.kind === 'human';
+  const onEventRef = useRef(options.onEvent);
+  onEventRef.current = options.onEvent;
   const detailKey = queryKeys.room(roomId);
   const historyKey = queryKeys.history(roomId, humanTimeline);
 
@@ -876,6 +888,7 @@ export function useRoomChat(roomId: string) {
       } else {
         if (
           event.roomId === roomId &&
+          event.source !== 'room.pins' &&
           (event.source === 'room.membership' ||
             event.source === 'room.lifecycle' ||
             event.kind === 'room')
@@ -886,6 +899,8 @@ export function useRoomChat(roomId: string) {
           return;
         }
         markPendingRefresh(pending, event, roomId, humanTimeline);
+        // anchor 窗口不在 React Query；由这里转发 recalled 提示，避免另开订阅。
+        onEventRef.current?.(event);
       }
       if (refreshTimerRef.current) return;
       refreshTimerRef.current = setTimeout(() => void flushRefresh(), LIMITS.webRefreshDebounceMs);

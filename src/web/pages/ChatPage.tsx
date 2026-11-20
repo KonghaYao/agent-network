@@ -14,9 +14,11 @@ import { useDropzone } from 'react-dropzone';
 
 import { AppShell } from '../app/AppShell';
 import { Link } from '../app/router';
+import type { ActorStreamEvent } from '../app/mcp/useActorStream';
 import { ChatDialogsMount } from '../features/chat/ChatDialogsMount';
 import { ChatHeader } from '../features/chat/ChatHeader';
 import { Composer, type ComposerReply, type ComposerSendInput } from '../features/chat/Composer';
+import { PinnedMessagesBar } from '../features/chat/PinnedMessagesBar';
 import { Timeline } from '../features/chat/Timeline';
 import { AppSidebar } from '../features/layout/AppSidebar';
 import { FilesPaneFallback } from '../features/panels/FilesPaneFallback';
@@ -110,7 +112,16 @@ function onlineLabel(online: boolean | null): string {
  * 确认前持久化，SSE 只作为刷新提示，不直接把通知正文写进页面。
  */
 export function ChatPage({ roomId }: ChatPageProps) {
-  const chat = useRoomChat(roomId);
+  const searchNavRef = useRef<ReturnType<typeof useChatSearchNavigation> | null>(null);
+  // 单宿主 SSE 只转发撤回提示；anchor 窗口不在 React Query，需要主动收敛。
+  const onChatEvent = useCallback(
+    (event: Extract<ActorStreamEvent, { type: 'event' }>) => {
+      if (event.change !== 'recalled' || !event.messageId) return;
+      searchNavRef.current?.onRemoteRecall(event.messageId);
+    },
+    [],
+  );
+  const chat = useRoomChat(roomId, { onEvent: onChatEvent });
   const queryClient = useQueryClient();
   const recovery = useRecoveryState();
   const restoring = recovery.phase === 'checking' || chat.catchUp?.active === true;
@@ -371,6 +382,8 @@ export function ChatPage({ roomId }: ChatPageProps) {
       setForwardItem((current) =>
         current?.message_id === item.message_id ? null : current,
       );
+      // 本地撤回与远端事件走同一条 anchor 收敛路径。
+      searchNavRef.current?.onRemoteRecall(item.message_id);
       invalidateTasks();
     },
     [closeTrace, invalidateTasks, reply, taskTrace],
@@ -504,6 +517,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
   });
   const navState = searchNav.navigation.state;
   const anchored = navState.status === 'anchored';
+  searchNavRef.current = searchNav;
 
   // 首载骨架与静态输入区：错误态让位给错误页，避免骨架长期占位。
   const loadingShell = !ready && chat.status !== 'error';
@@ -702,6 +716,19 @@ export function ChatPage({ roomId }: ChatPageProps) {
                 }
                 onOpenOverlay={setOverlay}
               />
+              {room ? (
+                <PinnedMessagesBar
+                  key={room.room_id}
+                  pins={room.kind === 'group' ? chat.detail?.pinned_messages ?? [] : []}
+                  members={members}
+                  identityId={identity?.actor_id ?? ''}
+                  identityName={identity?.name ?? ''}
+                  canManage={moderation.canModerate}
+                  busy={moderation.busy}
+                  onLocate={(pin) => void searchNav.locatePin(pin)}
+                  onUnpin={(pin) => void moderation.unpin(pin.message_id)}
+                />
+              ) : null}
               {room?.read_only ? (
                 <Alert
                   id="room-archive-banner"
