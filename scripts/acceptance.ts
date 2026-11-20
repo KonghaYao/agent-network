@@ -76,6 +76,7 @@ import { runDevicePairingAcceptance } from './lib/device-pairing-acceptance';
 import { runDeviceSyncAcceptance } from './lib/device-sync-acceptance';
 import { runRoomsListPeerAcceptance } from './lib/rooms-list-peer-acceptance';
 import { runMessageSearchAcceptance } from './lib/message-search-acceptance';
+import { runMessageSearchGlobalAcceptance } from './lib/message-search-global-acceptance';
 import { runMessageQuoteAcceptance } from './lib/message-quote-acceptance';
 
 const STREAM_URI = 'agentnet://stream';
@@ -1386,6 +1387,7 @@ async function main(): Promise<void> {
     await runRoomLifecycleAcceptance();
     await runRoomsListPeerAcceptance();
     await runMessageSearchAcceptance();
+    await runMessageSearchGlobalAcceptance();
     await runMessageQuoteAcceptance();
     await runGroupInviteAcceptance();
     await runGroupInviteLinkAcceptance();

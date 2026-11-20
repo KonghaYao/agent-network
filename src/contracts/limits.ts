@@ -29,10 +29,28 @@ export const LIMITS = {
   /** 消息上下文前后条数上限与默认值。 */
   messageContextMax: 10,
   messageContextDefault: 3,
-  /** 搜索结果片段字符数。 */
+  /** 搜索结果片段字符数（码点）。 */
   messageSearchSnippetChars: 240,
+  /** 搜索结果片段首个命中前的上下文码点数。 */
+  messageSearchSnippetContextChars: 40,
+  /** 模糊搜索单请求最多检查的候选消息数。 */
+  messageSearchFuzzyScanMax: 500,
+  /** 模糊搜索单请求最多读取的正文 UTF-8 字节数。 */
+  messageSearchFuzzyScanBytes: 2 * 1024 * 1024,
+  /** 模糊搜索单次读取候选 metadata 的批量上限。 */
+  messageSearchFuzzyBatchMax: 32,
+  /** 同义词语义组最多保留的归一化词数。 */
+  messageSearchSynonymGroupMax: 8,
+  /** 同义词单次扩展返回的归一化词数上限。 */
+  messageSearchSynonymExpansionMax: 8,
+  /** 参与同义词匹配的最小归一化码点数，避免短词泛化。 */
+  messageSearchSynonymMinCodePoints: 2,
   /** 搜索游标字符串长度上限。 */
   messageSearchCursorMax: 2048,
+  /** 网页搜索输入防抖（毫秒）。 */
+  webMessageSearchDebounceMs: 300,
+  /** 网页定位目标消息的闪烁时长（毫秒）。 */
+  webMessageSearchFlashMs: 1_600,
   /** 消息式 Task 单次摘要批量上限；未标记或不可见的根直接省略。 */
   taskSummaryRootsMax: 20,
   /** 摘要参与者头像组上限；`participant_count` 仍返回完整去重计数。 */

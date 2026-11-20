@@ -32,6 +32,13 @@ export interface MessageView extends MessagePreviewView {
   delivery_updated_at: string | null;
 }
 
+/** anchor 请求附带的窗口位置；两侧提示仅用于“还有更早/更新”展示。 */
+export interface AnchorWindow {
+  message_id: string;
+  has_older: boolean;
+  has_newer: boolean;
+}
+
 export interface MessagePage {
   items: HistoryMessageView[];
   next_cursor: string | null;
@@ -40,6 +47,8 @@ export interface MessagePage {
   head_seq: string;
   /** 本次读取采用的授权快照；与房间、文件、任务读取使用同一计算入口。 */
   authorization: HistorySnapshot;
+  /** 仅 anchor 请求返回。 */
+  anchor_window?: AnchorWindow;
 }
 
 /**

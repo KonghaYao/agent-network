@@ -581,6 +581,12 @@ export const timelineMessageSchema = historyMessageSchema.extend({
 
 export const timelineItemSchema = z.union([timelineMessageSchema, timelinePresenceSchema]);
 
+export const anchorWindowSchema = z.object({
+  message_id: z.string(),
+  has_older: z.boolean(),
+  has_newer: z.boolean(),
+});
+
 export const historyPageSchema = z.object({
   items: z.array(historyMessageSchema),
   next_cursor: z.string().nullable(),
@@ -595,6 +601,8 @@ export const historyPageSchema = z.object({
   timeline_has_more: z.boolean().optional(),
   timeline_snapshot: z.string().optional(),
   timeline_resume_cursor: z.string().optional(),
+  /** 仅 anchor 请求返回：锚点及窗口两侧是否还有消息。 */
+  anchor_window: anchorWindowSchema.optional(),
 });
 
 /** 消息式 Task 的参与者：只统计集合内 Agent 作者，按首次参与顺序去重。 */

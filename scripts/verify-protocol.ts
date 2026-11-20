@@ -28,6 +28,7 @@ import { runRoomInviteReplayUnitChecks } from './lib/room-invite-replay-unit';
 import { runOwnerlessRoomUnitChecks } from './lib/ownerless-room-unit';
 import { runRoomQuotaUnitChecks } from './lib/room-quota-unit';
 import { runMessageSearchFtsUnitChecks } from './lib/message-search-fts-unit';
+import { runMessageSearchGlobalUnitChecks } from './lib/message-search-global-unit';
 import { runMessageQuoteUnitChecks } from './lib/message-quote-unit';
 
 const STREAM_URI = 'agentnet://stream';
@@ -888,6 +889,41 @@ async function main(): Promise<void> {
     'history 输出 schema 包含消息式 Task 归属',
     historySchema.includes('"task_root_id"'),
     historyTool?.outputSchema,
+  );
+  check(
+    'history 输入 schema 包含 anchor_message_id',
+    JSON.stringify(historyTool?.inputSchema ?? {}).includes('"anchor_message_id"'),
+    historyTool?.inputSchema,
+  );
+  check(
+    'history 输出 schema 包含 anchor_window',
+    historySchema.includes('"anchor_window"'),
+    historyTool?.outputSchema,
+  );
+  const messageSearchTool = listed?.tools?.find(
+    (tool) => tool.name === 'network_message_search',
+  ) as TaskToolView | undefined;
+  const messageSearchInput = JSON.stringify(messageSearchTool?.inputSchema ?? {});
+  const messageSearchOutput = JSON.stringify(messageSearchTool?.outputSchema ?? {});
+  check(
+    'message_search 输入包含 exact/fuzzy 模式与 room/all 范围',
+    ['"mode"', '"exact"', '"fuzzy"', '"scope"', '"room"', '"all"'].every((marker) =>
+      messageSearchInput.includes(marker),
+    ),
+    messageSearchTool?.inputSchema,
+  );
+  check(
+    'message_search 输出包含高亮区间、模糊预算与房间展示字段',
+    [
+      '"match_ranges"',
+      '"mode"',
+      '"scan_limited"',
+      '"scanned_count"',
+      '"room_kind"',
+      '"room_display_name"',
+      '"authorization_digest"',
+    ].every((marker) => messageSearchOutput.includes(marker)),
+    messageSearchTool?.outputSchema,
   );
 
   interface TaskToolView {
@@ -3491,7 +3527,11 @@ async function main(): Promise<void> {
   );
   const historyResult = (
     historyResponse.body.result as
-      | { structuredContent?: { items?: { sender_kind?: string | null }[] } }
+      | {
+          structuredContent?: {
+            items?: { sender_kind?: string | null; message_id?: string }[];
+          };
+        }
       | undefined
   )?.structuredContent;
   const historyKinds = new Set((historyResult?.items ?? []).map((item) => item.sender_kind));
@@ -3511,6 +3551,48 @@ async function main(): Promise<void> {
     ),
     historyResult?.items?.map((item) => item.sender_kind),
   );
+
+  // anchor 窗口：返回目标消息与两侧提示，cursor 只表示更早侧。
+  const anchorTarget = historyResult?.items?.[0]?.message_id;
+  if (anchorTarget) {
+    const anchored = await rawToolCall<{
+      items: { message_id: string }[];
+      next_cursor: string | null;
+      has_more: boolean;
+      anchor_window?: { message_id: string; has_older: boolean; has_newer: boolean };
+    }>(browserToken, 'network_history_list', {
+      room_id: historyRoomId,
+      anchor_message_id: anchorTarget,
+      limit: 3,
+    });
+    check(
+      'history anchor 窗口包含目标消息',
+      anchored.data?.items.some((item) => item.message_id === anchorTarget) === true,
+      anchored.data,
+    );
+    checkEqual(
+      'history anchor_window 指向目标消息',
+      anchored.data?.anchor_window?.message_id,
+      anchorTarget,
+    );
+    const anchorAfter = await rawToolCall(browserToken, 'network_history_list', {
+      room_id: historyRoomId,
+      anchor_message_id: anchorTarget,
+      direction: 'after',
+    });
+    checkEqual('history anchor 拒绝 direction=after', anchorAfter.code, 'INVALID_ARGUMENT');
+    const anchorWithCursor = await rawToolCall(browserToken, 'network_history_list', {
+      room_id: historyRoomId,
+      anchor_message_id: anchorTarget,
+      cursor: anchored.data?.next_cursor ?? 'missing_cursor',
+      limit: 3,
+    });
+    checkEqual(
+      'history anchor 拒绝 cursor',
+      anchorWithCursor.code,
+      'INVALID_ARGUMENT',
+    );
+  }
 
   // after 游标必须单调前进：本页返回消息时指向最后一条 created_seq；
   // 再次传入不得重复返回同一段，避免 CLI reconnect 补读原地打转。
@@ -4233,6 +4315,7 @@ async function main(): Promise<void> {
   await runDeliverySenderUnitChecks();
   await runRoomInviteReplayUnitChecks();
   await runMessageSearchFtsUnitChecks();
+  await runMessageSearchGlobalUnitChecks();
   runMessageQuoteUnitChecks();
 
   console.log(`协议验收通过: ${checksPassed()} 项`);

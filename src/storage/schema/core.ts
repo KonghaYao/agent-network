@@ -187,6 +187,10 @@ export const messages = sqliteTable(
   (table) => [
     primaryKey({ columns: [table.message_id] }),
     index('idx_messages_room_seq').on(table.room_id, sql`${table.created_seq} desc`),
+    index('idx_messages_global_order').on(
+      sql`${table.created_at} desc`,
+      sql`${table.message_id} desc`,
+    ),
     index('idx_messages_root').on(table.root_id, table.created_seq),
     index('idx_messages_room_reply_to')
       .on(table.room_id, table.reply_to, table.created_seq)

@@ -2,16 +2,17 @@ import { BusinessError } from '../contracts/errors';
 import { decodeCursor, encodeCursor } from '../contracts/cursor';
 import { clampPage, LIMITS } from '../contracts/limits';
 import type { HistoryListInput } from '../contracts/schemas';
-import { getActorsByIds, listHistoryMessagesByIds } from '../storage/queries';
+import { getActorsByIds, getMessage, listHistoryMessagesByIds } from '../storage/queries';
 import type { RoomRow } from '../storage/rows';
 import { deliveryStatesFor, mentionsFor, nullableString } from './message-view-helpers';
-import type { HistoryMessageView } from './messages';
+import type { AnchorWindow, HistoryMessageView } from './messages/view';
 import {
   decodeHistoryCursor,
   historyCursorScope,
   historySnapshot,
   type HistoryBoundary,
   type HistorySnapshot,
+  visibleMessage,
 } from './room-history';
 
 /**
@@ -53,6 +54,8 @@ export interface TimelinePage {
   timeline_resume_cursor: string;
   /** 本次读取采用的授权快照；与消息、文件、任务读取一致。 */
   authorization: HistorySnapshot;
+  /** 仅 anchor 请求返回：锚点及窗口两侧是否还有消息。 */
+  anchor_window?: AnchorWindow;
 }
 
 interface TimelineKeyRow {
@@ -125,6 +128,15 @@ function afterCursor(scope: string, commitSeq: number, snapshot: number): string
   });
 }
 
+const TIMELINE_UNION = `
+    SELECT 'message' AS kind, message_id AS item_id, created_at AS occurred_at, created_seq AS commit_seq
+      FROM messages
+     WHERE room_id = ? AND created_seq <= ? AND created_seq >= ?
+    UNION ALL
+    SELECT 'presence' AS kind, presence_event_id AS item_id, occurred_at, timeline_seq AS commit_seq
+      FROM room_presence_events
+     WHERE room_id = ? AND timeline_seq <= ? AND timeline_seq >= ?`;
+
 async function keyPage(
   db: D1Database,
   room: RoomRow,
@@ -134,14 +146,7 @@ async function keyPage(
   limit: number,
   boundary: HistoryBoundary,
 ): Promise<TimelineKeyRow[]> {
-  const union = `
-    SELECT 'message' AS kind, message_id AS item_id, created_at AS occurred_at, created_seq AS commit_seq
-      FROM messages
-     WHERE room_id = ? AND created_seq <= ? AND created_seq >= ?
-    UNION ALL
-    SELECT 'presence' AS kind, presence_event_id AS item_id, occurred_at, timeline_seq AS commit_seq
-      FROM room_presence_events
-     WHERE room_id = ? AND timeline_seq <= ? AND timeline_seq >= ?`;
+  const union = TIMELINE_UNION;
 
   if (direction === 'before') {
     const predicate = cursor
@@ -192,6 +197,49 @@ async function keyPage(
     )
     .all<TimelineKeyRow>();
   return rows.results;
+}
+
+/** anchor 两侧各取 limit+1，仅用于判断窗口外是否还有消息。 */
+async function anchorKeyPage(
+  db: D1Database,
+  room: RoomRow,
+  anchor: TimelineKeyRow,
+  beforeCount: number,
+  afterCount: number,
+  snapshot: number,
+  boundary: HistoryBoundary,
+): Promise<{ older: TimelineKeyRow[]; newer: TimelineKeyRow[] }> {
+  const baseBinds: unknown[] = [
+    room.room_id,
+    snapshot,
+    boundary.fromSeq,
+    room.room_id,
+    snapshot,
+    boundary.fromSeq,
+  ];
+  const [older, newer] = await Promise.all([
+    db
+      .prepare(
+        `SELECT kind, item_id, occurred_at, commit_seq
+           FROM (${TIMELINE_UNION}) AS timeline
+          WHERE occurred_at < ? OR (occurred_at = ? AND commit_seq < ?)
+          ORDER BY occurred_at DESC, commit_seq DESC
+          LIMIT ?`,
+      )
+      .bind(...baseBinds, anchor.occurred_at, anchor.occurred_at, anchor.commit_seq, beforeCount + 1)
+      .all<TimelineKeyRow>(),
+    db
+      .prepare(
+        `SELECT kind, item_id, occurred_at, commit_seq
+           FROM (${TIMELINE_UNION}) AS timeline
+          WHERE occurred_at > ? OR (occurred_at = ? AND commit_seq > ?)
+          ORDER BY occurred_at ASC, commit_seq ASC
+          LIMIT ?`,
+      )
+      .bind(...baseBinds, anchor.occurred_at, anchor.occurred_at, anchor.commit_seq, afterCount + 1)
+      .all<TimelineKeyRow>(),
+  ]);
+  return { older: older.results, newer: newer.results };
 }
 
 async function materialize(
@@ -275,6 +323,79 @@ async function materialize(
   return items;
 }
 
+async function timelineAnchorPage(
+  db: D1Database,
+  room: RoomRow,
+  input: HistoryListInput,
+  boundary: HistoryBoundary,
+  limit: number,
+  scope: string,
+): Promise<TimelinePage> {
+  const anchor = await getMessage(db, input.anchor_message_id!);
+  if (
+    !anchor ||
+    anchor.room_id !== room.room_id ||
+    anchor.body_bytes <= 0 ||
+    !visibleMessage(anchor, boundary)
+  ) {
+    throw new BusinessError('NOT_FOUND', '消息不存在或当前历史授权不可见');
+  }
+  const max = Math.min(
+    await currentMaxSeq(db, room),
+    boundary.toSeq === null ? Number.POSITIVE_INFINITY : boundary.toSeq,
+  );
+  const snapshot = Math.max(max, boundary.fromSeq);
+  const cappedSnapshot = boundary.toSeq === null ? snapshot : Math.min(snapshot, boundary.toSeq);
+  const anchorKey: TimelineKeyRow = {
+    kind: 'message',
+    item_id: anchor.message_id,
+    occurred_at: anchor.created_at,
+    commit_seq: anchor.created_seq,
+  };
+  const beforeCount = Math.floor((limit - 1) / 2);
+  const afterCount = limit - 1 - beforeCount;
+  const { older, newer } = await anchorKeyPage(
+    db,
+    room,
+    anchorKey,
+    beforeCount,
+    afterCount,
+    cappedSnapshot,
+    boundary,
+  );
+  const hasOlder = older.length > beforeCount;
+  const hasNewer = newer.length > afterCount;
+  const keys = [
+    ...newer.slice(0, afterCount).reverse(),
+    anchorKey,
+    ...older.slice(0, beforeCount),
+  ];
+  const items = await materialize(db, room, keys);
+  const oldest = keys.at(-1);
+  return {
+    items: [],
+    next_cursor: null,
+    has_more: false,
+    snapshot: String(cappedSnapshot),
+    head_seq: String(room.head_seq),
+    view: 'timeline',
+    timeline_items: items,
+    timeline_next_cursor:
+      hasOlder && oldest
+        ? beforeCursor(scope, oldest.occurred_at, oldest.commit_seq, cappedSnapshot)
+        : null,
+    timeline_has_more: hasOlder,
+    timeline_snapshot: String(cappedSnapshot),
+    timeline_resume_cursor: afterCursor(scope, cappedSnapshot, cappedSnapshot),
+    authorization: historySnapshot(boundary),
+    anchor_window: {
+      message_id: anchor.message_id,
+      has_older: hasOlder,
+      has_newer: hasNewer,
+    },
+  };
+}
+
 export async function timelineList(
   db: D1Database,
   room: RoomRow,
@@ -283,6 +404,9 @@ export async function timelineList(
 ): Promise<TimelinePage> {
   const scope = historyCursorScope('timeline', room.room_id, boundary.memberGeneration);
   const limit = clampPage(input.limit, LIMITS.historyPageDefault, LIMITS.historyPageMax);
+  if (input.anchor_message_id) {
+    return timelineAnchorPage(db, room, input, boundary, limit, scope);
+  }
   const cursor = input.cursor
     ? decodeHistoryCursor(input.cursor, scope, room.room_id)
     : null;
