@@ -17,7 +17,7 @@ import {
   type SearchMatchRange,
 } from '../contracts/message-search-match';
 import {
-  FUZZY_MATCHER_VERSION,
+  FUZZY_CURSOR_VERSION,
   findFuzzyMatchWithSynonyms,
 } from '../contracts/message-search-synonyms';
 import { sha256Hex } from '../storage/db';
@@ -101,6 +101,13 @@ interface GlobalCursorState extends CursorPayload {
   authorization_digest: string;
   room_set_digest: string;
   snapshot_key: string;
+  /**
+   * 首次查询前捕获的插入水位（SQLite rowid 上界）。
+   *
+   * `created_at` 由写入方给出，可能在分页后回填更早的时间戳；只靠
+   * `created_at <= snapshot` 无法排除这类迟到写入，因此额外固定 rowid 上界。
+   */
+  snapshot_rowid: number;
 }
 
 interface MessageKey {
@@ -135,6 +142,19 @@ function expired(): BusinessError {
     'CURSOR_EXPIRED',
     '搜索范围、排序快照或权限已变化，请重新搜索',
   );
+}
+
+/**
+ * 捕获当前数据库的消息插入水位。
+ *
+ * 分组按 `created_at` 排序，但 `created_at` 可由发送方回填；rowid 只随插入
+ * 递增（删除后可能复用，但不会倒退），用作固定快照的插入上界。
+ */
+async function messageRowidWatermark(db: D1Database): Promise<number> {
+  const row = await db
+    .prepare('SELECT COALESCE(MAX(rowid), 0) AS watermark FROM messages')
+    .first<{ watermark: number }>();
+  return row?.watermark ?? 0;
 }
 
 async function loadGlobalAuthorization(
@@ -214,7 +234,10 @@ function decodeGlobalCursor(
     record.room_set_digest !== expected.authorization.roomSetDigest ||
     typeof record.key !== 'string' ||
     record.key.length === 0 ||
-    typeof record.snapshot_key !== 'string'
+    typeof record.snapshot_key !== 'string' ||
+    typeof record.snapshot_rowid !== 'number' ||
+    !Number.isSafeInteger(record.snapshot_rowid) ||
+    record.snapshot_rowid < 0
   ) {
     throw expired();
   }
@@ -381,8 +404,10 @@ async function exactGlobalSearch(
     : null;
   const limit = input.limit ?? LIMITS.messageSearchPageDefault;
   const ftsPhrase = messageSearchFtsPhrase(input.query, options.ftsEnabled ?? true);
+  const snapshotRowid = cursor ? cursor.snapshot_rowid : await messageRowidWatermark(db);
   const cursorSql = cursor
-    ? 'AND (m.created_at < ? OR (m.created_at = ? AND m.message_id < ?))'
+    ? `AND (m.created_at < ? OR (m.created_at = ? AND m.message_id < ?))
+       AND (m.created_at < ? OR (m.created_at = ? AND m.message_id <= ?))`
     : '';
   const ftsSql =
     ftsPhrase === null
@@ -392,8 +417,8 @@ async function exactGlobalSearch(
     LIMITS.messageSearchSnippetContextChars,
     Math.max(0, LIMITS.messageSearchSnippetChars - Array.from(input.query).length),
   );
-  const binds: unknown[] = [actor];
-  if (cursor) binds.push(cursor.seq, cursor.seq, cursor.key);
+  const binds: unknown[] = [actor, snapshotRowid];
+  if (cursor) binds.push(cursor.seq, cursor.seq, cursor.key, cursor.snapshot, cursor.snapshot, cursor.snapshot_key);
   if (ftsPhrase !== null) binds.push(ftsPhrase);
   binds.push(
     input.query,
@@ -409,11 +434,12 @@ async function exactGlobalSearch(
          SELECT m.message_id, m.room_id, m.sender_id, m.body, m.body_bytes, m.preview,
                 m.created_at, m.created_seq, m.reply_to,
                 ar.kind AS room_kind, ar.title AS room_title
-           FROM messages m
-           JOIN accessible_rooms ar ON ar.room_id = m.room_id
+           FROM messages m INDEXED BY idx_messages_global_order
+           CROSS JOIN accessible_rooms ar ON ar.room_id = m.room_id
           WHERE m.body_bytes > 0
             AND m.created_seq >= ar.from_seq
             AND (ar.to_seq IS NULL OR m.created_seq <= ar.to_seq)
+            AND m.rowid <= ?
             ${cursorSql}
             ${ftsSql}
        )
@@ -458,6 +484,7 @@ async function exactGlobalSearch(
             key: last.message_id,
             snapshot: snapshot?.at ?? 0,
             snapshot_key: snapshot?.id ?? '',
+            snapshot_rowid: snapshotRowid,
             mode: 'exact',
             matcher_version: EXACT_MATCHER_VERSION,
             query_hash: queryHash,
@@ -508,12 +535,13 @@ async function fuzzyGlobalSearch(
   const cursor = input.cursor
     ? decodeGlobalCursor(input.cursor, {
         mode: 'fuzzy',
-        matcherVersion: FUZZY_MATCHER_VERSION,
+        matcherVersion: FUZZY_CURSOR_VERSION,
         queryHash,
         authorization,
       })
     : null;
   const limit = input.limit ?? LIMITS.messageSearchPageDefault;
+  const snapshotRowid = cursor ? cursor.snapshot_rowid : await messageRowidWatermark(db);
   let lastExamined: MessageKey | null = cursor
     ? keyOf(cursor.seq, cursor.key ?? '')
     : null;
@@ -524,11 +552,18 @@ async function fuzzyGlobalSearch(
   let scannedBytes = 0;
   const rawItems: GlobalRawItem[] = [];
 
+  const snapshotBound = (): string =>
+    snapshot
+      ? 'AND (m.created_at < ? OR (m.created_at = ? AND m.message_id <= ?))'
+      : '';
+  const snapshotBinds = (): unknown[] =>
+    snapshot ? [snapshot.at, snapshot.at, snapshot.id] : [];
+
   const loadCandidates = async (upper: MessageKey | null): Promise<GlobalFuzzyCandidate[]> => {
     const keyset = upper
       ? 'AND (m.created_at < ? OR (m.created_at = ? AND m.message_id < ?))'
       : '';
-    const binds: unknown[] = [actor];
+    const binds: unknown[] = [actor, snapshotRowid, ...snapshotBinds()];
     if (upper) binds.push(upper.at, upper.at, upper.id);
     binds.push(LIMITS.messageSearchFuzzyBatchMax);
     const rows = await db
@@ -537,10 +572,12 @@ async function fuzzyGlobalSearch(
          SELECT m.message_id, m.room_id, m.sender_id, a.name AS sender_name,
                 a.kind AS sender_kind, m.body_bytes, m.preview, m.created_at,
                 m.created_seq, m.reply_to, ar.kind AS room_kind, ar.title AS room_title
-           FROM messages m
-           JOIN accessible_rooms ar ON ar.room_id = m.room_id
+           FROM messages m INDEXED BY idx_messages_global_order
+           CROSS JOIN accessible_rooms ar ON ar.room_id = m.room_id
            JOIN actors a ON a.actor_id = m.sender_id
           WHERE ${FUZZY_VISIBILITY}
+            AND m.rowid <= ?
+            ${snapshotBound()}
             ${keyset}
           ORDER BY m.created_at DESC, m.message_id DESC
           LIMIT ?`,
@@ -552,15 +589,18 @@ async function fuzzyGlobalSearch(
 
   const loadBodies = async (ids: string[]): Promise<Map<string, string>> => {
     if (ids.length === 0) return new Map();
-    const placeholders = ids.map(() => '?').join(',');
+    // 从 ID 列表驱动主键查找；直接 JOIN accessible_rooms 会让规划器按房间索引
+    // 扫描并逐条过滤，40 万条下每批 32 个 ID 需要遍历大量消息。
+    const placeholders = ids.map(() => '(?)').join(',');
     const rows = await db
       .prepare(
-        `WITH ${ACCESSIBLE_ROOMS_CTE}
+        `WITH ${ACCESSIBLE_ROOMS_CTE},
+         wanted(message_id) AS (VALUES ${placeholders})
          SELECT m.message_id, m.body
-           FROM messages m
+           FROM wanted w
+           JOIN messages m ON m.message_id = w.message_id
            JOIN accessible_rooms ar ON ar.room_id = m.room_id
-          WHERE ${FUZZY_VISIBILITY}
-            AND m.message_id IN (${placeholders})`,
+          WHERE ${FUZZY_VISIBILITY}`,
       )
       .bind(actor, ...ids)
       .all<{ message_id: string; body: string }>();
@@ -572,13 +612,15 @@ async function fuzzyGlobalSearch(
       .prepare(
         `WITH ${ACCESSIBLE_ROOMS_CTE}
          SELECT 1 AS found
-           FROM messages m
-           JOIN accessible_rooms ar ON ar.room_id = m.room_id
+           FROM messages m INDEXED BY idx_messages_global_order
+           CROSS JOIN accessible_rooms ar ON ar.room_id = m.room_id
           WHERE ${FUZZY_VISIBILITY}
+            AND m.rowid <= ?
+            ${snapshotBound()}
             AND (m.created_at < ? OR (m.created_at = ? AND m.message_id < ?))
           LIMIT 1`,
       )
-      .bind(actor, key.at, key.at, key.id)
+      .bind(actor, snapshotRowid, ...snapshotBinds(), key.at, key.at, key.id)
       .first<{ found: number }>();
     return row !== null;
   };
@@ -657,8 +699,9 @@ async function fuzzyGlobalSearch(
             key: lastExamined.id,
             snapshot: snapshot?.at ?? 0,
             snapshot_key: snapshot?.id ?? '',
+            snapshot_rowid: snapshotRowid,
             mode: 'fuzzy',
-            matcher_version: FUZZY_MATCHER_VERSION,
+            matcher_version: FUZZY_CURSOR_VERSION,
             query_hash: queryHash,
             authorization_digest: authorization.authorizationDigest,
             room_set_digest: authorization.roomSetDigest,

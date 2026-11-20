@@ -37,6 +37,7 @@ const NEW_MIGRATIONS = [
   '0046_memory_experience_catchup.sql',
   '0047_message_search_fts.sql',
   '0048_message_task_completion.sql',
+  '0049_message_global_order_index.sql',
 ];
 const AT = 1_700_000_000_000;
 

@@ -7,13 +7,26 @@
  */
 
 import { LIMITS } from './limits';
-import { findFuzzyMatch, normalizeFuzzyQuery, type SearchMatchRange } from './message-search-match';
+import {
+  findFuzzyMatch,
+  findNormalizedSubstringMatch,
+  normalizeFuzzyQuery,
+  type SearchMatchRange,
+} from './message-search-match';
 
 /** 含同义词扩展的 fuzzy matcher 版本；变化时必须让旧 fuzzy 游标失效。 */
 export const FUZZY_MATCHER_VERSION = 'mfuzzy-v2';
 
 /** 同义词词表版本；词表升级时旧游标同样失效。 */
 export const MESSAGE_SEARCH_SYNONYM_VERSION = 'syn-v1';
+
+/**
+ * fuzzy 游标绑定的算法版本。
+ *
+ * 词表版本单独并入游标 scope，词表升级或匹配语义变化都会让旧游标失效；
+ * 不能只靠 `FUZZY_MATCHER_VERSION`，否则词表更新后旧游标仍会沿用旧结果。
+ */
+export const FUZZY_CURSOR_VERSION = `${FUZZY_MATCHER_VERSION}:${MESSAGE_SEARCH_SYNONYM_VERSION}`;
 
 /**
  * 常见中文聊天/技术说法的语义组。
@@ -103,14 +116,19 @@ export function fuzzySearchTerms(normalizedQuery: string): string[] {
 /**
  * 在正文中按「原查询 → 同义词」顺序匹配，返回首个命中的区间。
  *
+ * 原查询保留保序子序列语义；同义词必须归一化后连续命中，避免
+ * 「拖拽失效」跨段匹配到「拖把拽到门口，失去效力」这类误召回。
  * 每条消息只返回一次命中，调用方无需再按 message_id 去重。
  */
 export function findFuzzyMatchWithSynonyms(
   body: string,
   normalizedQuery: string,
 ): { term: string; ranges: SearchMatchRange[] } | null {
-  for (const term of fuzzySearchTerms(normalizedQuery)) {
-    const ranges = findFuzzyMatch(body, term);
+  for (const [index, term] of fuzzySearchTerms(normalizedQuery).entries()) {
+    const ranges =
+      index === 0
+        ? findFuzzyMatch(body, term)
+        : findNormalizedSubstringMatch(body, term);
     if (ranges !== null) return { term, ranges };
   }
   return null;

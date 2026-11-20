@@ -2,8 +2,9 @@
  * 跨会话全局搜索基准：多房间、每房数千条消息。
  *
  * 运行：`bun scripts/benchmark-message-search-global.ts`
- * 只使用内存 SQLite 与真实域层，输出 global exact/fuzzy 的 P50/P95/P99、
- * 扫描候选数、游标长度，不打印消息正文或凭据。
+ * 规模可用 `BENCH_ROOMS` / `BENCH_PER_ROOM` / `BENCH_ROUNDS` 覆盖，
+ * 默认 4 × 3000。只使用内存 SQLite 与真实域层，输出 global exact/fuzzy 的
+ * P50/P95/P99、扫描候选数、游标长度，不打印消息正文或凭据。
  */
 
 import { Database } from 'bun:sqlite';
@@ -18,9 +19,13 @@ import { getActor } from '../src/storage/queries';
 
 const MIGRATIONS = join(resolve(import.meta.dir, '..'), 'migrations');
 const NOW = Date.now();
-const ROOMS = 4;
-const PER_ROOM = 3_000;
-const ROUNDS = 15;
+const positiveInt = (value: string | undefined, fallback: number): number => {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+};
+const ROOMS = positiveInt(process.env.BENCH_ROOMS, 4);
+const PER_ROOM = positiveInt(process.env.BENCH_PER_ROOM, 3_000);
+const ROUNDS = positiveInt(process.env.BENCH_ROUNDS, 15);
 
 interface SearchPage {
   items: Array<{ message_id: string }>;

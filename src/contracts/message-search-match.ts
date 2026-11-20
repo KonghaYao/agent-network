@@ -5,6 +5,8 @@
  * - exact：ASCII 大小写不敏感（与 SQLite `lower()` 对齐）的连续子串；
  * - fuzzy：双侧全角 ASCII 折叠、ASCII 小写、删除 Unicode 空白/标点后，
  *   在正文中按顺序寻找 query 码点子序列；
+ * - 同义词扩展额外使用归一化连续子串（`findNormalizedSubstringMatch`），
+ *   避免子序列跨词、跨段误召回；
  * - 所有区间都是 `snippet` 字符串本身的 UTF-16 code unit、左闭右开区间。
  */
 
@@ -78,6 +80,92 @@ export function findFuzzyMatch(
     offset += char.length;
   }
   return null;
+}
+
+interface NormalizedSegment {
+  /** 该码点在归一化字符串中的起始 UTF-16 下标。 */
+  normalizedStart: number;
+  /** 该码点在归一化字符串中的结束 UTF-16 下标（不含）。 */
+  normalizedEnd: number;
+  /** 原文中的起始 UTF-16 下标。 */
+  sourceStart: number;
+  /** 原文中的结束 UTF-16 下标（不含）。 */
+  sourceEnd: number;
+}
+
+/**
+ * 同义词扩展的连续匹配：归一化后必须是一个连续子串。
+ *
+ * 与 `findFuzzyMatch` 的保序子序列不同，这里不允许跨词、跨段命中；
+ * 空白/标点在归一化时被删除，因此「拖 拽，失 效」仍视为连续。
+ * 返回的区间是从首个命中字符到末个命中字符的原文连续区间。
+ */
+export function findNormalizedSubstringMatch(
+  body: string,
+  normalizedTerm: string,
+): SearchMatchRange[] | null {
+  if (normalizedTerm.length === 0) return null;
+  const segments: NormalizedSegment[] = [];
+  const parts: string[] = [];
+  let normalizedCursor = 0;
+  let offset = 0;
+  for (const char of body) {
+    const folded = foldSearchCodePoint(char.codePointAt(0) ?? 0);
+    if (folded !== null) {
+      parts.push(folded);
+      segments.push({
+        normalizedStart: normalizedCursor,
+        normalizedEnd: normalizedCursor + folded.length,
+        sourceStart: offset,
+        sourceEnd: offset + char.length,
+      });
+      normalizedCursor += folded.length;
+    }
+    offset += char.length;
+  }
+  const normalizedBody = parts.join('');
+  const targetEnd = normalizedTerm.length;
+  let from = 0;
+  while (from <= normalizedBody.length - targetEnd) {
+    const index = normalizedBody.indexOf(normalizedTerm, from);
+    if (index === -1) return null;
+    // 匹配必须对齐到完整码点边界，避免命中代理对的一半。
+    const startSegment = findSegmentAt(segments, index);
+    if (startSegment !== -1) {
+      let cursor = index;
+      let last = startSegment;
+      while (last < segments.length && cursor < index + targetEnd) {
+        const segment = segments[last]!;
+        if (segment.normalizedStart !== cursor) break;
+        cursor = segment.normalizedEnd;
+        last += 1;
+      }
+      if (cursor === index + targetEnd) {
+        return [
+          {
+            start: segments[startSegment]!.sourceStart,
+            end: segments[last - 1]!.sourceEnd,
+          },
+        ];
+      }
+    }
+    from = index + 1;
+  }
+  return null;
+}
+
+/** 二分查找 normalizedStart 恰好等于 index 的段。 */
+function findSegmentAt(segments: readonly NormalizedSegment[], index: number): number {
+  let low = 0;
+  let high = segments.length - 1;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    const segment = segments[middle]!;
+    if (segment.normalizedStart === index) return middle;
+    if (segment.normalizedStart < index) low = middle + 1;
+    else high = middle - 1;
+  }
+  return -1;
 }
 
 function asciiFold(text: string): string {

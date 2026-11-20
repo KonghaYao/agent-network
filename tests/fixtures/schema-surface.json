@@ -44,14 +44,15 @@
     "0045_memory_ledger.sql",
     "0046_memory_experience_catchup.sql",
     "0047_message_search_fts.sql",
-    "0048_message_task_completion.sql"
+    "0048_message_task_completion.sql",
+    "0049_message_global_order_index.sql"
   ],
-  "migrationsDigest": "dde81260e8f2eb90a279eb02b035746b49fce951094fc5f55baf3f6e10f8236a",
+  "migrationsDigest": "b781767a4e1db7e1b43e332d78ec1c11e5b01012df71ce5fdd986d33819534b5",
   "counts": {
     "tables": 120,
     "guardTables": 48,
     "messageSearchTables": 5,
-    "indexes": 219,
+    "indexes": 220,
     "triggers": 7
   },
   "tables": {
@@ -2414,6 +2415,7 @@
         "task_completed_by|TEXT|nn=0|d=null|pk=0|h=0"
       ],
       "indexes": [
+        "idx_messages_global_order|u=0|o=c|p=0|cols=created_at,message_id|desc=1,1",
         "idx_messages_room_reply_to|u=0|o=c|p=1|cols=room_id,reply_to,created_seq|desc=0,0,0",
         "idx_messages_room_seq|u=0|o=c|p=0|cols=room_id,created_seq|desc=0,1",
         "idx_messages_root|u=0|o=c|p=0|cols=root_id,created_seq|desc=0,0",
@@ -2840,5 +2842,5 @@
     "message_search_fts_ai": "c0d538ed07edf48bcc8dfff50d1adf2158b1ef1c75e528640877b7ac08b0fe71",
     "message_search_fts_au": "af71582b06026e26c1b0acb0e15b6d4e504f8b85450ac9351d70042408abbaf7"
   },
-  "digest": "b44d6c3e2a6729ef274808b722b133cedbd19b9d82f799af25d24c8e43b8a59b"
+  "digest": "f0d2ee21f7a9d71174c36c9b55b591724c6529199d51b1ea4d5e486fad388a21"
 }

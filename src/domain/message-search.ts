@@ -9,7 +9,7 @@ import {
   type SearchMatchRange,
 } from '../contracts/message-search-match';
 import {
-  FUZZY_MATCHER_VERSION,
+  FUZZY_CURSOR_VERSION,
   findFuzzyMatchWithSynonyms,
 } from '../contracts/message-search-synonyms';
 import { sha256Hex } from '../storage/db';
@@ -250,7 +250,7 @@ async function fuzzyMessageSearch(
     throw new BusinessError('INVALID_ARGUMENT', '模糊搜索至少需要一个非空白、非标点字符');
   }
   const queryHash = await sha256Hex(normalizedQuery);
-  const scope = `${historyCursorScope('search', room.room_id, boundary.memberGeneration)}:p${boundary.policyRevision}:${FUZZY_MATCHER_VERSION}:q${queryHash}`;
+  const scope = `${historyCursorScope('search', room.room_id, boundary.memberGeneration)}:p${boundary.policyRevision}:${FUZZY_CURSOR_VERSION}:q${queryHash}`;
   const limit = input.limit ?? LIMITS.messageSearchPageDefault;
   const readHead = Math.min(room.head_seq, boundary.toSeq ?? room.head_seq);
   const cursor = input.cursor ? decodeSearchCursor(input.cursor, scope, room.room_id, readHead) : null;

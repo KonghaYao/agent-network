@@ -10,10 +10,15 @@ import { join, resolve } from 'node:path';
 
 import { createD1 } from '../../src/bun/d1';
 import { migrate } from '../../src/bun/migrate';
+import { decodeCursor, encodeCursor, type CursorPayload } from '../../src/contracts/cursor';
 import { LIMITS } from '../../src/contracts/limits';
+import { normalizeFuzzyQuery } from '../../src/contracts/message-search-match';
 import {
+  FUZZY_CURSOR_VERSION,
+  FUZZY_MATCHER_VERSION,
   MESSAGE_SEARCH_SYNONYM_VERSION,
   expandFuzzyQuery,
+  findFuzzyMatchWithSynonyms,
   fuzzySearchTerms,
 } from '../../src/contracts/message-search-synonyms';
 import { messageSearch } from '../../src/domain/message-search';
@@ -471,17 +476,19 @@ async function cursorInvalidationChecks(): Promise<void> {
 async function fuzzyChecks(): Promise<void> {
   const { sqlite, db, owner } = await fixture();
   try {
+    const exactMiss = await search(db, owner, { scope: 'all', query: '拉不动' });
+    checkEqual('同义词只在 fuzzy 生效', exactMiss.items.length, 0);
     insertMessage(sqlite, 'rm_global_direct', 'msg_syn', 4, '拖拽失效 记录', NOW + 600);
     insertMessage(sqlite, 'rm_global_direct', 'msg_syn_both', 5, '拖拽失效 与 无法拖动', NOW + 610);
     insertMessage(sqlite, 'rm_global_group', 'msg_unrelated', 2, '完全无关的文本', NOW + 620);
+    insertMessage(sqlite, 'rm_global_direct', 'msg_syn_spaced', 6, '拖 拽，失 效', NOW + 630);
+    insertMessage(sqlite, 'rm_global_direct', 'msg_syn_reverse', 7, '拉不动 记录', NOW + 640);
 
-    const exactMiss = await search(db, owner, { scope: 'all', query: '拉不动' });
-    checkEqual('同义词只在 fuzzy 生效', exactMiss.items.length, 0);
     const fuzzy = await search(db, owner, { scope: 'all', query: '拉不动', mode: 'fuzzy' });
     checkEqual(
       '全局 fuzzy 同义扩展命中并去重',
       fuzzy.items.map((item) => item.message_id).join(','),
-      'msg_syn_both,msg_syn',
+      'msg_syn_reverse,msg_syn_spaced,msg_syn_both,msg_syn',
     );
     const synonymItem = fuzzy.items.find((item) => item.message_id === 'msg_syn');
     check(
@@ -491,15 +498,77 @@ async function fuzzyChecks(): Promise<void> {
         .join('') === '拖拽失效',
       synonymItem,
     );
-    const unrelated = await search(db, owner, {
-      scope: 'all',
-      query: '拉不动',
-      mode: 'fuzzy',
-    });
+    const spacedItem = fuzzy.items.find((item) => item.message_id === 'msg_syn_spaced');
+    checkEqual(
+      '同义词按归一化连续子串命中并映射原文区间',
+      (spacedItem?.match_ranges ?? [])
+        .map((range) => spacedItem!.snippet.slice(range.start, range.end))
+        .join(''),
+      '拖 拽，失 效',
+    );
+    const reverseItem = fuzzy.items.find((item) => item.message_id === 'msg_syn_reverse');
+    check('同义词反向召回', Boolean(reverseItem), fuzzy.items);
+    const unrelated = fuzzy;
     check(
       '同义词扩展不误报无关文本',
       !unrelated.items.some((item) => item.message_id === 'msg_unrelated'),
       unrelated.items,
+    );
+
+    insertMessage(
+      sqlite,
+      'rm_global_direct',
+      'msg_syn_false_drag',
+      8,
+      '拖把拽到门口，失去效力',
+      NOW + 650,
+    );
+    insertMessage(
+      sqlite,
+      'rm_global_direct',
+      'msg_syn_false_release_a',
+      9,
+      '他发言后布置了作业',
+      NOW + 660,
+    );
+    insertMessage(
+      sqlite,
+      'rm_global_direct',
+      'msg_syn_false_release_b',
+      10,
+      '上面的线条很长',
+      NOW + 670,
+    );
+    insertMessage(
+      sqlite,
+      'rm_global_direct',
+      'msg_syn_false_error',
+      11,
+      '错过的误会',
+      NOW + 680,
+    );
+    const drag = await search(db, owner, { scope: 'all', query: '拉不动', mode: 'fuzzy' });
+    check(
+      '同义词不跨段匹配「拖把拽到门口，失去效力」',
+      !drag.items.some((item) => item.message_id === 'msg_syn_false_drag'),
+      drag.items,
+    );
+    const release = await search(db, owner, { scope: 'all', query: '发版', mode: 'fuzzy' });
+    check(
+      '同义词不跨段匹配「他发言后布置了作业」',
+      !release.items.some((item) => item.message_id === 'msg_syn_false_release_a'),
+      release.items,
+    );
+    check(
+      '同义词不跨段匹配「上面的线条很长」',
+      !release.items.some((item) => item.message_id === 'msg_syn_false_release_b'),
+      release.items,
+    );
+    const error = await search(db, owner, { scope: 'all', query: '报错', mode: 'fuzzy' });
+    check(
+      '同义词不跨段匹配「错过的误会」',
+      !error.items.some((item) => item.message_id === 'msg_syn_false_error'),
+      error.items,
     );
 
     const pages: string[] = [];
@@ -510,6 +579,38 @@ async function fuzzyChecks(): Promise<void> {
       limit: 1,
     });
     let cursor = page.next_cursor;
+    check('全局 fuzzy 首页返回游标', cursor !== null, page);
+    if (cursor) {
+      const payload = decodeCursor(cursor, 'global:search') as unknown as {
+        matcher_version?: string;
+      } & CursorPayload;
+      checkEqual(
+        '全局 fuzzy 游标绑定同义词版本',
+        payload.matcher_version,
+        FUZZY_CURSOR_VERSION,
+      );
+      check(
+        'fuzzy 游标版本包含词表版本',
+        FUZZY_CURSOR_VERSION.includes(MESSAGE_SEARCH_SYNONYM_VERSION),
+        FUZZY_CURSOR_VERSION,
+      );
+      const forged = encodeCursor({
+        ...(payload as unknown as Record<string, unknown>),
+        matcher_version: FUZZY_MATCHER_VERSION,
+      } as unknown as CursorPayload);
+      await expectCode(
+        '缺少同义词版本的旧 fuzzy 游标失效',
+        () =>
+          search(db, owner, {
+            scope: 'all',
+            query: '全局标记',
+            mode: 'fuzzy',
+            limit: 1,
+            cursor: forged,
+          }),
+        'CURSOR_EXPIRED',
+      );
+    }
     pages.push(...page.items.map((item) => item.message_id));
     let guard = 0;
     while (cursor && guard < 20) {
@@ -594,11 +695,135 @@ async function fuzzyBudgetChecks(): Promise<void> {
   }
 }
 
+async function snapshotChecks(): Promise<void> {
+  const seed = async () => {
+    const state = await fixture();
+    insertMessage(state.sqlite, 'rm_global_direct', 'msg_snap_old', 10, '快照标记 最旧', NOW + 100);
+    insertMessage(state.sqlite, 'rm_global_direct', 'msg_snap_mid', 11, '快照标记 中间', NOW + 200);
+    insertMessage(state.sqlite, 'rm_global_direct', 'msg_snap_new', 12, '快照标记 最新', NOW + 300);
+    return state;
+  };
+
+  const exact = await seed();
+  try {
+    const first = await search(exact.db, exact.owner, {
+      scope: 'all',
+      query: '快照标记',
+      limit: 1,
+    });
+    checkEqual(
+      '快照 exact 首页为最新消息',
+      first.items.map((item) => item.message_id).join(','),
+      'msg_snap_new',
+    );
+    insertMessage(
+      exact.sqlite,
+      'rm_global_direct',
+      'msg_snap_backfill',
+      13,
+      '快照标记 迟到',
+      NOW + 299,
+    );
+    insertMessage(
+      exact.sqlite,
+      'rm_global_direct',
+      'msg_snap_future',
+      14,
+      '快照标记 更新',
+      NOW + 400,
+    );
+    const second = await search(exact.db, exact.owner, {
+      scope: 'all',
+      query: '快照标记',
+      limit: 1,
+      cursor: first.next_cursor!,
+    });
+    checkEqual(
+      '快照 exact 第二页排除回填与更新消息',
+      second.items.map((item) => item.message_id).join(','),
+      'msg_snap_mid',
+    );
+    const third = await search(exact.db, exact.owner, {
+      scope: 'all',
+      query: '快照标记',
+      limit: 5,
+      cursor: second.next_cursor!,
+    });
+    checkEqual(
+      '快照 exact 第三页继续返回快照内消息',
+      third.items.map((item) => item.message_id).join(','),
+      'msg_snap_old',
+    );
+    checkEqual('快照 exact 扫描完 has_more=false', third.has_more, false);
+  } finally {
+    exact.sqlite.close();
+  }
+
+  const fuzzy = await seed();
+  try {
+    const first = await search(fuzzy.db, fuzzy.owner, {
+      scope: 'all',
+      query: '快照标记',
+      mode: 'fuzzy',
+      limit: 1,
+    });
+    checkEqual(
+      '快照 fuzzy 首页为最新消息',
+      first.items.map((item) => item.message_id).join(','),
+      'msg_snap_new',
+    );
+    insertMessage(
+      fuzzy.sqlite,
+      'rm_global_direct',
+      'msg_snap_backfill',
+      13,
+      '快照标记 迟到',
+      NOW + 299,
+    );
+    insertMessage(
+      fuzzy.sqlite,
+      'rm_global_direct',
+      'msg_snap_future',
+      14,
+      '快照标记 更新',
+      NOW + 400,
+    );
+    const second = await search(fuzzy.db, fuzzy.owner, {
+      scope: 'all',
+      query: '快照标记',
+      mode: 'fuzzy',
+      limit: 1,
+      cursor: first.next_cursor!,
+    });
+    checkEqual(
+      '快照 fuzzy 第二页排除回填与更新消息',
+      second.items.map((item) => item.message_id).join(','),
+      'msg_snap_mid',
+    );
+    const third = await search(fuzzy.db, fuzzy.owner, {
+      scope: 'all',
+      query: '快照标记',
+      mode: 'fuzzy',
+      limit: 5,
+      cursor: second.next_cursor!,
+    });
+    checkEqual(
+      '快照 fuzzy 第三页继续返回快照内消息',
+      third.items.map((item) => item.message_id).join(','),
+      'msg_snap_old',
+    );
+    checkEqual('快照 fuzzy 扫描完 has_more=false', third.has_more, false);
+  } finally {
+    fuzzy.sqlite.close();
+  }
+}
+
 export async function runMessageSearchGlobalUnitChecks(): Promise<void> {
   await exactGlobalChecks();
   await cursorInvalidationChecks();
   await fuzzyChecks();
   await fuzzyBudgetChecks();
+  await snapshotChecks();
   synonymUnitChecks();
 }
 
@@ -623,4 +848,46 @@ function synonymUnitChecks(): void {
   checkEqual('未命中的查询不扩展', expandFuzzyQuery('完全不存在的查询').length, 0);
   checkEqual('单字查询不触发短词泛化', expandFuzzyQuery('慢').length, 0);
   checkEqual('同义词版本号可观测', MESSAGE_SEARCH_SYNONYM_VERSION, 'syn-v1');
+  checkEqual(
+    'fuzzy 游标版本并入同义词版本',
+    FUZZY_CURSOR_VERSION,
+    `${FUZZY_MATCHER_VERSION}:${MESSAGE_SEARCH_SYNONYM_VERSION}`,
+  );
+
+  const dragQuery = normalizeFuzzyQuery('拉不动');
+  checkEqual(
+    '同义词不跨段命中「拖把拽到门口，失去效力」',
+    findFuzzyMatchWithSynonyms('拖把拽到门口，失去效力', dragQuery),
+    null,
+  );
+  const dragged = findFuzzyMatchWithSynonyms('拖 拽，失 效', dragQuery);
+  checkEqual(
+    '同义词按归一化连续子串命中',
+    dragged === null
+      ? ''
+      : '拖 拽，失 效'.slice(dragged.ranges[0]!.start, dragged.ranges[0]!.end),
+    '拖 拽，失 效',
+  );
+  checkEqual(
+    '同义词反向召回含「拉不动」的消息',
+    findFuzzyMatchWithSynonyms('拉不动 记录', normalizeFuzzyQuery('拖拽失效'))?.term,
+    '拉不动',
+  );
+
+  const releaseQuery = normalizeFuzzyQuery('发版');
+  checkEqual(
+    '同义词不跨段命中「他发言后布置了作业」',
+    findFuzzyMatchWithSynonyms('他发言后布置了作业', releaseQuery),
+    null,
+  );
+  checkEqual(
+    '同义词不跨段命中「上面的线条很长」',
+    findFuzzyMatchWithSynonyms('上面的线条很长', releaseQuery),
+    null,
+  );
+  checkEqual(
+    '同义词不跨段命中「错过的误会」',
+    findFuzzyMatchWithSynonyms('错过的误会', normalizeFuzzyQuery('报错')),
+    null,
+  );
 }
