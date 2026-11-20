@@ -225,6 +225,258 @@ async function finishIdentitySwitch(page: Page, name: string) {
   await expect(page.locator('#account-name')).toHaveText(name, { timeout: 20_000 });
 }
 
+interface EntryProbeState {
+  masks: { at: number; text: string }[];
+  catchups: { at: number; text: string; active: string | null; rebuilt: string | null }[];
+}
+
+/**
+ * 进房前安装 DOM 记录器：遮罩一闪而过也要留下证据。
+ *
+ * 每次页面加载重置；调用方在导航/刷新后读取。只记录可见文本与状态位，
+ * 不读取消息正文或凭据。
+ */
+async function installEntryProbe(page: Page) {
+  await page.addInitScript(() => {
+    const state: EntryProbeState = { masks: [], catchups: [] };
+    (window as unknown as { __entryProbe: EntryProbeState }).__entryProbe = state;
+    let lastMask = '';
+    let lastCatchup = '';
+    const record = () => {
+      const mask = document.getElementById('recovery-mask');
+      const maskText = mask
+        ? (document.getElementById('recovery-mask-text')?.textContent ?? '')
+            .replace(/\s+/g, ' ')
+            .trim()
+        : '';
+      if (mask && maskText !== lastMask) {
+        state.masks.push({ at: Math.round(performance.now()), text: maskText });
+        lastMask = maskText;
+      } else if (!mask) {
+        lastMask = '';
+      }
+      const catchup = document.getElementById('history-catchup');
+      if (catchup instanceof HTMLElement && !catchup.hidden) {
+        const text = (catchup.textContent ?? '').replace(/\s+/g, ' ').trim();
+        const signature = `${text}|${catchup.dataset.catchupActive ?? ''}|${catchup.dataset.catchupRebuilt ?? ''}`;
+        if (signature !== lastCatchup) {
+          state.catchups.push({
+            at: Math.round(performance.now()),
+            text,
+            active: catchup.dataset.catchupActive ?? null,
+            rebuilt: catchup.dataset.catchupRebuilt ?? null,
+          });
+          lastCatchup = signature;
+        }
+      } else {
+        lastCatchup = '';
+      }
+    };
+    const start = () => {
+      record();
+      new MutationObserver(record).observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['hidden'],
+      });
+      setInterval(record, 50);
+    };
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', start, { once: true });
+    } else {
+      start();
+    }
+  });
+}
+
+async function readEntryProbe(page: Page): Promise<EntryProbeState> {
+  return page.evaluate(
+    () =>
+      (window as unknown as { __entryProbe?: EntryProbeState }).__entryProbe ?? {
+        masks: [],
+        catchups: [],
+      },
+  );
+}
+
+const RECOVERY_COPY = /恢复|离线|重新验证|核对身份/;
+
+/** 正常进房：聊天立即可用，不允许出现遮罩或恢复文案。 */
+async function expectCleanEntry(page: Page, stage: string) {
+  await expect(page.locator('#composer')).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('#body')).toBeEnabled();
+  await expect(page.locator('#messages')).toContainText('组件验收初始消息');
+  await expect(page.locator('#recovery-mask')).toHaveCount(0);
+  const probe = await readEntryProbe(page);
+  expect(probe.masks, `${stage} 出现恢复遮罩：${JSON.stringify(probe.masks)}`).toEqual([]);
+  const recoveryBars = probe.catchups.filter((item) => RECOVERY_COPY.test(item.text));
+  expect(
+    recoveryBars,
+    `${stage} 出现恢复文案：${JSON.stringify(recoveryBars)}`,
+  ).toEqual([]);
+  return probe;
+}
+
+test('正常进房（直链/首页点击/刷新）不出现恢复遮罩，聊天立即可用', async ({ page }) => {
+  const base = await baseUrl();
+  const fixture = await createComponentRoom(base);
+  await installEntryProbe(page);
+  await login(page, base, fixture.tokenA);
+
+  const stageProbe = async (stage: string) => {
+    const probe = await expectCleanEntry(page, stage);
+    await page.waitForTimeout(500);
+    const after = await readEntryProbe(page);
+    expect(after.masks, `${stage} 后续出现遮罩`).toEqual([]);
+    const recoveryBars = after.catchups.filter((item) => RECOVERY_COPY.test(item.text));
+    expect(recoveryBars, `${stage} 后续出现恢复文案`).toEqual([]);
+    console.log(JSON.stringify({
+      probe: 'clean-entry',
+      stage,
+      masks: after.masks.length,
+      catchups: after.catchups.length,
+      initialMasks: probe.masks.length,
+      inputEditable: true,
+    }));
+  };
+
+  await page.goto(`${base}/c/${fixture.roomId}`);
+  await expect(page.locator('#title')).toHaveText(fixture.roomTitle);
+  await stageProbe('direct');
+
+  await page.evaluate(() => {
+    window.history.pushState(null, '', '/');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  });
+  await page.locator(`[data-room-id="${fixture.roomId}"]`).waitFor({ timeout: 20_000 });
+  await page.waitForTimeout(400);
+  await page.locator(`[data-room-id="${fixture.roomId}"]`).click();
+  await expect(page.locator('#title')).toHaveText(fixture.roomTitle);
+  await stageProbe('home-click');
+
+  await page.reload();
+  await expect(page.locator('#title')).toHaveText(fixture.roomTitle);
+  await stageProbe('reload');
+});
+
+test('慢网络进房最多短暂加载，不出现恢复文案', async ({ page }) => {
+  const base = await baseUrl();
+  const fixture = await createComponentRoom(base);
+  const delayed = ['network_me', 'network_room_get', 'network_history_list'];
+  await page.route('**/mcp', async (route) => {
+    const name = route.request().headers()['mcp-name'];
+    if (name && delayed.includes(name)) await delay(700);
+    await route.continue();
+  });
+  await installEntryProbe(page);
+  await login(page, base, fixture.tokenA);
+
+  await page.goto(`${base}/c/${fixture.roomId}`);
+  const probe = await expectCleanEntry(page, 'slow-network');
+  await page.waitForTimeout(800);
+  const after = await readEntryProbe(page);
+  expect(after.masks).toEqual([]);
+  const recoveryBars = after.catchups.filter((item) => RECOVERY_COPY.test(item.text));
+  expect(recoveryBars).toEqual([]);
+  console.log(JSON.stringify({
+    probe: 'slow-entry',
+    masks: after.masks.length,
+    catchups: after.catchups.map((item) => item.text),
+    initialMasks: probe.masks.length,
+    inputEditable: true,
+  }));
+});
+
+test('进入会话后改名/加成员只刷新，不触发恢复遮罩', async ({ page }) => {
+  const base = await baseUrl();
+  const fixture = await createComponentRoom(base);
+  await installEntryProbe(page);
+  await login(page, base, fixture.tokenA);
+  await openRoom(page, base, fixture.tokenA, fixture.roomId, fixture.roomTitle);
+
+  const newTitle = `组件改名 ${crypto.randomUUID().replaceAll('-', '').slice(0, 8)}`;
+  await callTool(base, fixture.tokenA, 'network_room_rename', {
+    request_id: requestId('e2e_rename'),
+    room_id: fixture.roomId,
+    title: newTitle,
+    expected_title: fixture.roomTitle,
+  });
+  await expect(page.locator('#title')).toHaveText(newTitle, { timeout: 15_000 });
+
+  const newcomer = await registerHuman(base, `组件新成员 ${crypto.randomUUID().slice(0, 4)}`);
+  await addFriend(base, fixture.tokenA, newcomer.token, newcomer.actorId);
+  await callTool(base, fixture.tokenA, 'network_room_members_update', {
+    request_id: requestId('e2e_add_member'),
+    room_id: fixture.roomId,
+    add: [newcomer.actorId],
+  });
+  await expect(page.locator('#subtitle')).toContainText('3 人', { timeout: 15_000 });
+  // 移除其他成员对旁观者是 informational：只刷新成员视图，不遮罩自己。
+  await callTool(base, fixture.tokenA, 'network_room_members_update', {
+    request_id: requestId('e2e_remove_other'),
+    room_id: fixture.roomId,
+    remove: [newcomer.actorId],
+  });
+  await expect(page.locator('#subtitle')).toContainText('2 人', { timeout: 15_000 });
+
+  await page.waitForTimeout(800);
+  const probe = await readEntryProbe(page);
+  expect(probe.masks, JSON.stringify(probe.masks)).toEqual([]);
+  const recoveryBars = probe.catchups.filter((item) => RECOVERY_COPY.test(item.text));
+  expect(recoveryBars).toEqual([]);
+  await expect(page.locator('#body')).toBeEnabled();
+  await expect(page.locator('#recovery-mask')).toHaveCount(0);
+  console.log(JSON.stringify({
+    probe: 'informational-membership',
+    masks: probe.masks.length,
+    title: await page.locator('#title').textContent(),
+    subtitle: await page.locator('#subtitle').textContent(),
+    inputEditable: true,
+  }));
+});
+
+test('被移出会话时仍出现粘性恢复遮罩', async ({ page }) => {
+  const base = await baseUrl();
+  const fixture = await createComponentRoom(base);
+  await installEntryProbe(page);
+  await login(page, base, fixture.tokenB);
+  await openRoom(page, base, fixture.tokenB, fixture.roomId, fixture.roomTitle);
+
+  await callTool(base, fixture.tokenA, 'network_room_members_update', {
+    request_id: requestId('e2e_remove_member'),
+    room_id: fixture.roomId,
+    remove: [fixture.actorB],
+  });
+
+  await expect(page.locator('#recovery-mask')).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('#recovery-mask-text')).toContainText(/不在该会话|权限/);
+  await expect(page.locator('#messages')).toBeHidden();
+  await expect(page.locator('#body')).not.toBeVisible();
+  const snapshot = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          __agentNetworkRecovery?: {
+            snapshot: () => { phase: string; masked: boolean; sticky: boolean; lastReasons: string[] };
+          };
+        }
+      ).__agentNetworkRecovery?.snapshot() ?? null,
+  );
+  expect(snapshot?.phase).toBe('blocked');
+  expect(snapshot?.masked).toBe(true);
+  expect(snapshot?.sticky).toBe(true);
+  expect(snapshot?.lastReasons).toContain('membership');
+  const probe = await readEntryProbe(page);
+  expect(probe.masks.length).toBeGreaterThan(0);
+  console.log(JSON.stringify({
+    probe: 'membership-revoke',
+    masked: true,
+    phase: snapshot?.phase,
+    reasons: snapshot?.lastReasons,
+  }));
+});
+
 test('合并 online/visibility/ACK 为单轮恢复，并在离线时只标离线', async ({ page }) => {
   const base = await baseUrl();
   const fixture = await createComponentRoom(base);
@@ -597,7 +849,7 @@ test('中途失败保留最后成功游标，下一轮从该位置续读', async
   }));
 });
 
-test('撤回已显示消息时按锚点重读可见窗口', async ({ page }) => {
+test('撤回已显示消息时重读可见窗口并显示墓碑', async ({ page }) => {
   const base = await baseUrl();
   const fixture = await createComponentRoom(base);
   const history = await callTool<{
@@ -612,14 +864,16 @@ test('撤回已显示消息时按锚点重读可见窗口', async ({ page }) => 
   );
   expect(target).toBeTruthy();
 
-  const anchors: string[] = [];
+  // 3a6593b 起撤回不再按 anchor 重读单条，而是重读已渲染窗口；
+  // 断言请求确实发生，并用墓碑文本验证权威结果已回填。
+  const historyReads: { anchor: string | null }[] = [];
   page.on('request', (request) => {
     if (!request.url().endsWith('/mcp') || request.method() !== 'POST') return;
     try {
       const body = JSON.parse(request.postData() ?? '{}') as RpcBody;
       if (body.params?.name !== 'network_history_list') return;
       const anchor = body.params.arguments?.anchor_message_id;
-      if (typeof anchor === 'string') anchors.push(anchor);
+      historyReads.push({ anchor: typeof anchor === 'string' ? anchor : null });
     } catch {
       // 非 JSON 请求忽略。
     }
@@ -628,15 +882,22 @@ test('撤回已显示消息时按锚点重读可见窗口', async ({ page }) => 
   await login(page, base, fixture.tokenA);
   await openRoom(page, base, fixture.tokenA, fixture.roomId, fixture.roomTitle);
   await expect(page.locator('#messages')).toContainText('组件验收初始消息');
+  await page.waitForTimeout(300);
+  const readsBefore = historyReads.length;
 
   await callTool(base, fixture.tokenB, 'network_message_recall', {
     request_id: requestId('e2e_recall'),
     message_id: target?.message_id,
   });
   await expect
-    .poll(() => anchors.includes(target?.message_id ?? ''), { timeout: 10_000 })
-    .toBe(true);
+    .poll(() => historyReads.length - readsBefore, { timeout: 10_000 })
+    .toBeGreaterThan(0);
   await expect(page.locator('#messages')).toContainText('此消息已撤回', { timeout: 10_000 });
+  console.log(JSON.stringify({
+    probe: 'recall-refresh',
+    rereads: historyReads.length - readsBefore,
+    anchors: historyReads.slice(readsBefore).filter((item) => item.anchor !== null).length,
+  }));
 });
 
 test('切号后 network_me 失败保持粘性遮罩，恢复网络后才显示新身份', async ({ page }) => {

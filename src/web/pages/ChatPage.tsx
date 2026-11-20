@@ -124,7 +124,9 @@ export function ChatPage({ roomId }: ChatPageProps) {
   const chat = useRoomChat(roomId, { onEvent: onChatEvent });
   const queryClient = useQueryClient();
   const recovery = useRecoveryState();
-  const restoring = recovery.phase === 'checking' || chat.catchUp?.active === true;
+  // 只有真正遮蔽私有视图的恢复或确有缺口的历史补读才暂停自动滚底/已读；
+  // 普通前台核对不改变聊天可用性。
+  const restoring = recovery.masked || chat.catchUp?.active === true;
   const [status, setStatus] = useState('');
   const [reply, setReply] = useState<ComposerReply | null>(null);
   const [forcePinToken, setForcePinToken] = useState(0);
@@ -769,7 +771,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                     data-catchup-rebuilt={chat.catchUp.rebuiltAt ? '1' : '0'}
                   >
                     {chat.catchUp.active
-                      ? `正在补齐离线期间的历史（已覆盖 ${chat.catchUp.pages} 页${
+                      ? `正在同步会话历史（已覆盖 ${chat.catchUp.pages} 页${
                           chat.catchUp.coveredSeq ? `，seq ${chat.catchUp.coveredSeq}` : ''
                         }）…${
                           chat.catchUp.error ? ` ${chat.catchUp.error}` : ''

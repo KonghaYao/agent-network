@@ -196,6 +196,21 @@ async function fetchTimelineAfter(
   };
 }
 
+/**
+ * 只有移除成员或把自己降级会收紧当前身份的可见边界。
+ *
+ * 服务端把这类事件标为 `action_required`；改名、公告、策略、加人、
+ * `room.created` 与解散归档都是 informational，只需刷新查询。
+ */
+function revokesCurrentAccess(
+  event: Extract<ActorStreamEvent, { type: 'event' }>,
+): boolean {
+  // 服务端只把针对本人的移除/降级标为 action_required；旁观者收到的是
+  // informational 的 change=removed，不能因此遮住自己的会话。
+  if (event.attention !== 'action_required') return false;
+  return event.change === 'removed' || event.change === 'role_changed';
+}
+
 export function useRoomChat(roomId: string, options: RoomChatOptions = {}) {
   const queryClient = useQueryClient();
   const sessionState = useWebSession();
@@ -339,7 +354,7 @@ export function useRoomChat(roomId: string, options: RoomChatOptions = {}) {
           coveredSeq,
           error,
           rebuiltAt: null,
-          notice: '正在补齐离线期间的历史…',
+          notice: '正在同步会话历史…',
         });
         try {
           const result = await catchUpGap({
@@ -792,15 +807,15 @@ export function useRoomChat(roomId: string, options: RoomChatOptions = {}) {
         pending.tasks = true;
         pending.taskSummaries = true;
       } else {
-        if (
+        const membershipEvent =
           event.roomId === roomId &&
           event.source !== 'room.pins' &&
           (event.source === 'room.membership' ||
             event.source === 'room.lifecycle' ||
-            event.kind === 'room')
-        ) {
-          // 成员代次/生命周期变化可能已经撤权：先遮住旧私有视图，
-          // 由统一恢复轮重新鉴权后决定是否恢复。
+            event.kind === 'room');
+        if (membershipEvent && revokesCurrentAccess(event)) {
+          // 只有确实撤销本身份访问权的事件才遮住旧私有视图；改名、加成员、
+          // room.created 等 informational 变化只刷新查询，不打断输入。
           triggerRecovery('membership', { mask: true });
           return;
         }

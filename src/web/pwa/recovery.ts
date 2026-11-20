@@ -351,11 +351,18 @@ export function installRecoveryTriggers(): () => void {
     markOffline();
   };
   const onPageShow = (event: PageTransitionEvent) => {
+    // 初次加载也会触发 pageshow；只有 bfcache 恢复才需要额外核对。
+    if (!event.persisted) return;
     if (!currentOnline()) {
+      hiddenAt = null;
       markOffline();
       return;
     }
-    triggerRecovery('pageshow', { longBackground: event.persisted, mask: event.persisted });
+    // bfcache 恢复本身不代表离开很久：短时间往返只核对，不遮罩。
+    const backgroundMs = hiddenAt === null ? 0 : Date.now() - hiddenAt;
+    hiddenAt = null;
+    const longBackground = backgroundMs >= LIMITS.webRecoveryLongBackgroundMs;
+    triggerRecovery('pageshow', { longBackground, mask: longBackground });
   };
   const onStorage = (event: StorageEvent) => {
     authStorageSignal(event);

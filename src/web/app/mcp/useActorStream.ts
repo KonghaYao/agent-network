@@ -30,6 +30,8 @@ interface StreamOptions {
   onEvent: (event: ActorStreamEvent) => void;
 }
 
+export type StreamAttention = 'action_required' | 'informational';
+
 export type ActorStreamEvent =
   | { type: 'ack'; reconnect: boolean; at: number }
   | {
@@ -41,6 +43,11 @@ export type ActorStreamEvent =
       messageId: string | null;
       /** 服务端提供的 change（如 recalled/marked/completed）。 */
       change: string | null;
+      /**
+       * 服务端标注的处理优先级。只有 `action_required` 才代表当前身份的
+       * 权限或可见边界可能被收紧；普通成员/资料变化是 informational。
+       */
+      attention: StreamAttention | null;
     };
 
 interface StreamState {
@@ -140,6 +147,7 @@ function notificationEvents(message: unknown): ActorStreamEvent[] {
       room_id?: unknown;
       message_id?: unknown;
       change?: unknown;
+      attention?: unknown;
     };
     events.push({
       type: 'event',
@@ -148,6 +156,10 @@ function notificationEvents(message: unknown): ActorStreamEvent[] {
       roomId: typeof item.room_id === 'string' ? item.room_id : null,
       messageId: typeof item.message_id === 'string' ? item.message_id : null,
       change: typeof item.change === 'string' ? item.change : null,
+      attention:
+        item.attention === 'action_required' || item.attention === 'informational'
+          ? item.attention
+          : null,
     });
   }
   return events;
@@ -284,6 +296,7 @@ export function useActorStream({ token, onEvent }: StreamOptions): StreamState {
                     roomId: null,
                     messageId: null,
                     change: null,
+                    attention: null,
                   });
                 } else {
                   for (const event of events) handlerRef.current(event);
