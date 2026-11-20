@@ -296,6 +296,7 @@ test.describe.serial('SPA 组件库与状态管理', () => {
     await expect(menu).toHaveAttribute('aria-label', '账号操作');
 
     await expect(page.locator('#account-rename')).toHaveText('修改我的名称');
+    await expect(page.locator('#account-avatar-menu')).toHaveText('修改头像');
     await expect(page.locator('#new-agent')).toHaveText('新建 Agent');
     await expect(page.locator('#device-handoff')).toHaveText('配对设备');
     await expect(page.locator('#archived-agents')).toHaveText('已归档 Agents');
@@ -310,7 +311,7 @@ test.describe.serial('SPA 组件库与状态管理', () => {
             const heights = items.map((item) =>
               Math.round(item.getBoundingClientRect().height),
             );
-            return heights.length === 6 && heights.every((height) => height >= 44);
+            return heights.length === 7 && heights.every((height) => height >= 44);
           }),
         { timeout: 2000 },
       )
@@ -360,13 +361,14 @@ test.describe.serial('SPA 组件库与状态管理', () => {
     await expect(menu).toBeVisible();
     await expect(menu).toHaveAttribute('data-lenso-slot', 'menu-fallback');
     await expect(page.locator('#account-rename')).toHaveText('修改我的名称');
+    await expect(page.locator('#account-avatar-menu')).toHaveText('修改头像');
     await expect(page.locator('#new-agent')).toHaveText('新建 Agent');
     await expect(page.locator('#device-handoff')).toHaveText('配对设备');
     await expect(page.locator('#archived-agents')).toHaveText('已归档 Agents');
     await expect(page.locator('#memory-open')).toHaveText('记忆');
     await expect(page.locator('#account-logout')).toHaveText('退出登录');
     await expect(page.locator('#account-menu [role="separator"]')).toHaveCount(1);
-    await expect(page.locator('#account-menu [role="menuitem"]')).toHaveCount(6);
+    await expect(page.locator('#account-menu [role="menuitem"]')).toHaveCount(7);
     await expect(page.locator('#account-rename')).toHaveCSS('min-height', '44px');
 
     const box = await menu.boundingBox();

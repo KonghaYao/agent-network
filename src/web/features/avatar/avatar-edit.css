@@ -1,0 +1,83 @@
+.avatar-edit-card {
+  width: min(440px, 100%);
+  box-sizing: border-box;
+}
+
+.avatar-edit-layout {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 0 0 12px;
+}
+
+.avatar-edit-preview {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 96px;
+  height: 96px;
+  overflow: hidden;
+  border-radius: 50%;
+  background: var(--wx-search, #f2f2f2);
+  color: var(--wx-muted, #888);
+  font-size: 12px;
+}
+
+.avatar-edit-preview img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.avatar-edit-preview .actor-avatar {
+  width: 96px !important;
+  height: 96px !important;
+  font-size: 36px;
+}
+
+.avatar-edit-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.avatar-edit-hint {
+  margin: 0 0 8px;
+  color: var(--wx-muted, #666);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.avatar-edit-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.avatar-edit-status {
+  min-height: 1.4em;
+  margin: 8px 0 0;
+  color: var(--wx-muted, #666);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.avatar-edit-status[data-error='1'] {
+  color: var(--wx-unread, #c94a4f);
+  font-weight: 600;
+}
+
+.avatar-edit-file {
+  margin: 0 0 4px;
+  color: var(--wx-text, #333);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.avatar-edit-actions .avatar-edit-remove {
+  margin-right: auto;
+}

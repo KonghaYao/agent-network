@@ -9,6 +9,7 @@ import { openInstallGuide } from '../../pwa/install-guide-store';
 import { ActorAvatar } from '../avatar/ActorAvatar';
 import { AgentAvatarMenu } from '../memory/AgentAvatarMenu';
 import { ArchiveAgentsDialog } from '../overlays/ArchiveAgentsDialog';
+import { AvatarEditDialog } from '../overlays/AvatarEditDialog';
 import { DeviceHandoffDialog } from '../overlays/DeviceHandoffDialog';
 import { LogoutDialog } from '../overlays/LogoutDialog';
 import { MeRenameDialog } from '../overlays/MeRenameDialog';
@@ -75,6 +76,27 @@ function LogoutIcon() {
   );
 }
 
+function AvatarEditIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d="M4 8h3l1.5-2h7L17 8h3v11H4z" />
+      <circle cx="12" cy="13" r="3.2" />
+    </svg>
+  );
+}
+
 /**
  * 账号头像：上传图片优先，其次本地品牌图标，最后名称色首字。
  *
@@ -107,6 +129,7 @@ export function SidebarAccount({ me }: { me: WebIdentity | null }) {
   const session = useWebSession();
   const token = session.session?.token ?? null;
   const [renameOpen, setRenameOpen] = useState(false);
+  const [avatarOpen, setAvatarOpen] = useState(false);
   const [logoutOpen, setLogoutOpen] = useState(false);
   const [newAgentOpen, setNewAgentOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
@@ -160,6 +183,23 @@ export function SidebarAccount({ me }: { me: WebIdentity | null }) {
                 onClick={() => setRenameOpen(true)}
               >
                 <PencilIcon />
+              </Tooltip>
+            ) : null}
+            {me ? (
+              <Tooltip as={Button}
+                className="account-edit"
+                id="account-avatar-edit"
+                type="button"
+                variant="borderless"
+                isIconOnly
+                aria-label="修改头像"
+                hint="修改头像"
+                aria-haspopup="dialog"
+                aria-controls="avatar-edit-dialog"
+                aria-expanded={avatarOpen}
+                onClick={() => setAvatarOpen(true)}
+              >
+                <AvatarEditIcon />
               </Tooltip>
             ) : null}
           </div>
@@ -256,6 +296,14 @@ export function SidebarAccount({ me }: { me: WebIdentity | null }) {
           open={renameOpen}
           onOpenChange={closeAndReturnFocus(setRenameOpen, 'account-rename')}
           currentName={me.name}
+          token={token}
+        />
+      ) : null}
+      {token && me ? (
+        <AvatarEditDialog
+          open={avatarOpen}
+          onOpenChange={closeAndReturnFocus(setAvatarOpen, 'account-avatar-edit')}
+          identity={me}
           token={token}
         />
       ) : null}

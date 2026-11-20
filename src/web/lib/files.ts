@@ -80,9 +80,18 @@ export function uploadFileToDrive(
       } catch {
         payload = null;
       }
-      const fileId = payload?.fileId ?? payload?.file_id;
+      const fileId = payload?.fileId ?? payload?.file_id ?? payload?.file?.file_id;
+      const publicUrl =
+        payload?.publicUrl ??
+        payload?.public_url ??
+        payload?.file?.public_url ??
+        '';
       if (xhr.status >= 200 && xhr.status < 300 && fileId) {
-        resolve({ file_id: fileId, public_url: '' });
+        resolve({
+          file_id: fileId,
+          public_url: typeof publicUrl === 'string' ? publicUrl : '',
+          mime_type: file.type || undefined,
+        });
         return;
       }
       reject(uploadFailure(xhr.status, payload));

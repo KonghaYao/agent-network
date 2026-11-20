@@ -6,6 +6,7 @@ import type { WebIdentity } from '../../lib/identity';
 import { useWebSession } from '../../hooks/useWebSession';
 import { openAgentMemory } from '../memory/memory-store';
 import { ArchiveAgentsDialog } from '../overlays/ArchiveAgentsDialog';
+import { AvatarEditDialog } from '../overlays/AvatarEditDialog';
 import { DeviceHandoffDialog } from '../overlays/DeviceHandoffDialog';
 import { LogoutDialog } from '../overlays/LogoutDialog';
 import { MeRenameDialog } from '../overlays/MeRenameDialog';
@@ -26,6 +27,7 @@ export function AccountMenu({ me }: { me: WebIdentity | null }) {
   const token = session.session?.token ?? null;
   const [menuOpen, setMenuOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
+  const [avatarOpen, setAvatarOpen] = useState(false);
   const [logoutOpen, setLogoutOpen] = useState(false);
   const [newAgentOpen, setNewAgentOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
@@ -67,6 +69,12 @@ export function AccountMenu({ me }: { me: WebIdentity | null }) {
       label: '修改我的名称',
       disabled: !token,
       onSelect: () => setRenameOpen(true),
+    },
+    {
+      id: 'account-avatar-menu',
+      label: '修改头像',
+      disabled: !token || !me,
+      onSelect: () => setAvatarOpen(true),
     },
     {
       id: 'new-agent',
@@ -148,6 +156,15 @@ export function AccountMenu({ me }: { me: WebIdentity | null }) {
           open={renameOpen}
           onOpenChange={closeAndReturnFocus(setRenameOpen)}
           currentName={me.name}
+          token={token}
+          returnFocusRef={toggleFocusRef}
+        />
+      ) : null}
+      {token && me ? (
+        <AvatarEditDialog
+          open={avatarOpen}
+          onOpenChange={closeAndReturnFocus(setAvatarOpen)}
+          identity={me}
           token={token}
           returnFocusRef={toggleFocusRef}
         />

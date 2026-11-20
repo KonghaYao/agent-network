@@ -483,6 +483,9 @@ export const LIMITS = {
   webPairingScanIntervalMs: 120,
   /** 软件解码前把相机帧缩到的最大边长（像素），限制弱机 CPU。 */
   webPairingScanMaxDimension: 640,
+  /** 网页头像：源文件上限与居中裁剪后的输出边长。 */
+  webAvatarSourceMaxBytes: 8 * 1024 * 1024,
+  webAvatarOutputSize: 512,
   /** 已登录设备未批准时的受控兑换轮询间隔（毫秒）。 */
   webPairingRedeemPollMs: 2_000,
   /** 版本检查相邻事件的合并节流（毫秒）；强制检查可绕过一次。 */
