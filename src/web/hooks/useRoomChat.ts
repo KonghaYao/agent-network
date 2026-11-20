@@ -559,21 +559,27 @@ export function useRoomChat(roomId: string) {
 
   const lastMarkedRef = useRef<string | null>(null);
   const markReadMutation = useMutation({
-    mutationFn: (throughSeq: string) =>
-      callTool(
+    mutationFn: async (throughSeq: string) => {
+      const start = contextRef.current;
+      await callTool(
         'network_room_mark_read',
         { room_id: roomId, through_seq: throughSeq },
-        { token: token ?? undefined },
-      ),
-    onSuccess: (_result, throughSeq) => {
+        { token: start.token ?? undefined },
+      );
+      return { throughSeq, epoch: start.epoch, actorId: start.actorId };
+    },
+    onSuccess: ({ throughSeq, epoch: startEpoch, actorId: startActor }) => {
+      // 晚到的写响应只属于发起时的身份代次；切号/撤权后丢弃，避免把旧身份
+      // 的已读水位写进新身份的房间与列表缓存。
+      const current = contextRef.current;
+      if (current.epoch !== startEpoch || current.actorId !== startActor) return;
       queryClient.setQueryData<RoomDetail>(detailKey, (previous) =>
         previous
           ? { ...previous, room: { ...previous.room, my_last_read_seq: throughSeq } }
           : previous,
       );
-      const actorId = session?.identity.actor_id ?? null;
       queryClient.setQueryData<InfiniteData<RoomsPage, string | null>>(
-        queryKeys.rooms(actorId),
+        queryKeys.rooms(current.actorId),
         (previous) =>
           previous
             ? {
@@ -591,6 +597,11 @@ export function useRoomChat(roomId: string) {
       );
     },
   });
+
+  // 新身份/新房间不能继承上一个代次的“已标记水位”，否则会跳过自己的首次已读。
+  useEffect(() => {
+    lastMarkedRef.current = null;
+  }, [actorId, token, roomId]);
 
   /**
    * 已加载消息的权威重读：撤回、回执可能不在最新页。

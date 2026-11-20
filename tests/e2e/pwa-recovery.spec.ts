@@ -84,6 +84,31 @@ async function openRoom(page: Page, base: string, token: string, roomId: string,
   await expect(page.locator('#composer')).toBeVisible();
 }
 
+async function registerHuman(base: string, name: string): Promise<{ token: string; actorId: string }> {
+  const token = crypto.randomUUID();
+  const { actor_id } = await callTool<{ actor_id: string }>(base, token, 'network_register', {
+    request_id: requestId('e2e_reg'),
+    kind: 'human',
+    name,
+    device_id: `e2e-${crypto.randomUUID()}`,
+  });
+  return { token, actorId: actor_id };
+}
+
+async function addFriend(base: string, ownerToken: string, peerToken: string, peerActorId: string) {
+  const requested = await callTool<{ request: { contact_request_id: string } }>(
+    base,
+    ownerToken,
+    'network_contact_request',
+    { request_id: requestId('e2e_contact'), actor_id: peerActorId },
+  );
+  await callTool(base, peerToken, 'network_contact_request_respond', {
+    request_id: requestId('e2e_contact'),
+    contact_request_id: requested.request.contact_request_id,
+    action: 'accept',
+  });
+}
+
 test('合并 online/visibility/ACK 为单轮恢复，并在离线时只标离线', async ({ page }) => {
   const base = await baseUrl();
   const fixture = await createComponentRoom(base);
@@ -418,6 +443,282 @@ test('撤回已显示消息时按锚点重读可见窗口', async ({ page }) => 
   await expect(page.locator('#messages')).toContainText('此消息已撤回', { timeout: 10_000 });
 });
 
+test('切号后 network_me 失败保持粘性遮罩，恢复网络后才显示新身份', async ({ page }) => {
+  const base = await baseUrl();
+  const fixture = await createComponentRoom(base);
+  const newcomer = await registerHuman(base, `切号 ${crypto.randomUUID().slice(0, 6)}`);
+  await addFriend(base, fixture.tokenA, newcomer.token, newcomer.actorId);
+  await callTool(base, fixture.tokenA, 'network_room_members_update', {
+    request_id: requestId('e2e_add'),
+    room_id: fixture.roomId,
+    add: [newcomer.actorId],
+  });
+
+  await login(page, base, fixture.tokenB);
+  await openRoom(page, base, fixture.tokenB, fixture.roomId, fixture.roomTitle);
+  await expect(page.locator('#messages')).toContainText('组件验收初始消息');
+
+  let failIdentity = true;
+  let identityCalls = 0;
+  await page.route('**/mcp', async (route) => {
+    const request = route.request();
+    let body: RpcBody;
+    try {
+      body = JSON.parse(request.postData() ?? '{}') as RpcBody;
+    } catch {
+      await route.continue();
+      return;
+    }
+    if (
+      body.params?.name === 'network_me' &&
+      request.headers()['authorization'] === `Bearer ${newcomer.token}`
+    ) {
+      identityCalls += 1;
+      if (failIdentity) {
+        await route.abort('failed');
+        return;
+      }
+    }
+    await route.continue();
+  });
+
+  // 同一页内切号：新凭据已写入 localStorage，但服务端身份尚未确认。
+  await page.evaluate((token) => {
+    localStorage.setItem('agent-network-token', token);
+    window.dispatchEvent(
+      new StorageEvent('storage', { key: 'agent-network-token', newValue: token }),
+    );
+  }, newcomer.token);
+
+  await expect(page.locator('#recovery-mask')).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('#recovery-retry')).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('#root')).toHaveAttribute('inert', '');
+  await expect(page.locator('#root')).toHaveAttribute('aria-hidden', 'true');
+  expect(await page.locator('#messages').count()).toBe(0);
+  expect(await page.getByText('组件验收初始消息').count()).toBe(0);
+  const masked = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          __agentNetworkRecoveryHost?: {
+            snapshot: () => { masked: boolean; sticky: boolean; phase: string };
+          };
+        }
+      ).__agentNetworkRecoveryHost?.snapshot() ?? null,
+  );
+  expect(masked).toMatchObject({ masked: true, sticky: true });
+  expect(identityCalls).toBeGreaterThan(0);
+
+  failIdentity = false;
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await expect(page.locator('#recovery-mask')).toHaveCount(0, { timeout: 15_000 });
+  await expect(page.locator('#messages')).toContainText('组件验收初始消息', { timeout: 15_000 });
+  await expect(page.locator('#root')).not.toHaveAttribute('inert', '');
+  const callsAfterRecovery = identityCalls;
+  await page.waitForTimeout(2_000);
+  expect(identityCalls).toBe(callsAfterRecovery);
+  console.log(JSON.stringify({
+    probe: 'sticky-identity-mask',
+    masked: true,
+    sticky: true,
+    oldBodyCount: 0,
+    identityCalls: callsAfterRecovery,
+    retriedAfterRecovery: identityCalls - callsAfterRecovery,
+  }));
+});
+
+test('旧身份晚到的 mark_read 不清理新身份未读', async ({ page }) => {
+  const base = await baseUrl();
+  const fixture = await createComponentRoom(base);
+  const newcomer = await registerHuman(base, `已读 C ${crypto.randomUUID().slice(0, 6)}`);
+  await addFriend(base, fixture.tokenA, newcomer.token, newcomer.actorId);
+  await callTool(base, fixture.tokenA, 'network_room_members_update', {
+    request_id: requestId('e2e_add'),
+    room_id: fixture.roomId,
+    add: [newcomer.actorId],
+  });
+
+  let nextSeq = 1;
+  for (let index = 0; index < 10; index += 1) {
+    await callTool(base, fixture.tokenA, 'network_message_send', {
+      request_id: requestId('e2e_seq'),
+      client_message_id: requestId('e2e_seq_client'),
+      room_id: fixture.roomId,
+      body: `已读准备 ${nextSeq}`,
+      invoke: [],
+    });
+    nextSeq += 1;
+  }
+  // 以真实 head 作为 B/C 的权威已读水位；随后 6 条新消息制造未读。
+  const baselineDetail = await callTool<{ room: { head_seq: string } }>(
+    base,
+    fixture.tokenA,
+    'network_room_get',
+    { room_id: fixture.roomId },
+  );
+  const baselineRead = baselineDetail.room.head_seq;
+  expect(Number(baselineRead)).toBeGreaterThan(0);
+  await callTool(base, fixture.tokenB, 'network_room_mark_read', {
+    room_id: fixture.roomId,
+    through_seq: baselineRead,
+  });
+  await callTool(base, newcomer.token, 'network_room_mark_read', {
+    room_id: fixture.roomId,
+    through_seq: baselineRead,
+  });
+
+  await login(page, base, fixture.tokenB);
+  await openRoom(page, base, fixture.tokenB, fixture.roomId, fixture.roomTitle);
+  await expect(page.locator('#messages')).toContainText('已读准备 10');
+
+  let holdBReads = false;
+  let failNewcomerReads = false;
+  const heldBReads: (() => void)[] = [];
+  let heldBReadCount = 0;
+  let newcomerReadFailures = 0;
+  await page.route('**/mcp', async (route) => {
+    const request = route.request();
+    let body: RpcBody;
+    try {
+      body = JSON.parse(request.postData() ?? '{}') as RpcBody;
+    } catch {
+      await route.continue();
+      return;
+    }
+    if (body.params?.name !== 'network_room_mark_read') {
+      await route.continue();
+      return;
+    }
+    const authorization = request.headers()['authorization'] ?? '';
+    if (authorization === `Bearer ${fixture.tokenB}` && holdBReads) {
+      heldBReadCount += 1;
+      await new Promise<void>((resolve) => heldBReads.push(resolve));
+      await route.continue();
+      return;
+    }
+    if (authorization === `Bearer ${newcomer.token}` && failNewcomerReads) {
+      newcomerReadFailures += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: rpcError(body.id, 'probe mark read failure', 'INTERNAL'),
+      });
+      return;
+    }
+    await route.continue();
+  });
+
+  holdBReads = true;
+  for (let index = 0; index < 6; index += 1) {
+    await callTool(base, fixture.tokenA, 'network_message_send', {
+      request_id: requestId('e2e_seq'),
+      client_message_id: requestId('e2e_seq_client'),
+      room_id: fixture.roomId,
+      body: `已读准备 ${nextSeq}`,
+      invoke: [],
+    });
+    nextSeq += 1;
+  }
+  await expect(page.locator('#messages')).toContainText('已读准备 16', { timeout: 15_000 });
+  // 先离开底部再回到底部，确保刷新后 pinned 状态重新触发已读。
+  await page.evaluate(() => {
+    const list = document.querySelector<HTMLElement>('#messages');
+    if (!list) return;
+    list.scrollTop = 0;
+    list.dispatchEvent(new Event('scroll'));
+  });
+  await page.waitForTimeout(100);
+  await page.evaluate(() => {
+    const list = document.querySelector<HTMLElement>('#messages');
+    if (!list) return;
+    list.scrollTop = list.scrollHeight;
+    list.dispatchEvent(new Event('scroll'));
+  });
+  await expect.poll(() => heldBReadCount, { timeout: 15_000 }).toBeGreaterThan(0);
+
+  // 切到 C：B 的 mark_read 仍被扣住，C 自己的 mark_read 失败。
+  failNewcomerReads = true;
+  await page.evaluate((token) => {
+    localStorage.setItem('agent-network-token', token);
+    window.dispatchEvent(
+      new StorageEvent('storage', { key: 'agent-network-token', newValue: token }),
+    );
+  }, newcomer.token);
+  await expect(page.locator('#recovery-mask')).toHaveCount(0, { timeout: 15_000 });
+  await expect(page.locator('#messages')).toContainText('已读准备 16', { timeout: 15_000 });
+  await page.evaluate(() => {
+    const list = document.querySelector<HTMLElement>('#messages');
+    if (!list) return;
+    list.scrollTop = 0;
+    list.dispatchEvent(new Event('scroll'));
+  });
+  await page.waitForTimeout(100);
+  await page.evaluate(() => {
+    const list = document.querySelector<HTMLElement>('#messages');
+    if (!list) return;
+    list.scrollTop = list.scrollHeight;
+    list.dispatchEvent(new Event('scroll'));
+  });
+  await expect.poll(() => newcomerReadFailures, { timeout: 15_000 }).toBeGreaterThan(0);
+
+  const readBeforeRelease = await page.evaluate(
+    (roomId) =>
+      (
+        window as unknown as {
+          __agentNetworkRecoveryHost?: { roomRead: (id: string) => string | null };
+        }
+      ).__agentNetworkRecoveryHost?.roomRead(roomId) ?? null,
+    fixture.roomId,
+  );
+  expect(readBeforeRelease).toBe(baselineRead);
+  await expect(
+    page.locator(`[data-room-id="${fixture.roomId}"] .unread`),
+  ).toBeVisible();
+
+  // 释放 B 的迟到成功响应：它属于切换前的身份代次，必须被丢弃。
+  const lateResponse = page.waitForResponse(
+    (response) =>
+      response.request().headers()['authorization'] === `Bearer ${fixture.tokenB}` &&
+      response.request().headers()['mcp-name'] === 'network_room_mark_read',
+    { timeout: 15_000 },
+  );
+  for (const release of heldBReads.splice(0)) release();
+  await lateResponse;
+  await page.waitForTimeout(800);
+
+  const readAfterRelease = await page.evaluate(
+    (roomId) =>
+      (
+        window as unknown as {
+          __agentNetworkRecoveryHost?: { roomRead: (id: string) => string | null };
+        }
+      ).__agentNetworkRecoveryHost?.roomRead(roomId) ?? null,
+    fixture.roomId,
+  );
+  expect(readAfterRelease).toBe(baselineRead);
+  await expect(
+    page.locator(`[data-room-id="${fixture.roomId}"] .unread`),
+  ).toBeVisible();
+  const serverDetail = await callTool<{ room: { my_last_read_seq: string; head_seq: string } }>(
+    base,
+    newcomer.token,
+    'network_room_get',
+    { room_id: fixture.roomId },
+  );
+  expect(serverDetail.room.my_last_read_seq).toBe(baselineRead);
+  expect(Number(serverDetail.room.head_seq)).toBeGreaterThan(Number(baselineRead));
+  console.log(JSON.stringify({
+    probe: 'late-mark-read',
+    baselineRead,
+    localRead: readAfterRelease,
+    serverRead: serverDetail.room.my_last_read_seq,
+    headSeq: serverDetail.room.head_seq,
+    heldBReads: heldBReadCount,
+    newcomerReadFailures,
+    unreadVisible: true,
+  }));
+});
+
 test('撤权后遮住旧视图、关闭预览并释放 object URL；晚到历史响应不复活', async ({ page }) => {
   const base = await baseUrl();
   const fixture = await createComponentRoom(base);
@@ -541,6 +842,60 @@ test('撤权后遮住旧视图、关闭预览并释放 object URL；晚到历史
       page.evaluate(() => (window as unknown as { __revokedObjectUrls: string[] }).__revokedObjectUrls),
     )
     .toContain(blobUrl);
+  await expect.poll(() => streamAborts, { timeout: 10_000 }).toBeGreaterThan(0);
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __agentNetworkRecoveryHost?: {
+                  cache: () => {
+                    room: number;
+                    roomTasks: number;
+                    removedRoom: number;
+                    removedRoomTasks: number;
+                  };
+                };
+              }
+            ).__agentNetworkRecoveryHost?.cache() ?? null,
+        ),
+      { timeout: 10_000 },
+    )
+    .toMatchObject({ roomTasks: 0 });
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __agentNetworkRecoveryHost?: {
+                  cache: () => { removedRoom: number; removedRoomTasks: number };
+                };
+              }
+            ).__agentNetworkRecoveryHost?.cache().removedRoom ?? 0,
+        ),
+      { timeout: 10_000 },
+    )
+    .toBeGreaterThan(0);
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __agentNetworkRecoveryHost?: {
+                  cache: () => { removedRoom: number; removedRoomTasks: number };
+                };
+              }
+            ).__agentNetworkRecoveryHost?.cache().removedRoomTasks ?? 0,
+        ),
+      { timeout: 10_000 },
+    )
+    .toBeGreaterThan(0);
   expect(await page.locator('#messages').count()).toBe(0);
   expect(await page.getByText('LATE-PRIVATE-CONTENT').count()).toBe(0);
   const revokedUrls = await page.evaluate(
@@ -563,6 +918,33 @@ test('同 actor 双标签并发发送不互相覆盖意图', async ({ context })
   const fixture = await createComponentRoom(base);
   const first = await context.newPage();
   const second = await context.newPage();
+  const sendRequests: { clientMessageId: string; requestId: string }[] = [];
+  const statusRequests: string[][] = [];
+  first.on('request', (request) => {
+    if (!request.url().endsWith('/mcp') || request.method() !== 'POST') return;
+    let body: RpcBody;
+    try {
+      body = JSON.parse(request.postData() ?? '{}') as RpcBody;
+    } catch {
+      return;
+    }
+    const args = body.params?.arguments ?? {};
+    if (body.params?.name === 'network_message_send') {
+      if (typeof args.client_message_id === 'string' && typeof args.request_id === 'string') {
+        sendRequests.push({
+          clientMessageId: args.client_message_id,
+          requestId: args.request_id,
+        });
+      }
+      return;
+    }
+    if (body.params?.name === 'network_message_send_status') {
+      const ids = Array.isArray(args.client_message_ids)
+        ? args.client_message_ids.filter((id): id is string => typeof id === 'string')
+        : [];
+      statusRequests.push(ids);
+    }
+  });
   await login(first, base, fixture.tokenB);
   await login(second, base, fixture.tokenB);
   await openRoom(first, base, fixture.tokenB, fixture.roomId, fixture.roomTitle);
@@ -571,7 +953,26 @@ test('同 actor 双标签并发发送不互相覆盖意图', async ({ context })
   await context.setOffline(true);
   await first.fill('#body', '双标签 A 离线意图');
   await first.press('#body', 'Enter');
-  await expect(first.locator('.msg-outbox', { hasText: '双标签 A 离线意图' })).toBeVisible();
+  const rowA = first.locator('.msg-outbox', { hasText: '双标签 A 离线意图' });
+  await expect(rowA).toBeVisible();
+  const clientA = await rowA.getAttribute('data-client-message-id');
+  expect(clientA).toBeTruthy();
+  const storedA = await first.evaluate(
+    ({ actorId, clientId }) => {
+      const prefix = `agent-network-outbox:v1:${actorId}:i:`;
+      for (const key of Object.keys(localStorage)) {
+        if (!key.startsWith(prefix)) continue;
+        const parsed = JSON.parse(localStorage.getItem(key) ?? 'null') as {
+          intent?: { client_message_id?: string; request_id?: string };
+        } | null;
+        if (parsed?.intent?.client_message_id === clientId) return parsed.intent;
+      }
+      return null;
+    },
+    { actorId: fixture.actorB, clientId: clientA },
+  );
+  expect(storedA?.request_id).toBeTruthy();
+
   await second.fill('#body', '双标签 B 离线意图');
   await second.press('#body', 'Enter');
   await expect(second.locator('.msg-outbox', { hasText: '双标签 B 离线意图' })).toBeVisible();
@@ -584,11 +985,66 @@ test('同 actor 双标签并发发送不互相覆盖意图', async ({ context })
     return Object.keys(localStorage).filter((key) => key.startsWith(prefix)).length;
   }, fixture.actorB);
   expect(journalCount).toBe(2);
+
+  await context.setOffline(false);
+  // 第一次在线重发返回可重试的 CONFLICT，第二次才成功：两次真实请求必须复用同一意图。
+  let failFirstSend = true;
+  await first.route('**/mcp', async (route) => {
+    const request = route.request();
+    let body: RpcBody;
+    try {
+      body = JSON.parse(request.postData() ?? '{}') as RpcBody;
+    } catch {
+      await route.continue();
+      return;
+    }
+    const args = body.params?.arguments ?? {};
+    if (
+      body.params?.name !== 'network_message_send' ||
+      args.client_message_id !== clientA
+    ) {
+      await route.continue();
+      return;
+    }
+    if (failFirstSend) {
+      failFirstSend = false;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: rpcError(body.id, 'probe send retryable', 'CONFLICT'),
+      });
+      return;
+    }
+    await route.continue();
+  });
+  await expect(rowA.locator('.outbox-retry')).toBeVisible({ timeout: 15_000 });
+  await rowA.locator('.outbox-retry').click();
+  await expect
+    .poll(() => sendRequests.filter((request) => request.clientMessageId === clientA).length, {
+      timeout: 15_000,
+    })
+    .toBe(1);
+  await expect(rowA.locator('.outbox-retry')).toBeVisible({ timeout: 15_000 });
+  await rowA.locator('.outbox-retry').click();
+  await expect
+    .poll(() => sendRequests.filter((request) => request.clientMessageId === clientA).length, {
+      timeout: 15_000,
+    })
+    .toBe(2);
+  expect(statusRequests.some((ids) => ids.includes(clientA ?? ''))).toBe(true);
+  const attempts = sendRequests.filter((request) => request.clientMessageId === clientA);
+  expect(attempts).toHaveLength(2);
+  expect(new Set(attempts.map((request) => request.requestId)).size).toBe(1);
+  expect(attempts.at(-1)?.requestId).toBe(storedA?.request_id);
+  expect(attempts.at(-1)?.clientMessageId).toBe(storedA?.client_message_id);
   const outboxRows = await first.locator('.msg-outbox').count();
   console.log(JSON.stringify({
     probe: 'dual-tab-outbox',
     journalKeys: journalCount,
     outboxRows,
+    sendAttempts: attempts.length,
+    statusQueries: statusRequests.filter((ids) => ids.includes(clientA ?? '')).length,
+    clientMessageIdReused: new Set(attempts.map((request) => request.clientMessageId)).size === 1,
+    requestIdReused: new Set(attempts.map((request) => request.requestId)).size === 1,
   }));
-  await context.setOffline(false);
 });

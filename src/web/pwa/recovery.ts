@@ -21,6 +21,11 @@ export interface RecoverySnapshot {
   phase: RecoveryPhase;
   online: boolean;
   masked: boolean;
+  /**
+   * 身份边界遮罩：切号、撤权或凭据失效后一直保持，直到新凭据通过
+   * `network_me` 与房间边界校验，或确认无凭据进入配对/登录引导。
+   */
+  sticky: boolean;
   longBackground: boolean;
   rounds: number;
   lastReasons: RecoveryReason[];
@@ -46,6 +51,7 @@ let snapshot: RecoverySnapshot = {
   phase: 'idle',
   online: initialOnline(),
   masked: false,
+  sticky: false,
   longBackground: false,
   rounds: 0,
   lastReasons: [],
@@ -60,6 +66,8 @@ let installed = false;
 let hiddenAt: number | null = null;
 let pendingMask = false;
 let pendingLongBackground = false;
+/** 身份信号触发的遮罩只能由成功鉴权或明确的 blocked 状态结束。 */
+let stickyMask = false;
 let teardown: (() => void) | null = null;
 
 function emit(patch: Partial<RecoverySnapshot>): void {
@@ -77,7 +85,11 @@ function currentOnline(): boolean {
 }
 
 function markOffline(): void {
-  emit({ online: false, masked: false, phase: 'offline' });
+  if (stickyMask) {
+    emit({ online: false, masked: true, sticky: true, phase: 'offline' });
+    return;
+  }
+  emit({ online: false, masked: false, sticky: false, phase: 'offline' });
 }
 
 export function getRecoverySnapshot(): RecoverySnapshot {
@@ -101,7 +113,8 @@ const scheduler = new RecoveryScheduler(
   async (round) => {
     emit({
       phase: 'checking',
-      masked: round.masked,
+      masked: round.masked || stickyMask,
+      sticky: stickyMask,
       longBackground: round.masked,
       rounds: round.id,
       lastReasons: round.reasons,
@@ -112,15 +125,23 @@ const scheduler = new RecoveryScheduler(
         await runner(round);
       } catch {
         // Runner 内部负责把失败分类为 offline/blocked；这里只避免未捕获异常。
-        if (currentOnline()) {
-          emit({ phase: 'offline', masked: false });
+        if (stickyMask) {
+          reportRecoveryUnavailable('网络不可用，已暂停显示旧身份的私有内容。');
+        } else if (currentOnline()) {
+          emit({ phase: 'offline', masked: false, sticky: false });
         } else {
           markOffline();
         }
       }
       return;
     }
-    emit({ phase: 'ready', masked: false, longBackground: false, completedAt: Date.now() });
+    emit({
+      phase: 'ready',
+      masked: false,
+      sticky: false,
+      longBackground: false,
+      completedAt: Date.now(),
+    });
   },
   {
     debounceMs: LIMITS.webRecoveryDebounceMs,
@@ -132,10 +153,19 @@ export function triggerRecovery(
   reason: RecoveryReason,
   options: RecoveryTriggerOptions = {},
 ): void {
+  // 身份切换/撤权/退出：遮罩一旦出现就必须粘住，直到新凭据被确认。
+  if (reason === 'auth') {
+    stickyMask = true;
+    pendingMask = true;
+  }
   if (options.longBackground === true) pendingLongBackground = true;
   if (options.mask === true || options.longBackground === true) pendingMask = true;
   if (pendingMask) {
-    emit({ masked: true, longBackground: pendingLongBackground });
+    emit({
+      masked: true,
+      sticky: stickyMask,
+      longBackground: pendingLongBackground || options.longBackground === true,
+    });
   }
   scheduler.trigger(reason, {
     longBackground: pendingLongBackground || options.longBackground === true,
@@ -143,13 +173,26 @@ export function triggerRecovery(
   });
 }
 
+/**
+ * 调用方已确认当前浏览器凭据与内存身份不一致（例如 token 已被其他标签页
+ * 替换）：在发起网络核对前先粘住遮罩，并立即遮蔽旧私有视图。
+ */
+export function reportIdentitySignal(): void {
+  if (stickyMask && pendingMask) return;
+  stickyMask = true;
+  pendingMask = true;
+  emit({ masked: true, sticky: true });
+}
+
 export function reportRecoveryReady(): void {
+  stickyMask = false;
   pendingMask = false;
   pendingLongBackground = false;
   emit({
     phase: 'ready',
     online: currentOnline(),
     masked: false,
+    sticky: false,
     longBackground: false,
     blockedReason: null,
     completedAt: Date.now(),
@@ -157,12 +200,29 @@ export function reportRecoveryReady(): void {
 }
 
 export function reportRecoveryOffline(message?: string): void {
+  if (stickyMask) {
+    // 身份尚未确认：离线只更新原因，不撤掉身份遮罩；已确认撤权时保留引导。
+    if (snapshot.phase === 'blocked') {
+      emit({ online: false, masked: true, sticky: true, blockedReason: snapshot.blockedReason });
+      return;
+    }
+    emit({
+      phase: 'offline',
+      online: false,
+      masked: true,
+      sticky: true,
+      longBackground: false,
+      blockedReason: message ?? '网络不可用，需要联网确认身份后才能恢复。',
+    });
+    return;
+  }
   pendingMask = false;
   pendingLongBackground = false;
   emit({
     phase: 'offline',
     online: false,
     masked: false,
+    sticky: false,
     longBackground: false,
     blockedReason: message ?? null,
   });
@@ -170,23 +230,43 @@ export function reportRecoveryOffline(message?: string): void {
 
 /** 网络可达但服务暂不可用：保留内存内容并标为不可用，不声称已撤权。 */
 export function reportRecoveryUnavailable(message?: string): void {
+  if (stickyMask) {
+    // 身份边界尚未确认：保持遮罩，绝不展示旧身份的私有内容。
+    if (snapshot.phase === 'blocked') {
+      emit({ masked: true, sticky: true, blockedReason: snapshot.blockedReason });
+      return;
+    }
+    emit({
+      phase: 'offline',
+      online: currentOnline(),
+      masked: true,
+      sticky: true,
+      longBackground: false,
+      blockedReason: message ?? '暂时无法连接，需要联网确认身份后才能恢复。',
+    });
+    return;
+  }
   pendingMask = false;
   pendingLongBackground = false;
   emit({
     phase: 'offline',
     online: currentOnline(),
     masked: false,
+    sticky: false,
     longBackground: false,
     blockedReason: message ?? '暂时无法连接，已保留当前内容。',
   });
 }
 
 export function reportRecoveryBlocked(reason: string, revokedRoomId: string | null = null): void {
+  // blocked 是身份/权限边界的终态：后续恢复轮失败时也不能把遮罩撤掉。
+  stickyMask = true;
   pendingMask = false;
   pendingLongBackground = false;
   emit({
     phase: 'blocked',
     masked: true,
+    sticky: true,
     blockedReason: reason,
     revokedRoomId,
   });
@@ -194,9 +274,12 @@ export function reportRecoveryBlocked(reason: string, revokedRoomId: string | nu
 
 export function clearRecoveryBlock(): void {
   if (snapshot.phase !== 'blocked') return;
+  stickyMask = false;
+  pendingMask = false;
   emit({
     phase: currentOnline() ? 'ready' : 'offline',
     masked: false,
+    sticky: false,
     blockedReason: null,
     revokedRoomId: null,
   });

@@ -26,6 +26,14 @@ import {
   reconcileOutboxStatuses,
 } from '../src/web/lib/outbox-reconcile';
 import { RecoveryScheduler, type RecoveryReason } from '../src/web/lib/recovery-coordinator';
+import {
+  getRecoverySnapshot,
+  reportIdentitySignal,
+  reportRecoveryBlocked,
+  reportRecoveryOffline,
+  reportRecoveryReady,
+  reportRecoveryUnavailable,
+} from '../src/web/pwa/recovery';
 import { check, checkEqual, checksPassed } from './lib/harness';
 
 interface MessageItem {
@@ -270,6 +278,40 @@ async function verifyCatchUpStale(): Promise<void> {
   checkEqual('代次变化后停止读取', calls, 2);
 }
 
+function verifyStickyIdentityMask(): void {
+  reportRecoveryReady();
+  check('初始未遮罩', !getRecoverySnapshot().masked);
+
+  reportIdentitySignal();
+  let state = getRecoverySnapshot();
+  check('身份信号立即遮罩', state.masked && state.sticky);
+
+  reportRecoveryUnavailable('network down');
+  state = getRecoverySnapshot();
+  check('重新鉴权网络失败不撤遮罩', state.masked && state.sticky);
+  checkEqual('网络失败显示离线原因', state.phase, 'offline');
+
+  reportRecoveryOffline();
+  state = getRecoverySnapshot();
+  check('离线不撤身份遮罩', state.masked && state.sticky);
+
+  reportRecoveryReady();
+  state = getRecoverySnapshot();
+  check('成功鉴权后解除遮罩', !state.masked && !state.sticky);
+  checkEqual('成功鉴权回到 ready', state.phase, 'ready');
+
+  reportIdentitySignal();
+  reportRecoveryBlocked('credential revoked');
+  reportRecoveryUnavailable('network down');
+  state = getRecoverySnapshot();
+  check('撤权终态保持遮罩', state.masked && state.sticky);
+  checkEqual('撤权终态不被网络失败覆盖', state.phase, 'blocked');
+  checkEqual('撤权原因保留', state.blockedReason, 'credential revoked');
+
+  reportRecoveryReady();
+  check('重置粘性状态', !getRecoverySnapshot().sticky);
+}
+
 function verifyWatermark(): void {
   checkEqual('只取消息序号', renderedWatermark([message(7), message(9)]), '9');
   checkEqual(
@@ -443,6 +485,7 @@ async function main(): Promise<void> {
   await verifyCatchUpBatches();
   await verifyCatchUpFailureResume();
   await verifyCatchUpStale();
+  verifyStickyIdentityMask();
   verifyWatermark();
   verifyOutboxJournal();
   verifyOutboxReconcile();

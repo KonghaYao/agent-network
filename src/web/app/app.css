@@ -1311,16 +1311,20 @@ body[data-recovery-masked='1'] #root {
   line-height: 1.6;
 }
 
-.recovery-mask-card a {
+.recovery-mask-card a,
+.recovery-mask-card button {
   display: inline-flex;
   min-height: 36px;
   align-items: center;
   padding: 0 12px;
+  border: 0;
   border-radius: 6px;
   background: var(--wx-green, #07c160);
   color: var(--wx-green-text, #fff);
+  font: inherit;
   font-size: 13px;
   text-decoration: none;
+  cursor: pointer;
 }
 
 .offline-banner {

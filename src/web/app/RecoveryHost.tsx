@@ -11,6 +11,7 @@ import { clearPrivateQueries, clearRoomScope } from '../lib/scope-reset';
 import {
   getRecoverySnapshot,
   installRecoveryTriggers,
+  reportIdentitySignal,
   reportRecoveryBlocked,
   reportRecoveryOffline,
   reportRecoveryReady,
@@ -79,6 +80,7 @@ function RecoveryOverlay() {
   if (typeof document === 'undefined') return null;
 
   const blocked = state.phase === 'blocked';
+  const reconnect = state.masked && !blocked && state.phase === 'offline';
   const mask = state.masked
     ? createPortal(
         <div id="recovery-mask" className="recovery-mask" role="status" aria-live="polite">
@@ -91,16 +93,27 @@ function RecoveryOverlay() {
                 </div>
               ))}
             </div>
-            <h2>{blocked ? '会话权限已变化' : '正在重新验证'}</h2>
+            <h2>{blocked ? '会话权限已变化' : reconnect ? '需要联网确认身份' : '正在重新验证'}</h2>
             <p id="recovery-mask-text">
               {blocked
                 ? state.blockedReason || AUTH_INVALID_REASON
-                : '正在核对身份与会话访问边界，完成后恢复当前窗口。'}
+                : reconnect
+                  ? state.blockedReason ||
+                    '网络不可用，已暂停显示旧身份的私有内容。恢复网络后重试。'
+                  : '正在核对身份与会话访问边界，完成后恢复当前窗口。'}
             </p>
             {blocked ? (
               <a id="recovery-mask-home" href="/" onClick={() => undefined}>
                 返回会话列表
               </a>
+            ) : reconnect ? (
+              <button
+                type="button"
+                id="recovery-retry"
+                onClick={() => triggerRecovery('auth', { mask: true })}
+              >
+                重试
+              </button>
             ) : null}
           </div>
         </div>,
@@ -139,18 +152,35 @@ function RecoveryOverlay() {
 
 export function RecoveryHost({ routeName, roomId }: RecoveryHostProps) {
   const queryClient = useQueryClient();
+  const recovery = useRecoveryState();
   const routeRef = useRef({ routeName, roomId });
   routeRef.current = { routeName, roomId };
 
   useEffect(() => installRecoveryTriggers(), []);
 
+  /**
+   * 身份边界遮罩出现时，旧凭据下的私有视图不能继续留在内存里：
+   * 先把 session 查询置空（停止所有依赖 token 的查询），再清掉私有缓存。
+   * 成功重新鉴权后由恢复轮重新写入 session 与房间数据。
+   */
+  useEffect(() => {
+    if (!recovery.masked || !recovery.sticky) return;
+    queryClient.setQueryData(queryKeys.session(), null);
+    clearPrivateQueries(queryClient);
+  }, [queryClient, recovery.masked, recovery.sticky]);
+
   useEffect(() => {
     setRecoveryRunner(async () => {
+      const previous = queryClient.getQueryData<WebSession>(queryKeys.session()) ?? cachedWebSession();
+      // 同一页内 localStorage 被改写（切号/撤权）时，即使本轮不是 auth 触发，
+      // 也必须在发起网络核对前切到粘性遮罩。
+      if (previous && readBrowserToken() !== previous.token) {
+        reportIdentitySignal();
+      }
       if (typeof navigator !== 'undefined' && navigator.onLine === false) {
         reportRecoveryOffline();
         return;
       }
-      const previous = queryClient.getQueryData<WebSession>(queryKeys.session()) ?? cachedWebSession();
       let session: WebSession;
       try {
         session = await revalidateWebSession();
@@ -262,16 +292,39 @@ export function RecoveryHost({ routeName, roomId }: RecoveryHostProps) {
 
   // 供探针与诊断读取；不包含 token、消息正文或房间标题。
   useEffect(() => {
+    const countPrefix = (prefix: string) =>
+      queryClient
+        .getQueryCache()
+        .getAll()
+        .filter((query) => query.queryKey[0] === prefix).length;
+    const removed: Record<string, number> = {};
+    const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
+      if (event.type !== 'removed') return;
+      const prefix = String(event.query.queryKey[0] ?? '');
+      removed[prefix] = (removed[prefix] ?? 0) + 1;
+    });
     const debug = {
       snapshot: () => getRecoverySnapshot(),
+      cache: () => ({
+        room: countPrefix('room'),
+        roomTasks: countPrefix('room-tasks'),
+        removedRoom: removed.room ?? 0,
+        removedRoomTasks: removed['room-tasks'] ?? 0,
+        sessionPresent: Boolean(queryClient.getQueryData(queryKeys.session())),
+      }),
+      // 诊断只暴露已读水位，不包含正文、token 或标题。
+      roomRead: (roomId: string) =>
+        queryClient.getQueryData<RoomDetail>(queryKeys.room(roomId))?.room.my_last_read_seq ??
+        null,
     };
     (window as unknown as { __agentNetworkRecoveryHost?: typeof debug }).__agentNetworkRecoveryHost =
       debug;
     return () => {
+      unsubscribe();
       delete (window as unknown as { __agentNetworkRecoveryHost?: unknown })
         .__agentNetworkRecoveryHost;
     };
-  }, []);
+  }, [queryClient]);
 
   return <RecoveryOverlay />;
 }

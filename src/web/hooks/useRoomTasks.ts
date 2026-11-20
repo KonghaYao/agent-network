@@ -79,6 +79,8 @@ export function useRoomTasks({
   );
   const keyString = JSON.stringify(listKey);
   const keyRef = useRef({ string: keyString, key: listKey as readonly unknown[] });
+  const identityRef = useRef({ token, actorId });
+  identityRef.current = { token, actorId };
   const rebuildControllerRef = useRef<AbortController | null>(null);
   const rebuildSequenceRef = useRef(0);
   const [notice, setNotice] = useState<string | null>(null);
@@ -206,7 +208,7 @@ export function useRoomTasks({
       if (isUpdateWriteBlocked()) {
         throw new Error('当前页面与服务器版本不兼容，请先更新后再完成 Task');
       }
-      return callTool(
+      const result = await callTool(
         'network_task_complete',
         {
           request_id: input.requestId,
@@ -215,8 +217,18 @@ export function useRoomTasks({
         },
         { token },
       );
+      return { result, token, actorId };
     },
-    onSuccess: async (_result, input) => {
+    onSuccess: async (response, input) => {
+      // 旧身份的完成回执不能在切号后改写新身份的 Task 缓存。
+      const current = identityRef.current;
+      if (
+        !current.token ||
+        current.token !== response.token ||
+        current.actorId !== response.actorId
+      ) {
+        return;
+      }
       // 先取消旧请求，避免完成前的在途响应把已完成的 root 加回来。
       await queryClient.cancelQueries({
         queryKey: queryKeys.taskLists(input.roomId),

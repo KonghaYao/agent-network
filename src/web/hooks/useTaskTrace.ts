@@ -115,6 +115,8 @@ export function useTaskTrace({
   token: string | null;
 }): TaskTraceState {
   const queryClient = useQueryClient();
+  const tokenRef = useRef(token);
+  tokenRef.current = token;
   const traceKey = useMemo(
     () => queryKeys.taskTrace(roomId, rootId, focusId),
     [roomId, rootId, focusId],
@@ -181,6 +183,8 @@ export function useTaskTrace({
       return { page, mode: input.mode };
     },
     onSuccess: ({ page, mode }, input) => {
+      // 身份切换后旧 token 的分页响应不能并入新身份的 Trace 缓存。
+      if (input.token !== tokenRef.current) return;
       queryClient.setQueryData<TaskTraceData>(input.key, (current) =>
         current ? mergePage(current, page, mode) : current,
       );
