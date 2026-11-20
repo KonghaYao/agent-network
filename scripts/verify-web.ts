@@ -389,6 +389,18 @@ async function lensoBackgroundColor(page: Page, token: string): Promise<string> 
   }, token);
 }
 
+/** 读取应用页语义色（`--wx-*`），避免把柔和红等覆盖值写死成 Lenso 默认色。 */
+async function appBackgroundColor(page: Page, token: string): Promise<string> {
+  return page.evaluate((name) => {
+    const sample = document.createElement('span');
+    sample.style.backgroundColor = `var(--${name})`;
+    document.body.append(sample);
+    const color = getComputedStyle(sample).backgroundColor;
+    sample.remove();
+    return color;
+  }, token);
+}
+
 /** 等待左侧会话列表出现指定名称的条目（direct 名称会由后台补全）。 */
 async function waitRoomListName(page: Page, name: string): Promise<void> {
   await page.waitForFunction(
@@ -5027,15 +5039,15 @@ async function main(): Promise<void> {
         'new-agent,device-handoff,memory-open,archived-agents,logout',
       );
       check(
-        '账号头像保持 36×36',
-        accountLayout?.avatar?.width === 36 && accountLayout?.avatar?.height === 36,
+        '账号头像保持 32×32',
+        accountLayout?.avatar?.width === 32 && accountLayout?.avatar?.height === 32,
         accountLayout?.avatar,
       );
       checkEqual('账号名称字号保持 13px', accountLayout?.nameFontSize, '13px');
       checkEqual('账号操作文字字号保持 12px', accountLayout?.actionFontSize, '12px');
-      checkEqual('账号操作行间距保持 2px 10px', accountLayout?.actionGap, '2px 10px');
-      checkEqual('账号区高度保持 legacy 55px', accountLayout?.account?.height, 55);
-      checkEqual('账号操作行高度保持 legacy 22px', accountLayout?.actions?.height, 22);
+      checkEqual('账号操作行间距保持 2px 6px', accountLayout?.actionGap, '2px 6px');
+      checkEqual('账号区高度保持紧凑 58px', accountLayout?.account?.height, 58);
+      checkEqual('账号操作行高度保持 32px', accountLayout?.actions?.height, 32);
       checkEqual(
         '改名铅笔使用 Lenso 次级文字色',
         accountLayout?.pencilColor,
@@ -5052,8 +5064,8 @@ async function main(): Promise<void> {
         '1',
       );
       check(
-        '账号区高度保持 legacy 74px',
-        accountLayout?.footer?.height === 74,
+        '账号区高度保持紧凑 77px',
+        accountLayout?.footer?.height === 77,
         accountLayout?.footer,
       );
       checkEqual('侧栏账号区不再使用「···」菜单', accountLayout?.menuToggle, false);
@@ -5376,11 +5388,11 @@ async function main(): Promise<void> {
           };
         })()`,
       )) as { cardWidth: number; columns: number[]; gap: string; addOutsideScroll: boolean };
-      checkEqual('成员弹窗宽度为 legacy 680px', Math.round(membersLayout.cardWidth), 680);
+      checkEqual('成员弹窗宽度为 760px', Math.round(membersLayout.cardWidth), 760);
       check(
-        '成员弹窗双栏等宽',
+        '成员弹窗双栏为 3:2',
         membersLayout.columns.length === 2 &&
-          Math.abs(membersLayout.columns[0]! - membersLayout.columns[1]!) <= 1,
+          Math.abs(membersLayout.columns[0]! - membersLayout.columns[1]! * 1.5) <= 2,
         membersLayout.columns,
       );
       checkEqual('成员弹窗双栏间距 12px', membersLayout.gap, '12px');
@@ -5431,8 +5443,15 @@ async function main(): Promise<void> {
       await page.locator('#announcement-modal').waitFor({ state: 'visible' });
       await page.fill('#announcement-input', 'React 公告验收');
       await page.locator('#announcement-save').click();
+      await page.locator('#room-announcement-info').waitFor({ state: 'visible' });
+      await page.locator('#room-announcement-info').click();
       await page.locator('#room-announcement').waitFor({ state: 'visible' });
-      checkEqual('公告保存后显示横幅', (await page.locator('#room-announcement').textContent())?.trim(), 'React 公告验收');
+      checkEqual(
+        '公告保存后可从头部入口查看',
+        (await page.locator('#room-announcement').textContent())?.trim(),
+        'React 公告验收',
+      );
+      await page.keyboard.press('Escape');
 
       await openMenu('room-menu-rename');
       await page.locator('#room-rename-dialog').waitFor({ state: 'visible' });
@@ -5704,7 +5723,7 @@ async function main(): Promise<void> {
           await friendRow.locator('.unread').evaluate(
             (node) => getComputedStyle(node).backgroundColor,
           ),
-          await lensoBackgroundColor(page, 'status-error-fill'),
+          await appBackgroundColor(page, 'wx-unread'),
         );
         checkEqual(
           '好友分类未读会话数徽标',
@@ -5842,7 +5861,7 @@ async function main(): Promise<void> {
           await mutedRow.locator('.unread').evaluate(
             (node) => getComputedStyle(node).backgroundColor,
           ),
-          await lensoBackgroundColor(page, 'status-error-fill'),
+          await appBackgroundColor(page, 'wx-unread'),
         );
         checkEqual(
           '聊天页收到新消息后 Agent 分类徽标恢复',

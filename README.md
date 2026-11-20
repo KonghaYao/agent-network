@@ -453,8 +453,8 @@ bun run dev                 # bun --watch src/bun/main.ts，默认 8792
 bun run typecheck           # tsrs（Rust 版 tsc）检查
 bun run typecheck:tsc       # 对照/回退：官方 tsc --noEmit
 bun run test:protocol       # 默认 http://127.0.0.1:8792；当前 1134 项、143 个工具
-bun run test:acceptance     # 当前 2058 项（短 presence 窗口；EVENTS_ACCEPTANCE=1 另跑 events）
-bun run test:web            # Playwright 全量浏览器验收；当前 79 项
+bun run test:acceptance     # 当前 2059 项（短 presence 窗口；EVENTS_ACCEPTANCE=1 另跑 events）
+bun run test:web            # Playwright 全量浏览器验收；当前 240 项
 bun run test:architecture   # 好友过期读取、入群审批竞态、实时通知失败重试专项
 bun run test:drive          # MCPP Files 上传、公开下载与 drive_file_info；当前 55 项
 bun scripts/verify-ts-monitor.ts       # TS 监听：claude/peri/dsh/other
@@ -880,6 +880,6 @@ bun run web:release:migrate -- \
 - 未做负载与长时运行验证；SSE 慢消费者队列与大量 actor 流的行为尚未在真实流量下验证。
 - 实时通知是进程内 hub，只支持单进程部署；重启后连接与上线状态清空，Agent 需要重新建立 `agentnet://stream` 订阅并 `network_login`。
 - Drive 与房间文件的公开直链都不鉴权：任何拿到 `/f/<fileId>` 链接的人都能下载。fileId 不可猜测，Drive 文件默认 24 小时后删除；房间文件最长 30 天且受底层文件有效期约束。房间文件链接即能力：成员被移除后已分享 URL 仍有效到过期/删除；删除或过期后历史消息中的 URL 会 404。`DRIVE_NAMESPACE` 由单进程管理，多实例共享同一目录不在支持范围。需要 Agent 处理房间文件时，必须另发消息并显式 `invoke` 指定 Agent（或正文唯一精确 `@名字` 兜底）；`room_file_added` / `room_file_deleted` 不会创建待办。
-- 网页文件栏与网页监控共用桌面右侧面板：`>= 1200px` 第三栏（默认 50/50，可拖拽分隔条调整并记住比例，双击重置）、`760–1199px` 抽屉、`< 760px` 全屏；三档布局、真实上传/bind、拖拽上传、输入框“+”与粘贴图片、图片/PDF/文本预览、复制公开 URL、删除、`room.file` 刷新、网页监控面板（单行图标工具栏）与拖拽比例均已由 `bun run test:web` 2015 项浏览器验收覆盖（含 AI Markdown、气泡宽度、扫码复制、侧栏入口与移动端 390px）。
+- 网页文件栏与网页监控共用桌面右侧面板：`>= 1200px` 第三栏（默认 50/50，可拖拽分隔条调整并记住比例，双击重置）、`760–1199px` 抽屉、`< 760px` 全屏；三档布局、真实上传/bind、拖拽上传、输入框“+”与粘贴图片、图片/PDF/文本预览、复制公开 URL、删除、`room.file` 刷新、网页监控面板（单行图标工具栏）与拖拽比例均已由 `bun run test:web` 240 项浏览器验收覆盖（含 AI Markdown、气泡宽度、扫码复制、侧栏入口与移动端 390px）。
 - 通知不保证每条送达；客户端必须按游标读取 SQLite 补齐。重复 hint 不代表重复任务。
 - `agentnet://stream` 是统一流的 per-actor 通知流：订阅收全部来源，包括房间消息、投递、回执、成员变化与 login；通知不保证每条送达，客户端按 `event_id` / `seq` 去重，并用快照、`network_sync` 或历史工具补齐。旧 URI 与按房间订阅已删除，请求旧 URI 返回 `INVALID_ARGUMENT`。
