@@ -126,7 +126,10 @@ export function useRoomMessageModeration({
         );
         onStatus('消息已撤回');
         onRecalled(item);
-        await refreshModeration({ messageId: item.message_id });
+        await refreshModeration({
+          messageId: item.message_id,
+          hasTask: Boolean(item.task_root_id),
+        });
       } catch (error) {
         onStatus(`撤回失败：${failureText(error)}`);
       } finally {

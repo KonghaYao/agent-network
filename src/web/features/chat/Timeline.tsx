@@ -44,6 +44,8 @@ interface TimelineProps {
   olderEnded: boolean;
   hasOlder: boolean;
   forcePinToken: number;
+  /** anchor 因撤回被丢弃时复位到最新页顶部；不滚底、不推进已读。 */
+  scrollResetToken: number;
   /** 恢复/补洞期间不自动滚底、不推进已读。 */
   restoring?: boolean;
   searchNavigation?: TimelineSearchNavigation | null;
@@ -80,6 +82,7 @@ export function Timeline({
   olderEnded,
   hasOlder,
   forcePinToken,
+  scrollResetToken,
   restoring = false,
   searchNavigation,
   onLoadOlder,
@@ -105,6 +108,9 @@ export function Timeline({
   const [flashId, setFlashId] = useState<string | null>(null);
   const lastKeyRef = useRef<string | null>(null);
   const lastForceRef = useRef(forcePinToken);
+  const lastScrollResetRef = useRef(scrollResetToken);
+  /** 复位产生的 scroll 事件不能重新 pin、不能自动补读旧页。 */
+  const programmaticScrollRef = useRef(false);
   const lastJumpRef = useRef(searchNavigation?.jumpToken ?? -1);
   const autoLoadingRef = useRef(false);
   const restoreScrollSkipRef = useRef(false);
@@ -128,6 +134,18 @@ export function Timeline({
     () => items.filter((entry): entry is HistoryMessage => entry.kind !== 'presence'),
     [items],
   );
+
+  useLayoutEffect(() => {
+    if (scrollResetToken === lastScrollResetRef.current) return;
+    lastScrollResetRef.current = scrollResetToken;
+    const element = listRef.current;
+    if (!element) return;
+    setPin(false);
+    if (element.scrollTop !== 0) {
+      programmaticScrollRef.current = true;
+      element.scrollTop = 0;
+    }
+  }, [scrollResetToken, setPin]);
 
   useLayoutEffect(() => {
     if (!lastKey) return;
@@ -240,6 +258,10 @@ export function Timeline({
   const onScroll = () => {
     const element = listRef.current;
     if (!element) return;
+    if (programmaticScrollRef.current) {
+      programmaticScrollRef.current = false;
+      return;
+    }
     if (!anchored) {
       const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
       if (distance <= LIMITS.webScrollStickyPx) {

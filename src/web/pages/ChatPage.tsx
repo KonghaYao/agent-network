@@ -112,12 +112,15 @@ function onlineLabel(online: boolean | null): string {
  * 确认前持久化，SSE 只作为刷新提示，不直接把通知正文写进页面。
  */
 export function ChatPage({ roomId }: ChatPageProps) {
+  const [scrollResetToken, setScrollResetToken] = useState(0);
   const searchNavRef = useRef<ReturnType<typeof useChatSearchNavigation> | null>(null);
   // 单宿主 SSE 只转发撤回提示；anchor 窗口不在 React Query，需要主动收敛。
   const onChatEvent = useCallback(
     (event: Extract<ActorStreamEvent, { type: 'event' }>) => {
       if (event.change !== 'recalled' || !event.messageId) return;
-      searchNavRef.current?.onRemoteRecall(event.messageId);
+      if (searchNavRef.current?.onRemoteRecall(event.messageId)) {
+        setScrollResetToken((value) => value + 1);
+      }
     },
     [],
   );
@@ -383,8 +386,11 @@ export function ChatPage({ roomId }: ChatPageProps) {
         current?.message_id === item.message_id ? null : current,
       );
       // 本地撤回与远端事件走同一条 anchor 收敛路径。
-      searchNavRef.current?.onRemoteRecall(item.message_id);
-      invalidateTasks();
+      if (searchNavRef.current?.onRemoteRecall(item.message_id)) {
+        setScrollResetToken((value) => value + 1);
+      }
+      // 普通消息撤回不触碰 Task 列表；只有带 Task 标记的消息才可能改变任务。
+      if (item.task_root_id) invalidateTasks();
     },
     [closeTrace, invalidateTasks, reply, taskTrace],
   );
@@ -723,8 +729,15 @@ export function ChatPage({ roomId }: ChatPageProps) {
                   members={members}
                   identityId={identity?.actor_id ?? ''}
                   identityName={identity?.name ?? ''}
-                  canManage={moderation.canModerate}
+                  canManage={
+                    room.kind === 'group' &&
+                    !room.read_only &&
+                    room.capabilities?.manage_messages === true
+                  }
                   busy={moderation.busy}
+                  disabledReason={
+                    writeBlocked ? '当前页面与服务器版本不兼容，请先更新后再取消置顶' : null
+                  }
                   onLocate={(pin) => void searchNav.locatePin(pin)}
                   onUnpin={(pin) => void moderation.unpin(pin.message_id)}
                 />
@@ -832,6 +845,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                     }
                     hasOlder={anchored ? Boolean(navState.nextOlder) : chat.hasOlder}
                     forcePinToken={forcePinToken}
+                    scrollResetToken={scrollResetToken}
                     restoring={restoring}
                     onLoadOlder={anchored ? searchNav.navigation.loadOlder : chat.loadOlder}
                     onRetryOutbox={(id) => void onRetryOutbox(id)}

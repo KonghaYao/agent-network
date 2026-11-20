@@ -136,6 +136,34 @@ async function pinMessage(
   });
 }
 
+async function markTask(
+  base: string,
+  token: string,
+  roomId: string,
+  messageId: string,
+): Promise<void> {
+  await callTool(base, token, 'network_task_mark', {
+    request_id: requestId('e2e_mod_task'),
+    room_id: roomId,
+    message_id: messageId,
+  });
+}
+
+interface RoomReadState {
+  room: {
+    head_seq: string;
+    my_last_read_seq: string;
+  };
+}
+
+async function readRoomState(
+  base: string,
+  token: string,
+  roomId: string,
+): Promise<RoomReadState> {
+  return callTool<RoomReadState>(base, token, 'network_room_get', { room_id: roomId });
+}
+
 async function openRoom(
   browser: Browser,
   base: string,
@@ -356,7 +384,7 @@ test.describe.serial('群主消息管理前端', () => {
     }
   });
 
-  test('独立 anchor 窗口收到远端撤回后重读墓碑', async ({ browser }) => {
+  test('独立 anchor 窗口收到远端撤回后重读墓碑且不滚底/不推进已读', async ({ browser }) => {
     const room = await createModerationRoom(base);
     const old = await sendMessage(base, room.tokenOwner, room.roomId, '旧窗口待撤回消息');
     await pinMessage(base, room.tokenOwner, room.roomId, old);
@@ -369,6 +397,18 @@ test.describe.serial('群主消息管理前端', () => {
       await expect(page.locator('#messages')).toHaveAttribute('data-search-anchored', 'true');
       await expect(messageNode(page, old)).toBeVisible();
 
+      // anchor 打开期间制造未读：撤回时 read < head，才能验证不会顺带推进已读。
+      for (let index = 1; index <= 3; index += 1) {
+        await sendMessage(base, room.tokenOwner, room.roomId, `锚点期间新消息 ${index}`);
+      }
+      await expect
+        .poll(async () => {
+          const state = await readRoomState(base, room.tokenMember, room.roomId);
+          return Number(state.room.head_seq) - Number(state.room.my_last_read_seq);
+        })
+        .toBeGreaterThan(0);
+      const before = await readRoomState(base, room.tokenMember, room.roomId);
+
       await callTool(base, room.tokenOwner, 'network_message_recall', {
         request_id: requestId('e2e_mod_recall'),
         message_id: old,
@@ -380,8 +420,78 @@ test.describe.serial('群主消息管理前端', () => {
       await expect(messageNode(page, old)).toHaveCount(0);
       await expect(page.locator('#messages')).not.toContainText('旧窗口待撤回消息');
       await expect(page.locator('#pinned-messages')).toHaveCount(0);
+
+      // 等过滚动已读延迟，确认没有延迟滚底或 mark_read。
+      await page.waitForTimeout(900);
+      const scroll = await page.locator('#messages').evaluate((element) => ({
+        top: element.scrollTop,
+        max: element.scrollHeight - element.clientHeight,
+      }));
+      expect(scroll.max).toBeGreaterThan(0);
+      expect(scroll.top).toBeLessThan(scroll.max);
+      const after = await readRoomState(base, room.tokenMember, room.roomId);
+      expect(after.room.my_last_read_seq).toBe(before.room.my_last_read_seq);
+      expect(Number(after.room.my_last_read_seq)).toBeLessThan(Number(after.room.head_seq));
     } finally {
       await close();
+    }
+  });
+
+  test('撤回只重读受影响窗口，Task 消息才刷新 Task 列表', async ({ browser }) => {
+    const room = await createModerationRoom(base);
+    const ordinary = await sendMessage(base, room.tokenOwner, room.roomId, '普通待撤回消息');
+    const taskRoot = await sendMessage(base, room.tokenOwner, room.roomId, 'Task 待撤回消息');
+    await markTask(base, room.tokenOwner, room.roomId, taskRoot);
+
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await login(page, base, room.tokenMember);
+    const counts = { history: 0, task: 0 };
+    await page.route('**/mcp', async (route) => {
+      const name = route.request().headers()['mcp-name'];
+      if (name === 'network_history_list') counts.history += 1;
+      if (name === 'network_task_list') counts.task += 1;
+      await route.continue();
+    });
+    const initialTaskList = page
+      .waitForResponse(
+        (response) => response.request().headers()['mcp-name'] === 'network_task_list',
+      )
+      .catch(() => undefined);
+    await page.goto(`${base}/c/${room.roomId}`);
+    await expect(page.locator('#composer')).toBeVisible();
+    await initialTaskList;
+    // 等首屏 ack 与任务查询稳定后再开始计数。
+    await page.waitForTimeout(1000);
+    counts.history = 0;
+    counts.task = 0;
+
+    try {
+      await callTool(base, room.tokenOwner, 'network_message_recall', {
+        request_id: requestId('e2e_mod_recall'),
+        message_id: ordinary,
+      });
+      await expect(
+        page.locator(`li.msg-system.msg-recalled[data-message-id="${ordinary}"]`),
+      ).toBeVisible();
+      await page.waitForTimeout(800);
+      expect(counts.history).toBe(1);
+      expect(counts.task).toBe(0);
+
+      counts.history = 0;
+      counts.task = 0;
+      await callTool(base, room.tokenOwner, 'network_message_recall', {
+        request_id: requestId('e2e_mod_recall'),
+        message_id: taskRoot,
+      });
+      await expect(
+        page.locator(`li.msg-system.msg-recalled[data-message-id="${taskRoot}"]`),
+      ).toBeVisible();
+      await page.waitForTimeout(800);
+      expect(counts.history).toBe(1);
+      expect(counts.task).toBeGreaterThan(0);
+    } finally {
+      await context.close();
     }
   });
 
@@ -419,6 +529,62 @@ test.describe.serial('群主消息管理前端', () => {
       await page.locator('#message-action-pin').click();
       await expect(page.locator('#status')).toContainText('置顶失败');
       await expect(page.locator('#status')).toContainText('最多置顶 3 条');
+    } finally {
+      await context.close();
+    }
+  });
+
+  test('契约不兼容时置顶区取消置顶禁用并提示', async ({ browser }) => {
+    const room = await createModerationRoom(base);
+    const pinned = await sendMessage(base, room.tokenOwner, room.roomId, '不兼容时的置顶消息');
+    await pinMessage(base, room.tokenOwner, room.roomId, pinned);
+
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await login(page, base, room.tokenOwner);
+    await page.route('**/web-version.json', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          deploymentId: 'r-e2e-incompatible',
+          buildId: `sha256:${'f'.repeat(64)}`,
+          minWebContract: 2,
+          maxWebContract: 2,
+        }),
+      }),
+    );
+    await page.route('**/c/**', async (route) => {
+      if (route.request().resourceType() !== 'document') {
+        await route.continue();
+        return;
+      }
+      const response = await route.fetch();
+      const html = await response.text();
+      const release = JSON.stringify({
+        buildId: `sha256:${'a'.repeat(64)}`,
+        webContract: 1,
+      });
+      await route.fulfill({
+        response,
+        body: html.replace(
+          '</head>',
+          `<script type="application/json" id="web-release">${release}</script></head>`,
+        ),
+      });
+    });
+
+    try {
+      await page.goto(`${base}/c/${room.roomId}`);
+      await expect(page.locator('#composer')).toBeVisible();
+      await expect(page.locator('#pwa-update-notice')).toBeVisible({ timeout: 10_000 });
+      const unpin = page.locator(`[data-pinned-unpin-id="${pinned}"]`);
+      await expect(unpin).toBeVisible();
+      await expect(unpin).toBeDisabled();
+      await expect(unpin).toHaveAttribute(
+        'title',
+        '当前页面与服务器版本不兼容，请先更新后再取消置顶',
+      );
     } finally {
       await context.close();
     }

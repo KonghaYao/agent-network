@@ -18,6 +18,13 @@ import type { WebSession } from '../lib/identity';
 import { currentIdentityEpoch } from '../lib/identity-epoch';
 import { callTool, mcpError, type McpError } from '../lib/mcp-client';
 import { queryKeys } from '../lib/query-keys';
+import {
+  emptyPendingRefresh,
+  historyItemHasTaskMarker,
+  historyItemVisible,
+  markPendingRefresh,
+  type PendingRefresh,
+} from '../lib/room-stream-refresh';
 import type { RoomsPage } from '../lib/rooms';
 import { SCOPE_RESET_EVENT, type ScopeResetDetail } from '../lib/scope-reset';
 import { invalidateRoomTasks, resetRoomTasks } from '../lib/task-cache';
@@ -71,6 +78,8 @@ export interface RoomChatOptions {
 export interface ModerationRefresh {
   messageId?: string;
   pinsOnly?: boolean;
+  /** 被撤回消息带 Task 标记时才刷新 Task 列表。 */
+  hasTask?: boolean;
 }
 
 interface HistoryCache {
@@ -185,118 +194,6 @@ async function fetchTimelineAfter(
     snapshot: page.timeline_snapshot ?? null,
     authorization: page.authorization ?? null,
   };
-}
-
-interface PendingRefresh {
-  rooms: boolean;
-  detail: boolean;
-  history: boolean;
-  files: boolean;
-  taskSummaries: boolean;
-  /** 常驻 Task 列表与已打开的 Trace；普通消息也可能改变计数/预览。 */
-  tasks: boolean;
-  /** 成员代次、历史策略或生命周期变化：丢弃旧授权下的 Task 缓存。 */
-  taskReset: boolean;
-  contacts: boolean;
-  contactBadge: boolean;
-  /** 当前房间内需要按锚点重读的消息（撤回、回执等旧窗口项）。 */
-  messageIds: Set<string>;
-}
-
-function emptyPendingRefresh(): PendingRefresh {
-  return {
-    rooms: false,
-    detail: false,
-    history: false,
-    files: false,
-    taskSummaries: false,
-    tasks: false,
-    taskReset: false,
-    contacts: false,
-    contactBadge: false,
-    messageIds: new Set(),
-  };
-}
-
-/**
- * 把单个 stream item 映射为最小失效集合。
- *
- * 信封已带 `source` / `kind` / `room_id`，因此不需要解析正文：
- * - 当前房间的消息、回执、成员/生命周期变化才失效 history 与 detail；
- * - 其他房间只失效侧栏列表，不碰当前房间历史；
- * - 文件与任务摘要各自失效，避免 `['room', id]` 前缀把 history 一并命中；
- * - `room.read` 是本地 mark_read mutation 的回声，缓存已写回，不再重读。
- */
-function markPendingRefresh(
-  pending: PendingRefresh,
-  event: Extract<ActorStreamEvent, { type: 'event' }>,
-  currentRoomId: string,
-  humanTimeline: boolean,
-): void {
-  const { source, kind, roomId, messageId } = event;
-  if (source === 'contact' || kind === 'contact') {
-    pending.rooms = true;
-    pending.contacts = true;
-    pending.contactBadge = true;
-    return;
-  }
-  if (!roomId) {
-    pending.rooms = true;
-    return;
-  }
-  if (roomId !== currentRoomId) {
-    pending.rooms = true;
-    return;
-  }
-  if (source === 'room.file' || kind === 'file') {
-    pending.files = true;
-    return;
-  }
-  if (source === 'room.read' || kind === 'read') {
-    return;
-  }
-  // 置顶只改变房间详情里的 pinned_messages：不重读历史、不重置 Task，
-  // 也不推进未读或滚动。必须先于通用 `kind === 'room'` 分支处理。
-  if (source === 'room.pins') {
-    pending.detail = true;
-    return;
-  }
-  // 撤回与回执可能落在已加载但不在最新页的旧消息上；锚点重读权威结果，
-  // 不能只靠 append 增量流把旧 preview/delivery_states 留在窗口里。
-  if (messageId && (kind === 'message' || kind === 'receipt')) {
-    pending.messageIds.add(messageId);
-  }
-  if (source === 'task.updated' || kind === 'task') {
-    pending.history = true;
-    pending.detail = true;
-    pending.taskSummaries = true;
-    pending.tasks = true;
-    return;
-  }
-  if (source === 'room.presence' || kind === 'presence') {
-    pending.detail = true;
-    pending.rooms = true;
-    if (humanTimeline) pending.history = true;
-    return;
-  }
-  if (source === 'room.membership' || source === 'room.lifecycle' || kind === 'room') {
-    // 成员代次/历史策略/归档会收紧可读边界：重新鉴权并清掉旧私有预览。
-    pending.history = true;
-    pending.detail = true;
-    pending.rooms = true;
-    pending.tasks = true;
-    pending.taskReset = true;
-    pending.taskSummaries = true;
-    return;
-  }
-  pending.history = true;
-  pending.detail = true;
-  pending.rooms = true;
-  if (source === 'room.message' || kind === 'message') {
-    // 普通消息与撤回改变消息数、参与者、最近活动与 recent_messages。
-    pending.tasks = true;
-    pending.taskSummaries = true;
-  }
 }
 
 export function useRoomChat(roomId: string, options: RoomChatOptions = {}) {
@@ -829,20 +726,29 @@ export function useRoomChat(roomId: string, options: RoomChatOptions = {}) {
    * 群管理操作后的定向刷新，与 SSE 共用同一 pending 合并器。
    *
    * - 置顶只失效 detail；不重读历史、Task 或会话排序；
-   * - 撤回同时失效 detail/history/列表，并按消息锚点重读旧窗口；
+   * - 撤回只重读已渲染窗口，只有带 Task 标记时才刷新 Task 列表；
    * - 若已有防抖刷新在排队，先取消并合并到本次，避免两个 refresh 互相覆盖。
    */
   const refreshModeration = useCallback(
-    async ({ messageId, pinsOnly = false }: ModerationRefresh = {}): Promise<void> => {
+    async ({
+      messageId,
+      pinsOnly = false,
+      hasTask = false,
+    }: ModerationRefresh = {}): Promise<void> => {
       if (!token) return;
       const pending = pendingRefreshRef.current;
       pending.detail = true;
       if (!pinsOnly) {
-        pending.history = true;
         pending.rooms = true;
-        pending.tasks = true;
-        pending.taskSummaries = true;
-        if (messageId) pending.messageIds.add(messageId);
+        if (hasTask) {
+          pending.tasks = true;
+          pending.taskSummaries = true;
+        }
+        if (messageId) {
+          // 撤回消息无法作为 anchor 重读；只有已渲染的窗口需要重读一次。
+          const cached = queryClient.getQueryData<HistoryCache>(historyKey);
+          if (historyItemVisible(cached?.items, messageId)) pending.history = true;
+        }
       }
       if (refreshTimerRef.current) {
         clearTimeout(refreshTimerRef.current);
@@ -899,6 +805,18 @@ export function useRoomChat(roomId: string, options: RoomChatOptions = {}) {
           return;
         }
         markPendingRefresh(pending, event, roomId, humanTimeline);
+        if (event.change === 'recalled' && event.messageId) {
+          // 事件本身不带 Task 标记；只有已加载窗口里的消息才需要重读，
+          // 也只有带 Task 标记的撤回才刷新 Task 列表。
+          const cached = queryClient.getQueryData<HistoryCache>(historyKey);
+          if (historyItemVisible(cached?.items, event.messageId)) {
+            pending.history = true;
+            if (historyItemHasTaskMarker(cached?.items, event.messageId)) {
+              pending.tasks = true;
+              pending.taskSummaries = true;
+            }
+          }
+        }
         // anchor 窗口不在 React Query；由这里转发 recalled 提示，避免另开订阅。
         onEventRef.current?.(event);
       }

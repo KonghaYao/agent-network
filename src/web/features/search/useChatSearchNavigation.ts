@@ -130,22 +130,23 @@ export function useChatSearchNavigation({
    *
    * 服务端 anchor 请求会拒绝已撤回消息（body_bytes=0），因此不能原地重读
    * 墓碑；这里直接丢弃旧窗口并回到最新页，避免继续展示旧正文缓存。
+   * 返回是否真的丢弃了窗口；调用方据此把滚动位置复位，而不是滚底。
    */
   const onRemoteRecall = useCallback(
-    (messageId: string) => {
+    (messageId: string): boolean => {
       const { state } = navigation;
-      if (state.status !== 'anchored') return;
+      if (state.status !== 'anchored') return false;
       if (
         !state.items.some(
           (item) => item.kind !== 'presence' && item.message_id === messageId,
         )
       ) {
-        return;
+        return false;
       }
       navigation.clear();
-      forcePin();
+      return true;
     },
-    [forcePin, navigation],
+    [navigation],
   );
 
   // 搜索弹窗已关闭的历史窗口：Esc 返回最新；弹窗、全屏预览或输入中不接管。

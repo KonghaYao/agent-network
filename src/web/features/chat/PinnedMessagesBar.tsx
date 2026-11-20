@@ -16,6 +16,8 @@ interface PinnedMessagesBarProps {
   identityName: string;
   canManage: boolean;
   busy?: boolean;
+  /** 契约不兼容等原因禁用取消置顶，并说明原因。 */
+  disabledReason?: string | null;
   onLocate: (pin: PinnedMessage) => void;
   onUnpin: (pin: PinnedMessage) => void;
 }
@@ -43,6 +45,7 @@ export function PinnedMessagesBar({
   identityName,
   canManage,
   busy = false,
+  disabledReason = null,
   onLocate,
   onUnpin,
 }: PinnedMessagesBarProps) {
@@ -98,7 +101,8 @@ export function PinnedMessagesBar({
                   className="pinned-unpin"
                   data-pinned-unpin-id={pin.message_id}
                   aria-label={`取消置顶：${sender}：${preview}`}
-                  disabled={busy}
+                  title={disabledReason ?? undefined}
+                  disabled={busy || Boolean(disabledReason)}
                   onClick={() => onUnpin(pin)}
                 >
                   取消置顶
