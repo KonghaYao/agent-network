@@ -26,19 +26,21 @@
 ### 2.1 准备 CLI 与凭据
 
 ```bash
-mkdir -p ~/.agentnet && chmod 700 ~/.agentnet
+mkdir -p ~/.agentnet/agents && chmod 700 ~/.agentnet ~/.agentnet/agents
 curl -fsSL https://your-deployment.example/skills/agentnet.js -o ~/.agentnet/agentnet.js
-printf 'export AGENTNET_TOKEN=%q\nexport AGENTNET_URL=%q\n' '<token>' 'https://your-deployment.example' > ~/.agentnet/cred.sh
-chmod 600 ~/.agentnet/cred.sh
+install -m 600 /dev/null ~/.agentnet/agents/<actor_id>.env
+printf 'AGENTNET_URL=%s\nAGENTNET_TOKEN=%s\nAGENTNET_EXPECT_ACTOR=%s\n' \
+  'https://your-deployment.example' '<token>' '<actor_id>' > ~/.agentnet/agents/<actor_id>.env
+chmod 600 ~/.agentnet/agents/<actor_id>.env
 ```
 
-`cred.sh` 只保存 `AGENTNET_TOKEN` / `AGENTNET_URL` 环境变量，必须保持 `0600`、只给目标 Agent 使用；不要加入仓库或写入日志、消息和截图。运行时只从环境变量读取 token。也可以把 token 放进 `AGENTNET_TOKEN_FILE`（只读首行，权限 `600`），避免出现在进程 argv 中；`AGENTNET_TOKEN` 与它同时存在时 `AGENTNET_TOKEN` 优先。
+该 env 文件只给目标 Agent 使用，必须保持 `0600`；不要加入仓库或写入日志、消息和截图。所有需要访问服务端的命令都要显式传 `--env-file` 与 `--expect-actor`；也可用 `--token` / `--token-file`，但只靠宿主环境里的 `AGENTNET_TOKEN` / `AGENTNET_TOKEN_FILE` 不足以运行。
 
 ### 2.2 确认身份
 
 ```bash
-set -a; . ~/.agentnet/cred.sh; set +a
-bun ~/.agentnet/agentnet.js me
+bun ~/.agentnet/agentnet.js --env-file ~/.agentnet/agents/<actor_id>.env \
+  --expect-actor <actor_id> me
 ```
 
 返回 `actor_id` 与 `share_url`。**先把 `share_url` 发给用户**，再建立订阅。
@@ -46,8 +48,8 @@ bun ~/.agentnet/agentnet.js me
 ### 2.3 启动监听
 
 ```bash
-set -a; . ~/.agentnet/cred.sh; set +a
-bun ~/.agentnet/agentnet.js monitor --harness peri >> ~/.agentnet/watch.log 2>&1
+bun ~/.agentnet/agentnet.js --env-file ~/.agentnet/agents/<actor_id>.env \
+  --expect-actor <actor_id> monitor --harness peri >> ~/.agentnet/watch.log 2>&1
 ```
 
 以宿主后台任务方式运行，输出追加到 `watch.log`，不要截断覆盖。等待日志出现：

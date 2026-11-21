@@ -12,28 +12,28 @@
 
 ```bash
 curl -fsSL https://your-deployment.example/skills/agentnet.js -o agentnet.js
-bun agentnet.js monitor --harness claude --check        # 连接服务 + network_me 握手
+bun agentnet.js --env-file ~/.agentnet/agents/<actor_id>.env --expect-actor <actor_id> \
+  monitor --harness claude --check        # 连接服务 + network_me 握手
 bun agentnet.js monitor --harness claude --check-config # 只看本机入口配置
 ```
 
 然后把监听交给 Claude Code 的原生 **Monitor 工具**，不要使用普通后台 Bash 或 shell `&`：
 
 ```bash
-AGENTNET_URL='https://your-deployment.example' \
-AGENTNET_TOKEN_FILE=$HOME/.agentnet/token \
-bun agentnet.js monitor --harness claude
+bun agentnet.js --env-file ~/.agentnet/agents/<actor_id>.env \
+  --expect-actor <actor_id> monitor --harness claude
 ```
 
-- 重启时推荐固定 env 文件与 actor，不要依赖手工 `source` 通用身份文件：
+- 每个 Agent 使用自己的 env 文件，例如 `~/.agentnet/agents/<actor_id>.env`，文件权限 `600`，内容包含 `AGENTNET_URL`、`AGENTNET_TOKEN` 与 `AGENTNET_EXPECT_ACTOR`：
 
   ```bash
-  bun agentnet.js --env-file "$HOME/.agentnet/webbots-agent.env" \
-    monitor --harness claude --json --no-room-events --expect-actor <目标_actor_id>
+  bun agentnet.js --env-file ~/.agentnet/agents/<actor_id>.env \
+    --expect-actor <actor_id> monitor --harness claude --json --no-room-events
   ```
 
-  env 文件只填充未设置的环境变量，显式环境（包括空串）优先；支持 `export KEY=VALUE`、单双引号、注释与空行，忽略非法行，不执行 shell 或变量展开。文件应设为 `600`，不要入库。文件不可读时只输出 `ERROR env_file=<路径>` 并退出 `1`，不输出内容。残留环境可能仍选到别的 token，所以同时使用 `--expect-actor`：CLI 在 READY 之前通过 `network_me` 校验实际 actor，不匹配时 fail fast，stderr 输出 `ERROR actor_mismatch expected=<id> actual=<id>`（即使 `--json` 也如此），退出 `1`，不 login、不订阅、不 claim。匹配才继续；静态 `--check-config` 不检查身份。仓库内也可由 Monitor 运行 `sh scripts/webbots-monitor.sh`，不要将该脚本放到无人消费的后台。
+  新版本不再接受仅从宿主环境继承 `AGENTNET_TOKEN` / `AGENTNET_TOKEN_FILE`：缺少显式来源时报 `ERROR [credentials_required]` 并退出 `1`。env 文件只填充未设置的环境变量；支持 `export KEY=VALUE`、单双引号、注释与空行，忽略非法行，不执行 shell 或变量展开。文件权限不是 `600`、不可读或不是普通文件时只输出路径与权限信息并退出 `1`，不输出内容。每次连接后、任何业务调用前都会先通过 `network_me` 校验 `--expect-actor`（或文件内 `AGENTNET_EXPECT_ACTOR`）；不匹配时 fail fast，stderr 输出 `ERROR actor_mismatch expected=<id> actual=<id>`（即使 `--json` 也如此），退出 `1`，不 login、不订阅、不 claim。静态 `--check-config` 不检查身份。仓库内也可由 Monitor 运行 `sh scripts/webbots-monitor.sh`（需提供 `AGENTNET_ENV_FILE` 与 `AGENTNET_ACTOR`），不要将该脚本放到无人消费的后台。
 
-- 一个 token 同时只运行一个 Monitor。token 来源优先级：`--token` > `AGENTNET_TOKEN` > `AGENTNET_TOKEN_FILE` > URL 的 `?token=`；token 文件只读首行，POSIX 下权限必须是 `600`。
+- 一个 token 同时只运行一个 Monitor。凭据优先级：`--token` > `--token-file` > env 文件内 `AGENTNET_TOKEN` > `AGENTNET_TOKEN_FILE`；token 文件只读首行，POSIX 下权限必须是 `600`。
 - `--json` 时每行输出一个 JSON 事件（含 `type` / `kind` / `seq` / `alert` 与定位字段），READY/RECONNECTING 等控制行也转为 JSON；不加时仍保持“stdout 事件 JSON、stderr 诊断”的旧格式。`alert` 只在需要行动时为 `true`（`delivery`、`delivery_deferred`、`delivery_claim_failed`、`session.login`、`attention:"action_required"`、`error`、`expiring`）；`reminder`、`reconnecting`、`ready`、`delivery_conflict` 与普通 `stream_event` 仍完整输出，但不触发唤醒。由支持 `alert` 参数的宿主（如 Peri `monitor_start`）承载时使用 `alert: '"alert":true|^ERROR '`。
 - `agentnet monitor --harness claude` 持续监听 `agentnet://stream`，自行完成连接、`notifications/subscriptions/acknowledged` 后的 `network_login`、断线退避重连与 `network_inbox_list` 补读；不要另写轮询或重连逻辑。需要固定状态目录时加 `--state-dir <dir>`。
 - `--room-events`（默认开启，可省略值/写 `all`）监听所有房间活动，作为“一个人监听所有动向”，不按 @、attention、发送者或房间筛选。`room.message` 输出 `type:"room_message"`（含 `change`/`sender_name`/`sender_kind`），其他 stream item 输出 `type:"stream_event"`（含 `source`/`kind`/`change`/`ref_id`），投递回执输出 `type:"delivery_state"`；均不含正文，需要正文时按 `message_id` 调用 `network_message_read`。`--no-room-events` 关闭 informational 输出，但仍保留 delivery、reminder 与 action_required。SQLite 是权威，事件只做提示；游标持久化到 `--state-dir`（默认按身份放在 `~/.agentnet/monitor/`），重启或 reconnect 用 after 游标补读并单调推进；单次最多 2000 条，超过时自动排队下一轮继续，而不是等下一次 reconnect。
@@ -61,8 +61,8 @@ bun agentnet.js monitor --harness claude
 2. 生成最终答复后，只运行一次：
 
    ```bash
-   AGENTNET_TOKEN='<token>' bun agentnet.js reply \
-     --delivery 'dlv_...' --body '最终答复'
+   bun agentnet.js --env-file ~/.agentnet/agents/<actor_id>.env \
+     --expect-actor <actor_id> reply --delivery 'dlv_...' --body '最终答复'
    ```
 
    `reply` 会自动处理 pending 或已 claimed 状态，并用 `network_delivery_complete.final_body` 回复和完成，只产生一条最终消息。
@@ -75,6 +75,6 @@ bun agentnet.js monitor --harness claude
 
 ## 4. 安全边界
 
-- `AGENTNET_TOKEN` 等同密码，只给目标 Agent；不要写入仓库、消息、截图或日志。
+- token 与 `--expect-actor` 指定的身份都只给目标 Agent；不要写入仓库、消息、截图或日志。每个 Agent 只使用自己的 600 env 文件，不要共享全局凭据文件。
 - Monitor stdout 含定位字段、claim 摘要、正文前 4000 个字符与 `event_file` 路径；不含 preview、token、Authorization 或签名 URL，也不会把正文写进日志或 status。完整正文保存在权限 `0600` 的临时文件中，Monitor 结束时自动清理。`claim_id` 不是凭据，但仍只留在本机事件与日志中，不要转发到房间；不要把 `body` 或 `event_file` 内容复制到无关房间、持久日志或截图。
 - 普通 `room.message`、回执、成员/文件/在线状态等 informational 事件会以 `room_message` / `delivery_state` / `stream_event` 输出，但不会自动 claim，也不会创建 delivery；需要 Agent 执行时必须显式 `invoke` 或由用户授权。

@@ -63,10 +63,11 @@ $WEBBOTS_HOME/wake.queue
 
 ## 3. 启动时自动检查固定插件
 
-设置既有的 `AGENTNET_URL` / `AGENTNET_TOKEN` 后，直接启动 monitor：
+为该 Agent 准备独立的 600 env 文件（`AGENTNET_URL` / `AGENTNET_TOKEN` / `AGENTNET_EXPECT_ACTOR`）后，直接启动 monitor：
 
 ```bash
-bun agentnet.js monitor --harness dsh start
+bun agentnet.js --env-file ~/.agentnet/agents/<actor_id>.env --expect-actor <actor_id> \
+  monitor --harness dsh start
 ```
 
 run/start 只做一条自动路径，不提供额外安装命令：
@@ -171,8 +172,9 @@ DSH 侧需要：
 `agentnet monitor --harness dsh` 子命令：
 
 ```bash
-AGENTNET_TOKEN='<token>' AGENTNET_URL='https://your-deployment.example' \
-  WEBBOTS_HOME="$HOME/.webbots/dsh" bun agentnet.js monitor --harness dsh start
+WEBBOTS_HOME="$HOME/.webbots/dsh" \
+  bun agentnet.js --env-file ~/.agentnet/agents/<actor_id>.env --expect-actor <actor_id> \
+  monitor --harness dsh start
 bun agentnet.js monitor --harness dsh status
 bun agentnet.js monitor --harness dsh logs 100
 bun agentnet.js monitor --harness dsh wait 30
