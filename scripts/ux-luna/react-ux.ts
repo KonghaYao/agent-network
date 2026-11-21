@@ -1,7 +1,7 @@
 import { chromium, type Page } from 'playwright';
 
 import { createFixture } from './fixture';
-import { rawTool } from '../verify-web';
+import { rawTool } from '../lib/web-test-fixture';
 
 /**
  * 4B-6 React UX 回归：桌面/移动布局、暗色、IME、输入框自适应、

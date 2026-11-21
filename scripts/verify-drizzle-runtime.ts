@@ -1547,14 +1547,14 @@ async function rowParityChecks(sqlite: Database, db: D1Database): Promise<void> 
     'getActorsByIds many',
     JSON.stringify(await getActorsByIds(db, actorIds)),
     JSON.stringify(
-      rawAll(sqlite, `SELECT actor_id, kind FROM actors WHERE actor_id IN (${placeholders(actorIds)})`, actorIds),
+      rawAll(sqlite, `SELECT actor_id, kind, avatar_file_id FROM actors WHERE actor_id IN (${placeholders(actorIds)})`, actorIds),
     ),
   );
   checkEqual(
     'getActorsByIds duplicates collapsed',
     JSON.stringify(await getActorsByIds(db, ['act_agent_1', 'act_agent_1'])),
     JSON.stringify(
-      rawAll(sqlite, 'SELECT actor_id, kind FROM actors WHERE actor_id IN (?, ?)', [
+      rawAll(sqlite, 'SELECT actor_id, kind, avatar_file_id FROM actors WHERE actor_id IN (?, ?)', [
         'act_agent_1',
         'act_agent_1',
       ]),
@@ -1564,7 +1564,7 @@ async function rowParityChecks(sqlite: Database, db: D1Database): Promise<void> 
     'getActorsByIds missing ids',
     JSON.stringify(await getActorsByIds(db, ['act_human_1', 'missing'])),
     JSON.stringify(
-      rawAll(sqlite, 'SELECT actor_id, kind FROM actors WHERE actor_id IN (?, ?)', [
+      rawAll(sqlite, 'SELECT actor_id, kind, avatar_file_id FROM actors WHERE actor_id IN (?, ?)', [
         'act_human_1',
         'missing',
       ]),
@@ -1642,7 +1642,7 @@ async function rowParityChecks(sqlite: Database, db: D1Database): Promise<void> 
   checkEqual('getCredentialByHash missing', await getCredentialByHash(db, 'missing'), null);
 
   const peerSql = (roomIds: string[]): string =>
-    `SELECT rm.room_id, a.actor_id, a.name, a.kind
+    `SELECT rm.room_id, a.actor_id, a.name, a.kind, a.avatar_file_id
        FROM room_members rm
        JOIN actors a ON a.actor_id = rm.actor_id
       WHERE rm.room_id IN (${placeholders(roomIds)})
@@ -1993,7 +1993,7 @@ async function rowParityChecks(sqlite: Database, db: D1Database): Promise<void> 
   );
   checkEqual('listActiveRoomManagerIds missing', JSON.stringify(await listActiveRoomManagerIds(db, 'room_missing')), '[]');
 
-  const invitedSql = `SELECT i.invitation_id, i.target_actor_id AS actor_id, a.kind, a.name,
+  const invitedSql = `SELECT i.invitation_id, i.target_actor_id AS actor_id, a.kind, a.name, a.avatar_file_id,
               i.inviter_id AS invited_by, i.created_at, i.expires_at
          FROM room_invitations i
          JOIN actors a ON a.actor_id = i.target_actor_id

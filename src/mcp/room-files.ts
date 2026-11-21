@@ -23,7 +23,8 @@ import { memoryIntakeFromEnv } from '../memory/intake';
 import { getRoomFile } from '../storage/queries';
 import { requireActor } from './auth';
 import { roomFileDeletedSchema, roomFilePageSchema, roomFileResultSchema } from './outputs';
-import { register, type MessageCommittedHookInput } from './tools';
+import { register } from './tool-registration';
+import type { MessageCommittedHookInput } from './message-tools';
 
 export interface RoomFileToolBinding {
   fileService: FileService;

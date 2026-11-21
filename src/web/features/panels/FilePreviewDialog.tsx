@@ -2,13 +2,13 @@ import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { useRef } from 'react';
 
 import { Button } from '../../app/lenso-controls';
-import { fileDownloadUrl, fileMetaText, type RoomFileItem } from '../../lib/files-ui';
+import { fileMetaText, type RoomFileItem } from '../../lib/files-ui';
+import { FileDownloadLink } from './FileDownloadLink';
 import { FilePreviewBody } from './FilePreviewBody';
 
 /** 移动端和非文档类型沿用弹窗，共享正文负责预览安全边界。 */
 export function FilePreviewDialog({ item, onClose }: { item: RoomFileItem | null; onClose: () => void }) {
   const openerRef = useRef<HTMLElement | null>(null);
-  const download = item ? fileDownloadUrl(item) : null;
 
   return (
     <DialogPrimitive.Root open={item !== null} onOpenChange={(next) => (!next ? onClose() : undefined)}>
@@ -39,9 +39,7 @@ export function FilePreviewDialog({ item, onClose }: { item: RoomFileItem | null
             </header>
             {item ? <FilePreviewBody key={item.file_id} item={item} /> : null}
             <footer className="file-preview-foot">
-              {download ? (
-                <a id="file-preview-download" href={download} download={item?.name || '文件'} rel="noopener" referrerPolicy="no-referrer">下载文件</a>
-              ) : null}
+              {item ? <FileDownloadLink id="file-preview-download" item={item}>下载文件</FileDownloadLink> : null}
             </footer>
           </div>
         </DialogPrimitive.Content>

@@ -23,6 +23,7 @@ import type {
   MemoryRetainIntentRow,
   MemorySpaceRow,
 } from './rows';
+import { BackendSpaceCache } from './backend-space-cache';
 import { representationFromRow } from './representation-from-row';
 import {
   MEMORY_POLICY_VERSION,
@@ -139,12 +140,12 @@ export class MemoryRuntime {
   #capture: boolean;
   /** 本轮 tick 中远端受理的 retain 数；只用于统计，不代替持久状态。 */
   #tickSubmitted = 0;
-  /** 本进程已确认的后端分区；键含 space/ownership/backend epoch。 */
-  readonly #ensuredSpaces = new Set<string>();
+  #spaces: BackendSpaceCache;
 
   constructor(db: D1Like, options: MemoryRuntimeOptions) {
     this.#db = db;
     this.#options = options;
+    this.#spaces = new BackendSpaceCache(options.adapter);
     this.#workerId = options.workerId ?? `memory-worker-${crypto.randomUUID().slice(0, 8)}`;
     this.#capture = options.capture ?? true;
   }
@@ -175,7 +176,8 @@ export class MemoryRuntime {
     await recoverMemoryJobs(this.#db, { now: this.now() });
     this.#started = true;
     this.#stopped = false;
-    this.#ensuredSpaces.clear();
+    this.#spaces.close();
+    this.#spaces = new BackendSpaceCache(this.#options.adapter);
   }
 
   /**
@@ -186,6 +188,7 @@ export class MemoryRuntime {
    */
   async stop(): Promise<void> {
     this.#stopped = true;
+    this.#spaces.close();
     const cancellable = this.#options.adapter as MemoryAdapter & { cancelAll?: () => void };
     if (typeof cancellable.cancelAll === 'function') {
       try {
@@ -229,18 +232,10 @@ export class MemoryRuntime {
     space: SearchRequest['space'],
     plan: MemoryAdapterSearchPlan,
   ): Promise<SearchResult> {
-    const key = `${space.space_id}:${space.ownership_epoch}:${space.backend_binding_epoch}`;
-    if (!this.#ensuredSpaces.has(key)) {
-      // ensureSpace 是加速/惰性建分区；读路径仍交给 search 决定可用性，
-      // 个别只读适配器可能不实现 ensureSpace 但有可检索分区。
-      const ensured = await this.#options.adapter.ensureSpace({
-        space,
-        operation_key: `ensure-space:${key}`,
-        payload_sha256: await sha256Hex(`ensure-space|${key}`),
-        deadline_at: null,
-      });
-      if (ensured.status === 'ready') this.#ensuredSpaces.add(key);
-    }
+    const spaces = this.#spaces;
+    // 只读适配器即使不支持 ensure，仍可能已有可检索的空间。
+    await spaces.ensure(space);
+    if (spaces.closed) throw new Error('Memory runtime stopped');
     return this.#options.adapter.search({ space, plan });
   }
 
@@ -445,38 +440,12 @@ export class MemoryRuntime {
       .run();
   }
 
-  #spaceCacheKey(space: MemorySpaceRow): string {
-    return `${space.space_id}:${space.ownership_epoch}:${space.backend_binding_epoch}`;
-  }
-
-  /**
-   * 懒确保后端分区。
-   *
-   * 空间创建与外部后端创建是两件事：本地空间可能先于后端存在。写/删/召回
-   * 作业在第一次访问某代次时先 ensureSpace；失败只让当前作业重排，不写业务
-   * 数据，也不把未确认的分区当成已存在。
-   */
-  private async ensureBackendSpace(space: MemorySpaceRow): Promise<boolean> {
-    const key = this.#spaceCacheKey(space);
-    if (this.#ensuredSpaces.has(key)) return true;
-    const result = await this.#options.adapter.ensureSpace({
-      space: spaceRef(space),
-      operation_key: `ensure-space:${key}`,
-      payload_sha256: await sha256Hex(`ensure-space|${key}`),
-      deadline_at: null,
-    });
-    if (result.status === 'ready') {
-      this.#ensuredSpaces.add(key);
-      return true;
-    }
-    return false;
-  }
-
   private async executeEnsureSpace(
     job: MemoryJobRow,
     leaseId: string,
     space: MemorySpaceRow,
   ): Promise<'completed' | 'requeued' | 'unknown' | 'failed'> {
+    const spaces = this.#spaces;
     const request: EnsureSpaceRequest = {
       space: spaceRef(space),
       operation_key: job.operation_key,
@@ -486,7 +455,7 @@ export class MemoryRuntime {
     const result = await this.#options.adapter.ensureSpace(request);
     await this.updateJobResult(job.job_id, result);
     if (result.status === 'ready') {
-      this.#ensuredSpaces.add(this.#spaceCacheKey(space));
+      spaces.markReady(request.space);
       await completeMemoryJob(this.#db, { jobId: job.job_id, leaseId, stage: 'source_applied', now: this.now() });
       return 'completed';
     }
@@ -526,7 +495,7 @@ export class MemoryRuntime {
     leaseId: string,
     space: MemorySpaceRow,
   ): Promise<'completed' | 'requeued' | 'unknown' | 'failed'> {
-    if (!(await this.ensureBackendSpace(space))) {
+    if (!(await this.#spaces.ensure(spaceRef(space)))) {
       throw new Error('memory_backend_space_unavailable');
     }
     const intent = await loadRetainIntentForJob(this.#db, job);
@@ -720,7 +689,7 @@ export class MemoryRuntime {
     leaseId: string,
     space: MemorySpaceRow,
   ): Promise<'completed' | 'requeued' | 'unknown' | 'failed'> {
-    if (!(await this.ensureBackendSpace(space))) {
+    if (!(await this.#spaces.ensure(spaceRef(space)))) {
       throw new Error('memory_backend_space_unavailable');
     }
     const targets = this.parseRemoveTargets(job);
@@ -794,7 +763,7 @@ export class MemoryRuntime {
     leaseId: string,
     space: MemorySpaceRow,
   ): Promise<'completed' | 'requeued' | 'unknown' | 'failed'> {
-    if (!(await this.ensureBackendSpace(space))) {
+    if (!(await this.#spaces.ensure(spaceRef(space)))) {
       throw new Error('memory_backend_space_unavailable');
     }
     if (!job.recall_id) {

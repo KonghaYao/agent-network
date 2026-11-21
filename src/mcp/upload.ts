@@ -6,7 +6,7 @@ import type { Principal } from '../domain/principal';
 import type { Env } from '../env';
 import { issueUploadTicket, UPLOAD_TICKET_HEADER, uploadMetadataSchema } from '../drive/upload-ticket';
 import { requireActor } from './auth';
-import { register } from './tools';
+import { register } from './tool-registration';
 
 export function registerUploadTool(server: RegistrationServer, env: Env, principal: Principal): void {
   if (!env.FILES) return;

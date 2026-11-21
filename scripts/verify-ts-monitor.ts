@@ -31,7 +31,7 @@ import {
 } from 'node:fs';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 import { check, checkEqual, checksPassed } from './lib/harness';
 import { listInboxPages, type MonitorRpc } from '../client/monitor/rpc';
@@ -4057,7 +4057,7 @@ function runOtherCheck(args: string[], logPath: string, expectedExit: number, la
   lines: string[];
 } {
   const result = Bun.spawnSync({
-    cmd: [process.execPath, CLI, 'monitor', '--harness', 'other', '--log', logPath, ...args],
+    cmd: [process.execPath, CLI, 'monitor', '--harness', 'other', '--log', logPath, '--state-dir', dirname(logPath), ...args],
     cwd: ROOT,
     env: { ...process.env, AGENTNET_TOKEN: TOKEN },
     stdout: 'pipe',
@@ -4098,7 +4098,7 @@ async function runOtherChecks(): Promise<void> {
   const alertPath = join(workdir, 'alert.log');
   writeFileSync(alertPath, 'ALERT {"delivery_id":"dlv_old"}\n');
   const alertWatcher = startProcess(
-    [process.execPath, CLI, 'monitor', '--harness', 'other', '--log', alertPath, '--max-wait', '10', '--poll', '1'],
+    [process.execPath, CLI, 'monitor', '--harness', 'other', '--log', alertPath, '--state-dir', workdir, '--max-wait', '10', '--poll', '1'],
     { AGENTNET_TOKEN: TOKEN },
   );
   await Bun.sleep(400);
@@ -4116,6 +4116,16 @@ async function runOtherChecks(): Promise<void> {
   check('只输出新增 ALERT（1）', alertWatcher.stdout[1]?.includes('dlv_new1') ?? false);
   check('只输出新增 ALERT（2）', alertWatcher.stdout[2]?.includes('dlv_new2') ?? false);
   check('不重复输出旧 ALERT', !alertWatcher.stdout.join('\n').includes('dlv_old'));
+
+  appendFileSync(alertPath, 'ALERT gap\nALERT part');
+  const rearmed = runOtherCheck(['--max-wait', '0'], alertPath, 0, '重挂补读');
+  checkEqual('重挂期间到达的 ALERT 只转发一次', rearmed.lines.join('|'), 'WAKE reason=alert new=1 total=4|ALERT gap');
+  appendFileSync(alertPath, 'ial\n');
+  const partial = runOtherCheck(['--max-wait', '0'], alertPath, 0, '跨两次挂载的完整行');
+  checkEqual('换行后完整输出', partial.lines.join('|'), 'WAKE reason=alert new=1 total=5|ALERT partial');
+  writeFileSync(alertPath, 'ALERT rotated\n');
+  const rotated = runOtherCheck(['--max-wait', '0'], alertPath, 0, '同路径截短');
+  checkEqual('轮转后从文件头补读', rotated.lines.join('|'), 'WAKE reason=alert new=1 total=1|ALERT rotated');
 
   // --check-config 不连接服务、不输出 token。
   const claudeCheck = Bun.spawnSync({

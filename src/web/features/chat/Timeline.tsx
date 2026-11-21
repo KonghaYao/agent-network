@@ -354,14 +354,16 @@ export function Timeline({
             {searchNavigation.query ? `：${searchNavigation.query}` : ''}
             {searchNavigation.hasNewer ? ' · 窗口之后还有更新消息' : ''}
           </span>
-          <button
+          <Button
             type="button"
+            variant="borderless"
+            size="sm"
             id="search-return-latest"
             className="search-return-latest"
             onClick={searchNavigation.onReturnLatest}
           >
             返回最新消息
-          </button>
+          </Button>
         </div>
       ) : null}
       <ol

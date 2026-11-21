@@ -13,13 +13,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSPrope
 import type { RoomFileItem } from '../../lib/files-ui';
 import {
   fileCopyUrl,
-  fileDownloadUrl,
-  fileIconLabel,
   fileKey,
-  fileMetaText,
-  filePreviewKind,
-  fileSafeUrl,
-  previewImageMime,
 } from '../../lib/files-ui';
 import {
   bindFileToRoom,
@@ -29,6 +23,9 @@ import {
 import { callTool } from '../../lib/mcp-client';
 import { newRequestId } from '../../lib/request-id';
 import { useUpdateWriteBlocked } from '../../pwa/update-store';
+import { FileDownloadLink } from './FileDownloadLink';
+import { FileListSkeleton } from './FileListSkeleton';
+import { FileRowSummary } from './FileRowSummary';
 
 const FilePreviewPane = lazy(() => import('./FilePreviewPane').then((module) => ({ default: module.FilePreviewPane })));
 
@@ -582,54 +579,19 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, preview, onO
         <Surface style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           <ul id="files-list" className="files-list" aria-label="文件列表">
           {files.loading && files.items.length === 0
-            ? Array.from({ length: 3 }, (_, index) => (
-                <li className="file-skeleton" aria-hidden="true" key={index}>
-                  <span className="skeleton-avatar" />
-                  <span className="file-skeleton-lines">
-                    <span />
-                    <span />
-                  </span>
-                </li>
-              ))
+            ? <FileListSkeleton />
             : files.items.map((item) => {
                 const key = fileKey(item);
-                const kind = filePreviewKind(item);
-                const thumbnail = kind === 'image' ? fileSafeUrl(item.preview_url || item.download_url || item.public_url) : null;
-                const download = fileDownloadUrl(item);
+                const openPreview = () => {
+                  setSelectedFileId(item.file_id);
+                  onOpenPreview(item);
+                };
                 return (
                   <li className="file-item" data-file-id={item.file_id}
                     data-selected={(preview?.file_id ?? selectedFileId) === item.file_id} key={key}>
-                    <div className="file-row"
-                      role={kind === 'html' || kind === 'markdown' ? 'button' : undefined}
-                      tabIndex={kind === 'html' || kind === 'markdown' ? 0 : undefined}
-                      aria-label={kind === 'html' || kind === 'markdown' ? `预览 ${item.name || '文件'}` : undefined}
-                      onClick={() => {
-                        if (kind !== 'html' && kind !== 'markdown') return;
-                        setSelectedFileId(item.file_id);
-                        onOpenPreview(item);
-                      }}
-                      onKeyDown={(event) => {
-                        if ((kind !== 'html' && kind !== 'markdown') || !['Enter', ' '].includes(event.key)) return;
-                        event.preventDefault();
-                        setSelectedFileId(item.file_id);
-                        onOpenPreview(item);
-                      }}>
-                      <span className="file-thumb">
-                        {thumbnail && previewImageMime(item.mime_type, item.name) ? (
-                          <img src={thumbnail} alt="" loading="lazy" referrerPolicy="no-referrer" />
-                        ) : (
-                          fileIconLabel(kind)
-                        )}
-                      </span>
-                      <div className="file-main">
-                        <Tooltip as="span" className="file-name" hint={item.name || '未命名文件'}>
-                          {item.name || '未命名文件'}
-                        </Tooltip>
-                        <span className="file-meta">{fileMetaText(item)}</span>
-                      </div>
-                    </div>
+                    <FileRowSummary item={item} onPreview={openPreview} />
                     <div className="file-actions">
-                      <Button className="file-action" type="button" variant="borderless" size="sm" onClick={() => { setSelectedFileId(item.file_id); onOpenPreview(item); }}>
+                      <Button className="file-action" type="button" variant="borderless" size="sm" onClick={openPreview}>
                         预览
                       </Button>
                       {fileCopyUrl(item) ? (
@@ -637,17 +599,7 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, preview, onO
                           复制链接
                         </Button>
                       ) : null}
-                      {download ? (
-                        <a
-                          className="file-action"
-                          href={download}
-                          download={item.name || '文件'}
-                          rel="noopener"
-                          referrerPolicy="no-referrer"
-                        >
-                          下载
-                        </a>
-                      ) : null}
+                      <FileDownloadLink item={item}>下载</FileDownloadLink>
                       {item.can_delete === true && !readOnly ? (
                         <Button
                           className={`file-action${deletePending === key ? ' danger' : ''}`}

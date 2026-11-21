@@ -36,7 +36,7 @@ import {
 import { requireActor } from './auth';
 import type { Principal } from '../domain/principal';
 import type { RegistrationServer } from './registration';
-import type { register } from './tools';
+import type { register } from './tool-registration';
 
 type RegisterFn = typeof register;
 

@@ -103,7 +103,7 @@ function subscribe(listener: () => void) {
   listeners.add(listener);
   // 订阅即开始加载，保持 `useLenso()` 现有调用方语义；失败被这里吞掉，
   // 状态仍通过 snapshot 通知 UI，不能产生 unhandled rejection。
-  void loadLenso().catch(() => {});
+  if (status === 'idle') void loadLenso().catch(() => {});
   return () => {
     listeners.delete(listener);
   };

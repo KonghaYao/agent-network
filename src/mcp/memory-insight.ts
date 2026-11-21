@@ -38,7 +38,7 @@ import {
 } from '../memory/insight/contracts';
 import { MemoryInsightService } from '../memory/insight/service';
 import type { RegistrationServer } from './registration';
-import { register } from './tools';
+import { register } from './tool-registration';
 
 function viewerOf(principal: Principal): InsightViewer {
   if (!principal.actor) {

@@ -582,7 +582,13 @@ class CodexWatcher {
     const deliveryId = asString(item.delivery_id);
     const key = `${asString(item.event_id)}|${asString(item.attempt)}|${asString(item.progress_at)}`;
     if (this.remindersSeen.get(deliveryId) === key) return;
-    this.remindersSeen.set(deliveryId, key);
+    const attempt = item.attempt;
+    const active = this.activeTurn;
+    const steered = this.steered.get(deliveryId);
+    const bridgeOwnsClaim =
+      (active?.deliveryId === deliveryId && active.claim.attempt === attempt) ||
+      (steered !== undefined && steered.attempt === attempt);
+    const prompt = reminderPrompt(item, bridgeOwnsClaim);
     try {
       const status = await this.threadStatus();
       if (status === 'active') {
@@ -591,16 +597,18 @@ class CodexWatcher {
         await this.requireConnection().call('turn/steer', {
           threadId: this.threadId,
           expectedTurnId: asString(current.id),
-          input: [{ type: 'text', text: reminderPrompt(item) }],
+          input: [{ type: 'text', text: prompt }],
         });
+        this.remindersSeen.set(deliveryId, key);
         this.log(`REMINDER_STEERED delivery=${deliveryId}`);
         return;
       }
       if (status === 'idle') {
         await this.requireConnection().call('turn/start', {
           threadId: this.threadId,
-          input: [{ type: 'text', text: reminderPrompt(item) }],
+          input: [{ type: 'text', text: prompt }],
         });
+        this.remindersSeen.set(deliveryId, key);
         this.log(`REMINDER_STARTED delivery=${deliveryId}`);
       }
     } catch (error) {

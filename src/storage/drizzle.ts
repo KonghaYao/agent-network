@@ -22,7 +22,7 @@ import * as schema from './schema';
  *   events / memory 只迁移了简单只读查询，其余仍为 raw。
  *
  * 边界约束：
- * - 只有本文件与 `src/storage/queries.ts` 可以 import `drizzle-orm`；
+ * - 只有本文件、只读入口 `src/storage/queries.ts` 及其 `queries/*.ts` 模块 可以 import `drizzle-orm`；
  * - 只有本文件可以 import `./schema`；
  * - 生产路径只允许 `select()`；写操作必须回到 raw 边界；
  * - 域层继续 import `storage/queries` 的语义化函数。

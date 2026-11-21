@@ -22,7 +22,7 @@ import {
   filePublishResultSchema,
 } from './outputs';
 import { createRoomFileSource, type RoomFileToolBinding } from './room-files';
-import { register } from './tools';
+import { register } from './tool-registration';
 import { requireActor } from './auth';
 
 /**

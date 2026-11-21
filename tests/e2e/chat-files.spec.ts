@@ -662,9 +662,12 @@ test.describe('SPA Chat file cards', () => {
         await page.locator('#file-preview-close').click();
         if (width === 390) await page.locator('#files-toggle').click();
         const row = page.locator(`#files-list .file-item[data-file-id="${file.fileId}"]`);
-        await expect(row).toBeVisible();
-        await row.locator('.file-row').click();
+        const preview = row.getByRole('button', { name: `预览 agent-preview.${kind}`, exact: true });
+        await expect(preview).toHaveJSProperty('tagName', 'BUTTON');
+        if (width === 1280) await preview.press(kind === 'html' ? 'Enter' : 'Space');
+        else await preview.click();
         await expectRendered();
+        await expect(page.locator('#file-preview-download')).toHaveAttribute('download', `agent-preview.${kind}`);
         await page.locator('#file-preview-close').click();
         await expect(page.locator('#files-list')).toBeVisible();
         expect(metaReads).toEqual([]);

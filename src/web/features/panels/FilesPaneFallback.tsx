@@ -1,4 +1,4 @@
-import { LENSO_SKELETON_FILL, Skeleton } from '../../app/lenso-controls';
+import { FileListSkeleton } from './FileListSkeleton';
 
 /**
  * 文件栏 chunk 到达前的同宽骨架。
@@ -14,17 +14,7 @@ export function FilesPaneFallback() {
         <h2>文件</h2>
       </header>
       <ul className="files-list" aria-label="文件列表">
-        {Array.from({ length: 3 }, (_, index) => (
-          <li className="file-skeleton" aria-hidden="true" key={index}>
-            <span className="skeleton-avatar">
-              <Skeleton style={LENSO_SKELETON_FILL} />
-            </span>
-            <span className="file-skeleton-lines">
-              <span />
-              <span />
-            </span>
-          </li>
-        ))}
+        <FileListSkeleton />
       </ul>
     </aside>
   );

@@ -1,4 +1,4 @@
-import type { ActorStreamEvent } from '../app/mcp/useActorStream';
+import type { ActorStreamEvent } from './actor-stream';
 import type { HistoryItem } from './chat';
 
 /**

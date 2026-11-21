@@ -5,17 +5,20 @@
  * 这里只验证不需要启动服务、不需要 Vite 的边界行为。
  */
 
+import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { check, checkEqual, checksPassed } from './lib/harness';
-import { collectAssets, pruneReleases } from './lib/web-release';
+import { addPin, collectAssets, pruneReleases, publishCandidate, readPins, withReleaseLock } from './lib/web-release';
 import {
   activateDeployment,
   buildIdDirectory,
   computeBuildId,
   contentTypeForPath,
+  readCurrentBuildId,
+  readLegacyAliases,
   resolveWebReleaseMode,
   sha256Hex,
   staticRelativeFromUrl,
@@ -114,10 +117,14 @@ async function checkPrune(): Promise<void> {
     }
     const stale = makeAsset('assets/stale-dead.js', 'stale', true);
     await writeFile(join(root, 'public', staticRelativeFromUrl(stale.url)), 'stale');
+    const recent = makeAsset('assets/recent.js', 'recent', true);
+    const recentPath = staticRelativeFromUrl(recent.url);
+    const missing = makeAsset('assets/missing.js', 'missing', true);
+    await writeFile(join(root, 'public', recentPath), 'recent');
     await writeJsonAtomic(join(root, 'immutable-index.json'), {
       schemaVersion: WEB_RELEASE_SCHEMA_VERSION,
       assets: Object.fromEntries(
-        [...manifest.assets, stale].map((asset) => [staticRelativeFromUrl(asset.url), asset]),
+        [...manifest.assets, stale, recent, missing].map((asset) => [staticRelativeFromUrl(asset.url), asset]),
       ),
     });
     await activateDeployment(root, manifest, 'deploy');
@@ -157,6 +164,9 @@ async function checkPrune(): Promise<void> {
       '索引不再引用已删除资源',
       !(staticRelativeFromUrl(stale.url) in index.assets),
     );
+    check('清理没有文件或引用的索引项', !(staticRelativeFromUrl(missing.url) in index.assets));
+    check('隔离期内资源仍在索引', recentPath in index.assets);
+    checkEqual('隔离期内资源仍可读取', await readFile(join(root, 'public', recentPath), 'utf8'), 'recent');
     for (const asset of manifest.assets) {
       check(
         `索引保留当前发布资源 ${asset.url}`,
@@ -172,10 +182,56 @@ async function checkPrune(): Promise<void> {
   }
 }
 
+async function checkMigrationCommit(): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), 'agentnet-release-commit-'));
+  try {
+    const candidateDir = join(root, 'candidates', 'migration-test');
+    const webDir = join(candidateDir, 'web');
+    const entry = makeAsset('assets/entry.js', 'entry', true);
+    const markdown = makeAsset('assets/chat-markdown.js', 'markdown', true);
+    const drawboard = makeAsset('assets/chat-drawboard.js', 'drawboard', true);
+    const manifest = makeManifest([entry, markdown, drawboard], entry);
+    await mkdir(join(webDir, 'assets'), { recursive: true });
+    for (const [asset, body] of [[entry, 'entry'], [markdown, 'markdown'], [drawboard, 'drawboard']] as const) {
+      await writeFile(join(webDir, staticRelativeFromUrl(asset.url)), body);
+    }
+    const candidate = {
+      candidateDir, webDir, manifest,
+      modules: {
+        markdown: { url: markdown.url, bytes: new TextEncoder().encode('markdown') },
+        drawboard: { url: drawboard.url, bytes: new TextEncoder().encode('drawboard') },
+      },
+    };
+    const migrate = () => publishCandidate(candidate, {
+      releasesRoot: root, pin: 'migration-baseline', freezeLegacy: true, keepCandidate: true,
+    });
+    await withReleaseLock(root, async () => {
+      await assert.rejects(migrate, /正在运行/u);
+      await assert.rejects(() => addPin(root, manifest.buildId), /正在运行/u);
+      await assert.rejects(() => pruneReleases({ root, apply: true, graceMs: 0 }), /正在运行/u);
+    });
+    checkEqual('锁冲突时未发布', await readCurrentBuildId(root), null);
+    await writeFile(join(root, 'pins.json'), 'invalid');
+    await assert.rejects(migrate, SyntaxError);
+    checkEqual('pin 失败保持旧入口', await readCurrentBuildId(root), null);
+    const legacy = await readLegacyAliases(root);
+    check('固定别名已持久化', legacy?.baselineBuildId === manifest.buildId);
+    await rm(join(root, 'pins.json'));
+    await migrate();
+    checkEqual('故障重试完成切换', await readCurrentBuildId(root), manifest.buildId);
+    checkEqual('恢复后迁移基线 pin 可读', (await readPins(root)).legacyBaseline, manifest.buildId);
+    checkEqual('恢复时未覆盖已冻结的别名', (await readLegacyAliases(root))?.frozenAt, legacy?.frozenAt);
+    await assert.rejects(migrate, /拒绝重复迁移/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
 async function main(): Promise<void> {
   checkReleaseMode();
   await checkImmutablePolicy();
   await checkPrune();
+  await checkMigrationCommit();
   console.log(`\n发布底座单元验收通过：${checksPassed()} 项`);
 }
 

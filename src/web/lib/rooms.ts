@@ -84,6 +84,20 @@ export function summarizeRoom(entry: RawRoom): RoomSummary {
   };
 }
 
+/** 补读时房间可能跨页移动；按服务端顺序保留每个房间的第一条。 */
+export function summarizeRoomPages(pages: readonly RoomsPage[]): RoomSummary[] {
+  const rooms: RoomSummary[] = [];
+  const seen = new Set<string>();
+  for (const page of pages) {
+    for (const item of page.items) {
+      if (seen.has(item.room_id)) continue;
+      seen.add(item.room_id);
+      rooms.push(summarizeRoom(item));
+    }
+  }
+  return rooms;
+}
+
 export function isUnread(room: RoomSummary): boolean {
   return Number(room.my_last_read_seq) < Number(room.head_seq);
 }

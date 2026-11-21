@@ -1361,6 +1361,19 @@ async function runReminderChecks(): Promise<void> {
       2,
     );
 
+    const ownedId = 'dlv_rem_owned';
+    fixture.codex.completeTurn();
+    fixture.mcp.state.pending.set(ownedId, makeDelivery(ownedId));
+    fixture.mcp.sendItems([notificationItem(ownedId)]);
+    await waitForLine(fixture.watcher.stdout, (line) => line.startsWith(`TURN_STARTED delivery=${ownedId}`), 'OWNED TURN');
+    fixture.mcp.sendItems([reminderItem(ownedId, 'in_progress')]);
+    await waitForLine(fixture.watcher.stdout, (line) => line.startsWith(`REMINDER_STEERED delivery=${ownedId}`), 'OWNED REMINDER');
+    const ownedPrompt = fixture.codex.steerTexts.at(-1) ?? '';
+    check('本桥接器的任务提醒保留自动收尾权', ownedPrompt.includes('桥接器会提交答复') && !ownedPrompt.includes('network_delivery_complete'), ownedPrompt);
+    fixture.codex.completeTurn('唯一最终答复');
+    await waitForLine(fixture.watcher.stdout, (line) => line.startsWith(`DELIVERY_COMPLETED delivery=${ownedId}`), 'OWNED COMPLETED');
+    checkEqual('同一投递仅收尾一次', fixture.mcp.completed.filter((row) => row.delivery_id === ownedId).length, 1);
+
     // 进入手动回合，提醒应改用 turn/steer。
     fixture.codex.state.status = 'active';
     fixture.codex.state.currentTurnId = 'turn_manual_rem';
@@ -1372,8 +1385,8 @@ async function runReminderChecks(): Promise<void> {
     );
     check(
       '工作中提醒注入当前回合',
-      fixture.codex.steerTexts[0]?.includes('delivery_id=dlv_rem_active') === true,
-      fixture.codex.steerTexts[0],
+      fixture.codex.steerTexts.at(-1)?.includes('delivery_id=dlv_rem_active') === true,
+      fixture.codex.steerTexts.at(-1),
     );
     checkEqual('工作中提醒不 claim', fixture.mcp.state.claimCalls.has('dlv_rem_active'), false);
     checkEqual('提醒路径无 ERROR', countLines(fixture.watcher.stdout, 'ERROR'), 0);

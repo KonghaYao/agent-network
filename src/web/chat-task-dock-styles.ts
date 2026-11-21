@@ -120,8 +120,7 @@ export const TASK_DOCK_STYLE = `
   .task-preview-recents { padding-top: 16px; }
   .task-preview-section { margin: 0 0 8px; color: var(--wx-muted);
     font-size: 11px; line-height: 14px; letter-spacing: .02em; }
-  .task-preview-recent-list { display: flex; flex-direction: column; gap: 12px;
-    list-style: none; margin: 0; padding: 0; }
+  .task-preview-recents [data-ui-list] { --app-space-detail-gap: 12px; }
   .task-preview-popover .task-preview-recent { display: flex; flex-direction: column;
     align-items: stretch !important; justify-content: flex-start; gap: 4px !important; box-sizing: border-box;
     width: 100% !important; height: auto; min-height: 44px; padding: 0 !important; border: 0; border-radius: 8px !important;

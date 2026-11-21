@@ -93,7 +93,7 @@ import type { MemoryHostCapability, MemorySpaceRef, MemoryTargetScope } from '..
 import { resolveRoomTargetScope } from '../memory/target';
 import type { Principal } from '../domain/principal';
 import type { MemoryRuntime } from '../memory/runtime';
-import { register } from './tools';
+import { register } from './tool-registration';
 
 const PRIVATE_SCOPE: MemoryTargetScope = {
   audience: 'agent_private',

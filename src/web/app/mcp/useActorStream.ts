@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { LIMITS } from '../../../contracts/limits';
+import { ACTOR_STREAM_URI, readActorStream, type ActorStreamEvent } from '../../lib/actor-stream';
+
+export type { ActorStreamEvent, StreamAttention } from '../../lib/actor-stream';
 
 /**
  * 首页的实时刷新通道：复用现有 `agentnet://stream` 订阅，不轮询。
@@ -10,9 +13,7 @@ import { LIMITS } from '../../../contracts/limits';
  * 凭据失效/连接数上限等不可恢复错误停止重试并在侧栏显示状态。
  */
 
-const STREAM_URI = 'agentnet://stream';
 const PROTOCOL_VERSION = '2026-07-28';
-const EVENT_META_KEY = 'io.agent-network/event';
 const FATAL_CODES = new Set([
   'CREDENTIAL_INVALID',
   'INVALID_ARGUMENT',
@@ -29,28 +30,6 @@ interface StreamOptions {
   /** 事件来源；ack 补拉传 `{ type: 'ack', reconnect }`。页面只据此刷新相关查询。 */
   onEvent: (event: ActorStreamEvent) => void;
 }
-
-export type StreamAttention = 'action_required' | 'informational';
-
-export type ActorStreamEvent =
-  | { type: 'ack'; reconnect: boolean; at: number }
-  | {
-      type: 'event';
-      source: string;
-      kind: string;
-      roomId: string | null;
-      /** 事件定位到的消息；撤回与回执可据此重读可见窗口。 */
-      messageId: string | null;
-      /** 服务端提供的 change（如 recalled/marked/completed）。 */
-      change: string | null;
-      /**
-       * 服务端标注的处理优先级。`action_required` 表示当前身份需要重新
-       * 确认能力或访问边界，不一定意味着会话内容已不可读；被撤销管理员
-       * 仍是群成员，只有被移出才会失去读权限。普通成员/资料变化是
-       * informational。
-       */
-      attention: StreamAttention | null;
-    };
 
 interface StreamState {
   error: string | null;
@@ -70,7 +49,7 @@ function streamRequest(token: string): { headers: Record<string, string>; body: 
       id: crypto.randomUUID(),
       method: 'subscriptions/listen',
       params: {
-        notifications: { resourceSubscriptions: [STREAM_URI] },
+        notifications: { resourceSubscriptions: [ACTOR_STREAM_URI] },
         _meta: {
           'io.modelcontextprotocol/protocolVersion': PROTOCOL_VERSION,
           'io.modelcontextprotocol/clientInfo': {
@@ -93,78 +72,6 @@ function backoff(attempt: number): number {
   const jitter =
     1 + (Math.random() * 2 - 1) * LIMITS.reconnectJitterRatio;
   return Math.max(0, Math.round(base * jitter));
-}
-
-function parseSseData(block: string): string {
-  const lines = block.split('\n');
-  const data: string[] = [];
-  for (const line of lines) {
-    if (line.startsWith('data:')) data.push(line.slice(5).trimStart());
-  }
-  return data.join('\n');
-}
-
-function isAck(message: unknown): boolean {
-  if (!message || typeof message !== 'object') return false;
-  const value = message as {
-    method?: unknown;
-    params?: {
-      notifications?: { resourceSubscriptions?: unknown };
-    };
-  };
-  if (value.method !== 'notifications/subscriptions/acknowledged') return false;
-  const subscriptions = value.params?.notifications?.resourceSubscriptions;
-  return Array.isArray(subscriptions) && subscriptions.includes(STREAM_URI);
-}
-
-function notificationUri(message: unknown): string | null {
-  if (!message || typeof message !== 'object') return null;
-  const value = message as {
-    method?: unknown;
-    params?: { uri?: unknown; _meta?: Record<string, unknown> };
-  };
-  if (value.method !== 'notifications/resources/updated') return null;
-  if (value.params?.uri !== STREAM_URI) return null;
-  const meta = value.params._meta;
-  if (!meta || typeof meta[EVENT_META_KEY] !== 'object') return null;
-  return STREAM_URI;
-}
-
-/** 信封里的 item 只取定位字段；不解析正文，只用于决定刷新哪些查询。 */
-function notificationEvents(message: unknown): ActorStreamEvent[] {
-  if (!message || typeof message !== 'object') return [];
-  const value = message as {
-    params?: { _meta?: Record<string, unknown> };
-  };
-  const envelope = value.params?._meta?.[EVENT_META_KEY];
-  if (!envelope || typeof envelope !== 'object') return [];
-  const items = (envelope as { items?: unknown }).items;
-  if (!Array.isArray(items)) return [];
-  const events: ActorStreamEvent[] = [];
-  for (const raw of items) {
-    if (!raw || typeof raw !== 'object') continue;
-    const item = raw as {
-      source?: unknown;
-      kind?: unknown;
-      room_id?: unknown;
-      message_id?: unknown;
-      change?: unknown;
-      attention?: unknown;
-    };
-    events.push({
-      type: 'event',
-      source: typeof item.source === 'string' ? item.source : '',
-      kind: typeof item.kind === 'string' ? item.kind : '',
-      roomId: typeof item.room_id === 'string' ? item.room_id : null,
-      messageId: typeof item.message_id === 'string' ? item.message_id : null,
-      change: typeof item.change === 'string' ? item.change : null,
-      attention:
-        item.attention === 'action_required' || item.attention === 'informational'
-          ? item.attention
-          : null,
-    });
-  }
-  return events;
 }
 
 interface StreamFailure {
@@ -214,13 +121,15 @@ export function useActorStream({ token, onEvent }: StreamOptions): StreamState {
      */
     let connected = false;
 
-    const schedule = (delay: number) => {
+    const retry = () => {
       if (disposed) return;
+      setError('实时连接已断开，正在重试…');
+      attempt += 1;
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
         timer = null;
         void connect();
-      }, delay);
+      }, backoff(attempt));
     };
 
     const connect = async (): Promise<void> => {
@@ -237,9 +146,7 @@ export function useActorStream({ token, onEvent }: StreamOptions): StreamState {
         });
       } catch {
         if (disposed || controller.signal.aborted) return;
-        attempt += 1;
-        setError('实时连接已断开，正在重试…');
-        schedule(backoff(attempt));
+        retry();
         return;
       }
       if (disposed) return;
@@ -251,76 +158,29 @@ export function useActorStream({ token, onEvent }: StreamOptions): StreamState {
           setError(`实时连接已停止：${failure.message}`);
           return;
         }
-        attempt += 1;
-        setError('实时连接已断开，正在重试…');
-        schedule(backoff(attempt));
+        retry();
         return;
       }
 
-      attempt = 0;
-      setError(null);
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let acknowledged = false;
       try {
-        for (;;) {
-          const step = await reader.read();
-          if (step.done || disposed) break;
-          buffer += decoder.decode(step.value, { stream: true }).replaceAll('\r\n', '\n');
-          let boundary = buffer.indexOf('\n\n');
-          while (boundary >= 0) {
-            const block = buffer.slice(0, boundary);
-            buffer = buffer.slice(boundary + 2);
-            const data = parseSseData(block);
-            if (data) {
-              let message: unknown = null;
-              try {
-                message = JSON.parse(data);
-              } catch {
-                message = null;
-              }
-              if (isAck(message)) {
-                acknowledged = true;
-                // 首次 ack 由首屏查询覆盖，握手窗口由调用方按 `at` 判断；
-                // 重连 ack 才需要整体补拉。
-                const reconnect = connected;
-                connected = true;
-                handlerRef.current({ type: 'ack', reconnect, at: Date.now() });
-              } else if (notificationUri(message)) {
-                const events = notificationEvents(message);
-                if (events.length === 0) {
-                  // 信封合法但没有可定位 item：保守刷新，仍不解析正文。
-                  handlerRef.current({
-                    type: 'event',
-                    source: '',
-                    kind: '',
-                    roomId: null,
-                    messageId: null,
-                    change: null,
-                    attention: null,
-                  });
-                } else {
-                  for (const event of events) handlerRef.current(event);
-                }
-              }
-            }
-            boundary = buffer.indexOf('\n\n');
+        for await (const frame of readActorStream(response.body)) {
+          if (disposed) break;
+          if (frame.type === 'ack') {
+            // 仅收到有效 ack 后结束连续失败退避。
+            attempt = 0;
+            setError(null);
+            const reconnect = connected;
+            connected = true;
+            handlerRef.current({ type: 'ack', reconnect, at: Date.now() });
+          } else {
+            handlerRef.current(frame);
           }
         }
       } catch {
         if (disposed) return;
-      } finally {
-        try {
-          await reader.cancel();
-        } catch {
-          // reader 可能已经被浏览器关闭。
-        }
       }
       if (disposed) return;
-      attempt += 1;
-      if (!acknowledged) setError('实时连接已断开，正在重试…');
-      schedule(backoff(attempt));
+      retry();
     };
 
     void connect();

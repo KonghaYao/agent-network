@@ -508,14 +508,16 @@ export const APP_STYLE = `
     content-visibility: auto; contain-intrinsic-size: auto 180px; }
   .messages--long .msg-time,
   .messages--long .msg-system { content-visibility: auto; contain-intrinsic-size: auto 32px; }
-  .msg.mine { flex-direction: row-reverse; }
+  .msg.mine { flex-direction: row-reverse; --bubble-tail-width: 6px; }
   .msg-avatar { flex: 0 0 auto; width: 36px; height: 36px; border-radius: 6px;
     display: grid; place-items: center; overflow: hidden; color: #fff;
     font-size: 14px; font-weight: 500; }
   /* 气泡列保留右侧留白，约占消息区 82%；短消息仍由内容决定宽度，不强制拉满。 */
   .msg-content { display: flex; flex-direction: column; align-items: flex-start;
     min-width: 0; max-width: min(82%, calc(100% - 72px)); }
-  .msg.mine .msg-content { align-items: flex-end; }
+  /* 右侧尖角计入列宽，负外边距抵消留位，维持气泡与头像间距。 */
+  .msg.mine .msg-content { align-items: flex-end; box-sizing: content-box;
+    padding-right: var(--bubble-tail-width); margin-right: calc(-1 * var(--bubble-tail-width)); }
   .msg-sender { max-width: 100%; margin: 0 0 4px 2px; font-size: 11px; color: var(--wx-muted);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .bubble { position: relative; max-width: 100%; padding: 8px 12px; border: 0; border-radius: var(--app-shape-control);
@@ -525,7 +527,7 @@ export const APP_STYLE = `
     border-top: 5px solid transparent; border-bottom: 5px solid transparent; }
   .msg:not(.mine) .bubble::before { left: -6px; border-right: 6px solid var(--wx-bubble); }
   .msg.mine .bubble { background: var(--wx-mine); color: var(--wx-mine-text); }
-  .msg.mine .bubble::before { right: -6px; border-left: 6px solid var(--wx-mine); }
+  .msg.mine .bubble::before { right: calc(-1 * var(--bubble-tail-width)); border-left: var(--bubble-tail-width) solid var(--wx-mine); }
   .mention { color: var(--wx-link); }
   .msg.mine .mention { color: var(--lenso-tint-text); }
   /* 截断预览只显示纯文本：保留换行，避免半截 Markdown 结构。 */

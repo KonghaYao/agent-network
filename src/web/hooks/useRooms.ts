@@ -4,21 +4,10 @@ import { useEffect, useMemo } from 'react';
 import { rememberActorAvatars } from '../lib/actor-avatars';
 import { callTool } from '../lib/mcp-client';
 import { queryKeys } from '../lib/query-keys';
-import { summarizeRoom, type RoomSummary, type RoomsPage } from '../lib/rooms';
+import { summarizeRoomPages, type RoomSummary, type RoomsPage } from '../lib/rooms';
 import { useWebSession } from './useWebSession';
 
 const PAGE_SIZE = 50;
-
-function mergeRooms(current: RoomSummary[], incoming: RoomSummary[]): RoomSummary[] {
-  const seen = new Set(current.map((room) => room.room_id));
-  const merged = current.slice();
-  for (const room of incoming) {
-    if (seen.has(room.room_id)) continue;
-    seen.add(room.room_id);
-    merged.push(room);
-  }
-  return merged;
-}
 
 export interface RoomsState {
   rooms: RoomSummary[];
@@ -55,14 +44,7 @@ export function useRooms(enabled = true): RoomsState {
     getNextPageParam: (last) => (last.has_more ? (last.next_cursor ?? undefined) : undefined),
   });
 
-  const rooms = useMemo(() => {
-    const pages = query.data?.pages ?? [];
-    let merged: RoomSummary[] = [];
-    for (const page of pages) {
-      merged = mergeRooms(merged, page.items.map(summarizeRoom));
-    }
-    return merged;
-  }, [query.data]);
+  const rooms = useMemo(() => summarizeRoomPages(query.data?.pages ?? []), [query.data]);
 
   const lastPage = query.data?.pages[query.data.pages.length - 1];
   const failure = query.error as { message?: string } | null;

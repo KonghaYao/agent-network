@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'react';
 
 import { Button } from '../../app/lenso-controls';
-import { fileDownloadUrl, fileIconLabel, fileMetaText, filePreviewKind, type RoomFileItem } from '../../lib/files-ui';
+import { fileIconLabel, fileMetaText, filePreviewKind, type RoomFileItem } from '../../lib/files-ui';
+import { FileDownloadLink } from './FileDownloadLink';
 import { FilePreviewBody } from './FilePreviewBody';
 
 interface FilePreviewPaneProps {
@@ -19,7 +20,6 @@ export function FilePreviewPane({ item, onBack, fullscreen = false, onToggleFull
   const backRef = useRef<HTMLButtonElement>(null);
   const fullscreenRef = useRef<HTMLButtonElement>(null);
   const wasFullscreen = useRef(fullscreen);
-  const download = fileDownloadUrl(item);
 
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -77,7 +77,7 @@ export function FilePreviewPane({ item, onBack, fullscreen = false, onToggleFull
       </header>
       <FilePreviewBody key={item.file_id} item={item} />
       <footer className="file-preview-foot">
-        {download ? <a id="file-preview-download" href={download} download={item.name || '文件'} rel="noopener" referrerPolicy="no-referrer">下载文件</a> : null}
+        <FileDownloadLink id="file-preview-download" item={item}>下载文件</FileDownloadLink>
       </footer>
     </section>
   );

@@ -1,5 +1,5 @@
 import { createFixture } from './fixture';
-import { rawTool } from '../verify-web';
+import { rawTool } from '../lib/web-test-fixture';
 
 const fixture = await createFixture(['chat']);
 const d = fixture.scenarios.chat;

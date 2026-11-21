@@ -7,7 +7,9 @@ import { migrate } from '../src/bun/migrate';
 import { contactRequestsList } from '../src/domain/contact-requests';
 import { roomInvitationAccept } from '../src/domain/room-invitations';
 import type { Principal } from '../src/domain/principal';
+import type { RoomDetail } from '../src/domain/rooms';
 import type { Env } from '../src/env';
+import { registerRoomTools } from '../src/mcp/room-tools';
 import { drainOutbox } from '../src/realtime/outbox';
 import { getActor } from '../src/storage/queries';
 
@@ -99,6 +101,66 @@ try {
   });
   assert.equal(accepted.status, 'accepted');
   console.log('✓ 入群审批切换的两个分支在事务内复核策略');
+
+  const presenceReads: string[][] = [];
+  let failPresenceRead = false;
+  let registeredRoomDetail: (() => Promise<RoomDetail>) | undefined;
+  const roomEnv = {
+    DB: db,
+    NOTIFICATION_HUB: {
+      actorPresence: (id: string) => ({ online: id === 'agt_connected', since: null }),
+      actorConnectionCount: () => 0,
+    },
+    PRESENCE: {
+      phasesOf: async (ids: string[]) => {
+        presenceReads.push(ids);
+        if (failPresenceRead) throw new Error('simulated presence outage');
+        return new Map([['agt_pending', 'pending_offline']]);
+      },
+    },
+  } as unknown as Env;
+  registerRoomTools({
+    registerResource() {},
+    registerTool(name, _config, callback) {
+      if (name === 'network_room_get') {
+        registeredRoomDetail = async () => {
+          const response = await callback({ room_id: 'rm_race' });
+          assert.ok(!response.isError);
+          return response.structuredContent;
+        };
+      }
+    },
+  }, roomEnv, invitee);
+  const getRoomDetail = registeredRoomDetail;
+  assert.ok(getRoomDetail);
+  const peopleOnly = await getRoomDetail();
+  assert.ok(peopleOnly.members.every((member) => member.online === null));
+  assert.equal(presenceReads.length, 0);
+  for (const id of ['agt_connected', 'agt_pending', 'agt_inactive']) {
+    sqlite.prepare(
+      `INSERT INTO actors (actor_id, kind, name, created_at, updated_at)
+       VALUES (?, 'agent', ?, ?, ?)`,
+    ).run(id, id, now, now);
+    sqlite.prepare(
+      `INSERT INTO room_members (room_id, actor_id, role, status, joined_at)
+       VALUES ('rm_race', ?, 'member', 'active', ?)`,
+    ).run(id, now);
+  }
+  const roomSnapshot = async () => {
+    const detail = await getRoomDetail();
+    return Object.fromEntries(detail.members.map((member) => [member.actor_id, member.online]));
+  };
+  assert.deepEqual(await roomSnapshot(), {
+    usr_owner: null, usr_invitee: null,
+    agt_connected: true, agt_pending: true, agt_inactive: false,
+  });
+  assert.deepEqual(presenceReads.map((ids) => [...ids].sort()), [['agt_inactive', 'agt_pending']]);
+  failPresenceRead = true;
+  const unknown = await roomSnapshot();
+  assert.equal(unknown.agt_connected, true);
+  assert.equal(unknown.agt_pending, null);
+  assert.equal(unknown.agt_inactive, null);
+  console.log('✓ 房间详情批量读取 Agent 在线态，保留人类、未知与连接优先语义');
 
   sqlite.exec('DELETE FROM outbox');
   sqlite.prepare(

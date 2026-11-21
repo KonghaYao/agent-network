@@ -523,5 +523,5 @@ export async function monitor(
       memoryContext: options.memoryContext !== false,
     });
   }
-  return runOtherHarness({ log: options.log, maxWait: options.maxWait, poll: options.poll });
+  return runOtherHarness({ stateDir: options.stateDir, log: options.log, maxWait: options.maxWait, poll: options.poll });
 }

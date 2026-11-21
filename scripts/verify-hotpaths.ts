@@ -1,7 +1,7 @@
 /** Real-server browser regressions for routine chat and group interactions. */
 import assert from 'node:assert/strict';
 import { chromium, type Page } from 'playwright';
-import { startServer, makeContext, rawTool } from './verify-web';
+import { startServer, makeContext, rawTool } from './lib/web-test-fixture';
 
 const id = () => crypto.randomUUID();
 const checks: string[] = [];

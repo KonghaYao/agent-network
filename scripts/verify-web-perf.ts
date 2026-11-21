@@ -2,7 +2,7 @@
  * 长上下文网页性能基准。
  *
  * 默认 500 条消息；`PERF_WEB_MESSAGES=2000` 为手动档。
- * 复用 `scripts/verify-web.ts` 的自托管实例、浏览器上下文与 __mcpCalls 观测。
+ * 复用共享 Web 验收夹具的自托管实例、浏览器上下文与 __mcpCalls 观测。
  *
  * 指标：
  * - 首屏（50 条）与加载完全部历史后的 `.msg-markdown` root 数；
@@ -20,7 +20,7 @@
 
 import { chromium, type Browser } from 'playwright';
 
-import { makeContext, rawTool, startServer } from './verify-web';
+import { makeContext, rawTool, startServer } from './lib/web-test-fixture';
 
 const TARGET_MESSAGES = Number(process.env.PERF_WEB_MESSAGES || '500');
 const ASSERT = process.env.PERF_WEB_ASSERT !== '0';

@@ -424,7 +424,7 @@ function buildProgram(): Command {
       .option('--harness <name>', 'claude|codex|peri|dsh|other')
       .option('--check', '只校验 harness 与参数，不连接服务、不登录')
       .option('--dry-run', '--check 的别名')
-      .option('--state-dir <dir>', 'claude/peri 状态目录；默认按身份持久化')
+      .option('--state-dir <dir>', 'claude/peri 状态目录；other 按日志路径保存哨兵游标')
       .option('--max-runtime <seconds>', '最长运行秒数；peri 默认 86400，0 表示不限制')
       .option('--room-events [scope]', '监听所有房间与 informational 事件（默认 all）')
       .option('--no-room-events', '关闭 informational 输出（保留投递/提醒/action_required）')
@@ -975,7 +975,7 @@ function buildProgram(): Command {
       .option('--check', '连接服务并调用 network_me，校验凭据与服务可达')
       .option('--check-config', '只展示入口配置，不连接服务')
       .option('--dry-run', '--check 的别名')
-      .option('--state-dir <dir>', 'claude/peri 状态目录；默认按身份持久化')
+      .option('--state-dir <dir>', 'claude/peri 状态目录；other 按日志路径保存哨兵游标')
       .option('--max-runtime <seconds>', '最长运行秒数；peri 默认 86400，0 表示不限制')
       .option('--room-events [scope]', '监听所有房间与 informational 事件（默认 all）')
       .option('--no-room-events', '关闭 informational 输出（保留投递/提醒/action_required）')
@@ -1182,6 +1182,7 @@ export async function main(argv: readonly string[]): Promise<number> {
         : errorInfo(error);
     if (jsonFromArgv(argv)) {
       const payload = {
+        ...(['monitor', 'up'].includes(program.args[0] ?? '') ? { alert: true } : {}),
         error: {
           code: info.code,
           message: redact(info.message, token),

@@ -1,4 +1,4 @@
-import { startServer, rawTool } from '../verify-web';
+import { startServer, rawTool } from '../lib/web-test-fixture';
 import { roomStreamItems } from '../../src/realtime/stream';
 import { Database } from 'bun:sqlite';
 

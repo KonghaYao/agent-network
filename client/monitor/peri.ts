@@ -166,6 +166,8 @@ function fail(line: string, json = false): number {
       JSON.stringify({
         type: 'error',
         kind: 'error',
+        event_kind: 'error',
+        alert: true,
         seq: null,
         delivery_id: null,
         room_id: null,

@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react';
 
+import { Badge, Button, LENSO_BADGE_FILL } from '../../app/lenso-controls';
 import { LIMITS } from '../../../contracts/limits';
 import {
   chatTime,
@@ -63,17 +64,18 @@ export function PinnedMessagesBar({
     >
       <div className="pinned-head">
         <span className="pinned-title">置顶消息</span>
-        <span className="pinned-count">{visible.length}</span>
-        <button
+        <span className="pinned-count"><Badge placement="" style={LENSO_BADGE_FILL}>{visible.length}</Badge></span>
+        <Button
           type="button"
           id="pinned-toggle"
           className="pinned-toggle"
+          variant="borderless" size="sm"
           aria-expanded={!collapsed}
           aria-controls="pinned-list"
           onClick={toggle}
         >
           {collapsed ? '展开' : '收起'}
-        </button>
+        </Button>
       </div>
       <ul id="pinned-list" className="pinned-list" hidden={collapsed}>
         {visible.map((pin) => {
@@ -82,9 +84,10 @@ export function PinnedMessagesBar({
           const label = `定位置顶消息：${sender}：${preview}`;
           return (
             <li className="pinned-item" key={pin.message_id}>
-              <button
+              <Button
                 type="button"
                 className="pinned-locate"
+                variant="borderless" size="sm"
                 data-pinned-message-id={pin.message_id}
                 aria-label={label}
                 onClick={() => onLocate(pin)}
@@ -94,11 +97,12 @@ export function PinnedMessagesBar({
                 <span className="pinned-time" title={fullTime(pin.pinned_at)}>
                   {chatTime(pin.pinned_at)}
                 </span>
-              </button>
+              </Button>
               {canManage ? (
-                <button
+                <Button
                   type="button"
                   className="pinned-unpin"
+                  variant="borderless" size="sm"
                   data-pinned-unpin-id={pin.message_id}
                   aria-label={`取消置顶：${sender}：${preview}`}
                   title={disabledReason ?? undefined}
@@ -106,7 +110,7 @@ export function PinnedMessagesBar({
                   onClick={() => onUnpin(pin)}
                 >
                   取消置顶
-                </button>
+                </Button>
               ) : null}
             </li>
           );

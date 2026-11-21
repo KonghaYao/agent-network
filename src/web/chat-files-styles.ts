@@ -21,7 +21,11 @@ export const FILES_STYLE = `
   .files-list-view { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
   .files-list-view[hidden] { display: none; }
   .file-item[data-selected="true"] { background: var(--wx-hover); box-shadow: inset 3px 0 var(--wx-green); }
-  .file-row[role="button"] { cursor: pointer; }
+  button.file-row {
+    width: 100%; height: auto !important; min-height: 0; padding: 0 !important;
+    justify-content: flex-start; align-items: flex-start; border: 0; color: inherit;
+    text-align: left; white-space: normal; cursor: pointer;
+  }
   .file-preview-inline { flex: 1 1 auto; min-height: 0; width: 100%; max-height: none;
     border-radius: 0; box-shadow: none; }
   .file-preview-inline .file-preview-head { flex-wrap: wrap; padding: 8px; gap: 6px; }
@@ -80,9 +84,9 @@ export const FILES_STYLE = `
   .file-meta { display: block; margin-top: 3px; font-size: 11px; color: var(--wx-muted);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .file-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; margin: 4px 0 0 49px; }
-  .file-action { border: 0; background: none; padding: 2px 4px; margin: 0;
+  .file-action, .file-actions > a { border: 0; background: none; padding: 2px 4px; margin: 0;
     color: var(--wx-link); font-size: 12px; text-decoration: none; }
-  .file-action:hover { background: var(--wx-hover); }
+  .file-action:hover, .file-actions > a:hover { background: var(--wx-hover); }
   .file-action.danger { color: var(--wx-unread); }
   .file-skeleton { display: flex; align-items: center; gap: 9px; padding: 9px 8px; }
   .file-skeleton .skeleton-avatar { width: 40px; height: 40px; border-radius: 6px; }

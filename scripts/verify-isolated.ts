@@ -1,5 +1,5 @@
 /** Protocol/business acceptance against a fresh temporary SQLite server; never production. */
-import { startServer } from './verify-web';
+import { startServer } from './lib/web-test-fixture';
 
 const targets: Record<string, string> = {
   protocol: 'scripts/verify-protocol.ts',

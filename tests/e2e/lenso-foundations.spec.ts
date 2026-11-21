@@ -21,6 +21,7 @@ interface Probe {
   backend: 'lenso' | 'fallback';
   open: boolean;
   setOpen: (open: boolean) => void;
+  addSubscriber: () => void;
   retry: () => Promise<'ok' | 'error'>;
   host: { className: string | null; color: string | null; dataProbe: string | null };
 }
@@ -44,7 +45,14 @@ import { createRoot } from 'react-dom/client';
 import { getLensoStatus, retryLenso, useBackendLease, useLenso, useLensoStatus } from ${JSON.stringify(runtime)};
 import { mergeHostProps } from ${JSON.stringify(host)};
 
+function Subscriber() {
+  useLenso();
+  useEffect(() => { document.body.dataset.subscriberReady = 'true'; }, []);
+  return null;
+}
+
 function Probe() {
+  const [subscribed, setSubscribed] = useState(false);
   const [open, setOpen] = useState(false);
   const lenso = useLenso();
   const status = useLensoStatus();
@@ -61,6 +69,7 @@ function Probe() {
     backend,
     open,
     setOpen,
+    addSubscriber: () => setSubscribed(true),
     retry: () => retryLenso().then(() => 'ok', () => 'error'),
     getStatus: getLensoStatus,
     host: {
@@ -70,7 +79,8 @@ function Probe() {
     },
   };
   return createElement('div', { id: 'probe', 'data-status': status, 'data-backend': backend },
-    createElement('input', { id: 'probe-input', ref: inputRef }));
+    createElement('input', { id: 'probe-input', ref: inputRef }),
+    subscribed && createElement(Subscriber));
 }
 
 createRoot(document.getElementById('root')).render(createElement(Probe));
@@ -245,6 +255,11 @@ test.describe.serial('Lenso shared runtime foundations', () => {
     await expect.poll(() => probe(page, (item) => item.status)).toBe('error');
     expect(requests).toBe(1);
     expect(await probe(page, (item) => item.ready)).toBe(false);
+
+    await probe(page, (item) => item.addSubscriber());
+    await expect(page.locator('body')).toHaveAttribute('data-subscriber-ready', 'true');
+    expect(await probe(page, (item) => item.status)).toBe('error');
+    expect(requests).toBe(1);
 
     expect(await probe(page, (item) => item.retry())).toBe('ok');
     await expect.poll(() => probe(page, (item) => item.status)).toBe('ready');

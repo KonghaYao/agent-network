@@ -307,8 +307,25 @@ type SearchInputProps = Omit<ComponentPropsWithRef<'input'>, 'className' | 'type
 export function SearchInput({ fullWidth = true, onChange, ...props }: SearchInputProps) {
   const lenso = useLenso();
   const scope = useLensoBackendScope();
-  if (!lenso || scope === 'fallback') {
-    return createElement('input', { ...props, onChange, type: 'search' });
+  // Keep the same input, caret and IME composition until the user leaves the field.
+  const [editingFallback, setEditingFallback] = useState(false);
+  if (!lenso || scope === 'fallback' || editingFallback) {
+    return createElement('input', {
+      ...props,
+      onChange,
+      type: 'search',
+      onFocus(event) {
+        setEditingFallback(true);
+        props.onFocus?.(event);
+      },
+      onBlur(event) {
+        // An edited uncontrolled value belongs to this DOM node.
+        if (props.value !== undefined || event.currentTarget.value === event.currentTarget.defaultValue) {
+          setEditingFallback(false);
+        }
+        props.onBlur?.(event);
+      },
+    });
   }
   return createElement(
     lenso.SearchField,

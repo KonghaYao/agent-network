@@ -6,7 +6,7 @@
  * 无法取得线上模块准确字节时停止迁移，绝不用重新构建的 bundle 顶替。
  */
 
-import { cp, mkdir, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import {
@@ -29,9 +29,7 @@ import {
   defaultReleasesRoot,
   parseArgs,
   publishCandidate,
-  readPins,
   readViteEntry,
-  validateCandidate,
   type WebReleaseCandidate,
 } from './lib/web-release';
 
@@ -62,8 +60,6 @@ try {
   if (existing) {
     throw new Error(`发布根已有 current 指针，拒绝重复迁移: ${root}`);
   }
-  const legacyInfo = await stat(join(root, 'legacy.json')).catch(() => null);
-  if (legacyInfo) throw new Error(`legacy.json 已存在，固定别名已冻结: ${root}`);
   const manifestInfo = await stat(join(dist, '.vite/manifest.json')).catch(() => null);
   if (!manifestInfo?.isFile()) {
     throw new Error(`dist manifest 不存在，不能归档: ${dist}/.vite/manifest.json`);
@@ -73,9 +69,10 @@ try {
     fetchModule('chat-markdown.js'),
     fetchModule('chat-drawboard.js'),
   ]);
-  const candidateDir = join(root, 'candidates', `migration-${Date.now()}`);
+  const candidatesRoot = join(root, 'candidates');
+  await mkdir(candidatesRoot, { recursive: true });
+  const candidateDir = await mkdtemp(join(candidatesRoot, 'migration-'));
   const webDir = join(candidateDir, 'web');
-  await mkdir(candidateDir, { recursive: true });
   await cp(dist, webDir, { recursive: true });
 
   const markdownUrl = staticUrlFromRelative(
@@ -130,19 +127,13 @@ try {
     },
   };
   await writeJsonAtomic(join(candidateDir, 'release.json'), manifest);
-  await validateCandidate(candidate);
   const result = await publishCandidate(candidate, {
     releasesRoot: root,
     activate: true,
+    pin: 'migration-baseline',
     freezeLegacy: true,
     keepCandidate: false,
     log: (message) => console.log(message),
-  });
-  const pins = await readPins(root);
-  await writeJsonAtomic(join(root, 'pins.json'), {
-    schemaVersion: WEB_RELEASE_SCHEMA_VERSION,
-    builds: [...new Set([...pins.builds, manifest.buildId])],
-    legacyBaseline: manifest.buildId,
   });
   console.log(
     JSON.stringify(

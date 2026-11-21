@@ -83,6 +83,16 @@ describe('monitor alert 分类', () => {
     expect(matchesLine('READY actor=agt_a pending=0 subscription=sub_1')).toBe(false);
   });
 
+  test('monitor --json 的启动错误使用宿主唤醒规则', () => {
+    const run = Bun.spawnSync([process.execPath, 'client/cli.ts', 'monitor', '--harness', 'peri', '--json'], {
+      env: { ...process.env, AGENTNET_TOKEN: '', AGENTNET_TOKEN_FILE: '' },
+    });
+    expect(run.exitCode).toBe(1);
+    const stderr = run.stderr.toString().trim();
+    expect(JSON.parse(stderr).error.code).toBe('credentials_required');
+    expect(matchesLine(stderr)).toBe(true);
+  });
+
   test('普通 stream_event 不告警', () => {
     check(
       { type: 'stream_event', source: 'room.file', attention: 'informational' },

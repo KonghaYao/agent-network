@@ -18,9 +18,11 @@ const pluginState = join(directory, 'plugin-state');
 const bundle = join(directory, 'agentnet.js');
 const token = `test-secret-${crypto.randomUUID()}`;
 const sessionId = 'session-owner';
+// Only the startup path needs a remote identity. Local checks and status stay credential-free.
+const startArgs = ['start', '--token', token, '--expect-actor', 'agt_dsh_fixture'];
 const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, DSH_HOME: dshHome,
   DSH_PROFILE: 'web', DSH_SESSION_ID: sessionId, WEBBOTS_HOME: queueHome,
-  AGENTNET_TOKEN: token, AGENTNET_URL: `https://example.invalid/mcp?token=${token}`,
+  AGENTNET_TOKEN: token, AGENTNET_URL: `http://127.0.0.1:1/mcp?token=${token}`,
   DSH_TEST_CALLS: calls, DSH_TEST_PLUGIN_STATE: pluginState, DSH_TEST_VERSION: '0.2.2-rc.1' };
 
 async function cli(args: string[], extra: Record<string, string | undefined> = {}) {
@@ -96,12 +98,12 @@ process.exit(2);
   check('semver 拒绝 0.1.5-rc.2', !isSupportedDshVersion('0.1.5-rc.2'));
   const removedInstallCommand = await cli(['install']);
   check('不再暴露单独 install 子命令', removedInstallCommand.code !== 0 && !existsSync(calls));
-  const missing = await cli(['start'], { DSH_PROFILE: undefined, DSH_SESSION_ID: undefined });
+  const missing = await cli(startArgs, { DSH_PROFILE: undefined, DSH_SESSION_ID: undefined });
   check('启动缺少当前 profile/session 时拒绝猜测', missing.code !== 0 && !existsSync(dshHome));
-  const unsupported = await cli(['start'], { DSH_TEST_VERSION: '0.1.5-rc.2' });
+  const unsupported = await cli(startArgs, { DSH_TEST_VERSION: '0.1.5-rc.2' });
   check('启动自动检测并拒绝不兼容 DSH 版本', unsupported.code !== 0 && !existsSync(dshHome));
 
-  const started = await cli(['start']);
+  const started = await cli(startArgs);
   check('首次启动 monitor 路径执行插件自检', started.stderr.includes('DSH_PLUGIN status=installed'), started);
   check('插件缺失时自动添加', started.stderr.includes('DSH_PLUGIN status=installed'));
   check('启动时自动检测输出 DSH 版本', started.stderr.includes('dsh_version=0.2.2-rc.1'));
@@ -125,7 +127,7 @@ process.exit(2);
   checkEqual('安装固定源码而非模型生成代码', source, await readFile(join(root, 'client/monitor/dsh-plugin.mjs.txt'), 'utf8'));
   check('产物及绑定不包含凭据', !(source + bindingBefore + JSON.stringify(manifest) + started.stdout + started.stderr).includes(token));
 
-  const repeated = await cli(['start']);
+  const repeated = await cli(startArgs);
   check('插件已存在时启动路径报告 present', repeated.stderr.includes('DSH_PLUGIN status=present'), repeated);
   checkEqual('已存在时不重复安装', addCalls(await dshCalls()).length, 1);
   checkEqual('已存在时不新增绑定', await readFile(bindingsFile, 'utf8'), bindingBefore);
@@ -135,7 +137,7 @@ process.exit(2);
   await mkdir(staleLock, { recursive: true });
   const old = new Date(Date.now() - 10 * 60_000);
   await utimes(staleLock, old, old);
-  const staleRecovered = await cli(['start']);
+  const staleRecovered = await cli(startArgs);
   check(
     '崩溃遗留锁在 stale 后恢复',
     staleRecovered.stderr.includes('DSH_PLUGIN status=present') &&
@@ -144,20 +146,20 @@ process.exit(2);
   );
 
   await rm(pluginState, { force: true });
-  const repaired = await cli(['start']);
+  const repaired = await cli(startArgs);
   check('插件记录缺失时启动路径自动补装', repaired.stderr.includes('DSH_PLUGIN status=installed'), repaired);
   checkEqual('缺失后只增加一次安装', addCalls(await dshCalls()).length, 2);
 
-  const conflict = await cli(['start'], { DSH_SESSION_ID: 'another-session' });
+  const conflict = await cli(startArgs, { DSH_SESSION_ID: 'another-session' });
   check('拒绝把同一队列交给另一会话', conflict.code !== 0);
-  const crossProfile = await cli(['start'], { DSH_PROFILE: 'other-profile' });
+  const crossProfile = await cli(startArgs, { DSH_PROFILE: 'other-profile' });
   check('拒绝跨 profile 复用同一队列', crossProfile.code !== 0);
   checkEqual('冲突不覆盖绑定', await readFile(bindingsFile, 'utf8'), bindingBefore);
 
   const failedHome = join(directory, 'failed queue');
   const failedDshHome = join(directory, 'failed dsh');
   const failedState = join(directory, 'failed plugin-state');
-  const failed = await cli(['start'], {
+  const failed = await cli(startArgs, {
     WEBBOTS_HOME: failedHome,
     DSH_HOME: failedDshHome,
     DSH_PROFILE: 'failed',

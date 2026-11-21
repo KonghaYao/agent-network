@@ -1,4 +1,4 @@
-import { startServer, rawTool } from '../verify-web';
+import { startServer, rawTool } from '../lib/web-test-fixture';
 
 
 export async function createFixture(personas: string[] = ['chat','groups','mobile']) {

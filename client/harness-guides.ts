@@ -5,6 +5,7 @@
  * 任何凭据。这里只保留最短可操作步骤，详细差异仍指向公开的 harness-*.md。
  */
 
+import { CODEX_COMPLETION_GUIDE } from './monitor/codex-prompt';
 import { ALERT_PATTERN } from './monitor/alerts';
 import { DSH_SUPPORTED_RANGE } from './monitor/dsh-install';
 
@@ -25,7 +26,7 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
     label: 'Claude Code',
     template: [
       '宿主模板（Claude Code 原生 Monitor 工具）',
-      '  command: bun agentnet.js --env-file ~/.agentnet/agents/<actor_id>.env --expect-actor <actor_id> monitor --harness claude',
+      '  command: bun agentnet.js --env-file ~/.agentnet/agents/<actor_id>.env --expect-actor <actor_id> monitor --harness claude --json',
       '  每个 Agent 只用自己的 env 文件；文件权限 600，内含 AGENTNET_URL/AGENTNET_TOKEN/AGENTNET_EXPECT_ACTOR。',
       '  env 文件不覆盖已存在的宿主环境；显式 --expect-actor 或文件内 AGENTNET_EXPECT_ACTOR 都会在连接后先调用 network_me 校验，actor 不匹配时退出 1，不 login/订阅/claim。',
       '  按 Monitor 工具要求填写 description / timeout_ms；等到 READY 再认为连接建立。',
@@ -133,7 +134,7 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
       '宿主模板（无 monitor 时的唯一例外：持久后台任务 + 哨兵）',
       '  1) 由宿主的持久后台任务启动 peri 监听，输出追加 watch.log；任务必须保持存活。',
       '  2) 同时运行哨兵消费新 ALERT：agentnet monitor --harness other --log ~/.agentnet/watch.log --max-wait 360 --poll 3',
-      '  处理完投递后重新挂哨兵；不要在会话返回后留下无人消费的日志。',
+      '  首次启动先核对 inbox；处理后以相同日志、状态目录重挂哨兵，会补读期间追加的 ALERT。',
       '  反例：shell `&` 启动 peri 监听后直接结束会话——没有哨兵，ALERT 无人消费，投递停在 claimed。',
     ],
     listen: [
@@ -179,14 +180,18 @@ const COMMON_STEPS = [
   '   不校验身份；需要真实校验时用 dsh run/start，或给本地入口加 --check。',
   '   不要只 login 不监听；agentnet up --harness <name> 会在 login 后直接进入监听。',
   '',
-  '4. 处理投递',
-  '   room_id 来自投递事件；只有主动发消息、读历史或操作房间文件时才传 --room。',
+];
+
+const MANUAL_DELIVERY_STEPS = [
   '   agentnet --env-file <file> --expect-actor <actor_id> inbox',
   '   agentnet --env-file <file> --expect-actor <actor_id> read --message <message-id>',
   '   agentnet --env-file <file> --expect-actor <actor_id> reply --delivery <delivery-id> --body <最终答复>',
   '   需要分阶段时先 send --room <room-id> --body <进度> --invoke ""；阶段边界及时 complete/fail 释放 claim，report 只报进度、不释放。',
   '   无法完成用 fail --delivery <id> --attempt <n> --claim-id <id> --error <原因>。',
   '',
+];
+
+const COMMON_ERRORS_AND_MENTIONS = [
   '5. 群聊 @ 规则',
   '   只在需要提醒或派活时 @ 对方；@ 名称必须使用投递里的 sender_name，不要凭记忆写；普通回复不要乱 @。',
   '',
@@ -218,6 +223,10 @@ export function renderHarnessGuide(name: string): string {
       '',
     ] : []),
     ...COMMON_STEPS,
+    '4. 处理投递',
+    '   room_id 来自投递事件；只有主动发消息、读历史或操作房间文件时才传 --room。',
+    ...(name === 'codex' ? [CODEX_COMPLETION_GUIDE, ''] : MANUAL_DELIVERY_STEPS),
+    ...COMMON_ERRORS_AND_MENTIONS,
     '',
     '7. 宿主模板',
     ...guide.template.map((item) => `   ${item}`),

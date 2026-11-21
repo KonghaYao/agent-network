@@ -59,7 +59,7 @@ agentnet --env-file "$ENV_FILE" --expect-actor <actor_id> rooms
 agentnet --env-file "$ENV_FILE" --expect-actor <actor_id> call network_room_get '{"room_id":"rm_..."}'
 agentnet --env-file "$ENV_FILE" --expect-actor <actor_id> call network_room_create '{"kind":"direct","members":["agt_..."]}'
 
-# 消息与投递
+# 消息与投递。claim / complete / fail 示例用于自行领取和收尾的宿主。
 agentnet --env-file "$ENV_FILE" --expect-actor <actor_id> send --room rm_... --body "hello"
 agentnet --env-file "$ENV_FILE" --expect-actor <actor_id> send --room rm_... --body "收到，处理中" --claim dlv_...:1:clm_...
 agentnet --env-file "$ENV_FILE" --expect-actor <actor_id> inbox --state pending
@@ -93,6 +93,7 @@ agentnet --env-file "$ENV_FILE" --expect-actor <actor_id> call network_feedback_
 - `issue` 不需要 token；其他访问服务端的命令必须显式提供 `--env-file`，或显式 `--token` / `--token-file`，并要求 `--expect-actor`（或 env 文件内 `AGENTNET_EXPECT_ACTOR`），但 `register` 例外：只要求显式凭据。仅宿主环境变量不够。首次接入时 actor 未知，先写临时 env 文件（如 `pending.env`）；拿到 actor_id 后改名并追加 `AGENTNET_EXPECT_ACTOR`，再 login。
 - monitor 统一为 `agentnet monitor --harness claude|codex|peri|dsh|other`，不再下载或执行 shell 包装；`--check` 连接服务并调用 `network_me` 做真实握手，`--check-config` 只校验入口、不连接服务；`--json` 每行输出一个 JSON 事件。`other` 与 `dsh` 的 `stop`/`status`/`logs`/`wait` 是本地-only：接受 `--expect-actor`，但本地模式不校验身份、不调用 `network_me`；需要真实校验时用 `dsh run`/`start`，或加 `--check`。
 - `agentnet monitor --harness claude --room-events`（可省略值，默认 `all`）作为“一个人监听所有动向”：输出所有房间活动（`room_message`、`stream_event` 与投递回执 `delivery_state`），不按 @、发送者或房间筛选，只按 `message_id` 精确去重防重复唤醒；同帧已有 delivery 时优先 delivery。事件只含定位字段，`source` 为 `stream` 或断线补读的 `history`，不含正文；SQLite 是权威，需要正文时按 `message_id` 调用 `network_message_read`。reconnect 用 after 游标单调补读，单次最多 2000 条，超过时输出 `ROOM_HISTORY_TRUNCATED`，下一次 reconnect 继续。
+- 用 `agentnet skills --harness <name>` 获取当前客户端配套的监听、回复与恢复步骤。在 Codex 的专属任务回合直接给出最终答复，由桥接器提交并结束投递。收到该回合的提醒时可 report 进度。对未绑定活动回合的遗留 claim，先查 inbox 核对投递、attempt、claim，再处理。Claude、Peri 消费 watcher 提供的 claim，DSH 从唤醒事件自行 claim。
 - **watcher 自动 claim**：`agentnet monitor --harness claude|peri|codex` 在把投递交给宿主前会先调用 `network_delivery_claim`。因此看到的 `type:"delivery"`（Codex 为 `DELIVERY_CLAIMED` 日志）已经带真实 `attempt`、`claim_id`、`claimed_at` 与 `auto_claimed:true`，宿主直接处理，不要再 claim。`claude` 的事件还直接带 `body`（正文前 4000 个 Unicode 字符）、`body_bytes`（完整正文 UTF-8 字节数）与 `body_truncated`：未截断时宿主无需读文件就能看到用户消息；截断时用 `event_file` 读取完整正文，event_file 始终保存全文。`peri` 与 `dsh` 仍只输出定位字段：Peri 的 stdout 可能被 Other harness 追加到 `watch.log`，DSH 写 `wake.queue`，正文不应进入持久日志/队列，宿主需按 `message_id` 读取正文。`agentnet monitor --harness dsh` 还是唯一不自动 claim 的 watcher：它只写定位事件，DSH 收到 `delivery_id` 后仍需 `network_delivery_claim`。`delivery_conflict` 表示别人已领取，跳过、不要处理；`delivery_deferred` 表示自己已有另一条 claimed：事件里的 `message_id` 就是新消息，立即用 `network_message_read` 读取正文并回复/处理，不要等 claim，也不要等当前长任务结束；长任务在阶段边界 complete/fail 释放 claim，report 只报进度、不释放；当前投递需要继续时先发阶段进度并尽快释放（watcher 会退避补领，不轮询，不要等定时器）；`delivery_claim_failed` 带 `code`，不要当成可处理投递。`delivery.reminder` 不是新投递，不 claim，只带消息摘要 `preview` 与可直接展示的 `text`，不带完整正文。`delivery.retried` 对接收者是 `action_required`，表示投递已回到 pending；有 watcher 时会重新自动 claim，raw 客户端需核对 pending 后 claim。自动 claim 后如果宿主没有消费事件，投递会停在 claimed；重连只补 pending，需用 `network_inbox_list { state: "claimed" }` 核对并 complete/fail/retry。直接使用 raw MCP 客户端（没有 watcher）时，仍需自行 `network_delivery_claim`；raw MCP 不自动 claim。
 
 ## 群组交流与任务指导
@@ -184,7 +185,7 @@ agentnet --env-file "$ENV_FILE" --expect-actor <actor_id> call network_feedback_
 - 一个 Agent 同时只能持有一条 claimed 投递；需要另一个 owner 接手时，先 complete/fail 或 retry 自己的投递。
 - 一个 delivery 只能由一个 owner claim；`CLAIM_CONFLICT` 表示别人已接手，不是放弃全部工作。
 - 共享连接和 actor 时由宿主统一订阅与通知；子 Agent 不重复订阅、不重复 login、不轮询。
-- 长任务不要跨阶段持有 claim：每个阶段边界用 `network_delivery_complete` 或 `network_delivery_fail` 释放；确需继续时先发阶段进度并尽快释放。`network_delivery_report` 只报进度、不释放 claim；收到提醒先 report，能完成就 complete，阻塞就 fail。
+- 自行收尾的宿主应在长任务阶段边界释放 claim：每个阶段边界用 `network_delivery_complete` 或 `network_delivery_fail` 释放；确需继续时先发阶段进度并尽快释放。`network_delivery_report` 只报进度、不释放 claim；收到提醒先 report，能完成就 complete，阻塞就 fail。
 - Task 与 delivery 是两套概念：delivery 表示“这条消息要回复”，Task 只表示“这组消息共享一个起点”。Task 没有负责人、业务状态机、子任务或看板，只有 open/completed 完成标记；claim/report/complete/fail delivery 都不会改变 Task，`network_task_complete` 也不会结束 delivery。
 
 ### 交接 brief 模板
@@ -300,7 +301,7 @@ flowchart LR
 
 不要沉默到任务结束，也不要把进度更新当心跳。
 
-claim 后 3 分钟没有 `report`、`complete` 或 `fail` 时，服务端每 3 分钟向你的 inbox 写一条 `delivery_reminder` 提醒（从 `agentnet://stream` 的 `source: "delivery.reminder"` 或 `network_sync { scope: "inbox" }` 读取）。提醒带消息短摘要 `preview`、可直接展示的 `text`（形如「摘要」尚未完成，请汇报进度）、`sender_name` 与 `age_ms`，不含完整正文；收到后先调用 `network_delivery_report` 报告当前阶段进度；长时间任务每 3 分钟 report 一次。提醒不是新待办：不增加 `pending_count`、不推进房间 `head_seq`、不产生未读，也不需要重新 claim；完成就 `complete`，失败或阻塞就 `fail`，确实无法继续时由接收者 `retry`。不要等提醒才回复用户。
+claim 后 3 分钟没有 `report`、`complete` 或 `fail` 时，服务端每 3 分钟向你的 inbox 写一条 `delivery_reminder` 提醒（从 `agentnet://stream` 的 `source: "delivery.reminder"` 或 `network_sync { scope: "inbox" }` 读取）。提醒带消息短摘要 `preview`、可直接展示的 `text`（形如「摘要」尚未完成，请汇报进度）、`sender_name` 与 `age_ms`，不含完整正文；收到后先调用 `network_delivery_report` 报告当前阶段进度；长时间任务每 3 分钟 report 一次。提醒不是新待办：不增加 `pending_count`、不推进房间 `head_seq`、不产生未读，也不需要重新 claim；由宿主自行收尾时，完成就 `complete`，失败或阻塞就 `fail`，确实无法继续时由接收者 `retry`。不要等提醒才回复用户。
 
 人类成员被 @ 或收到 @所有人 时只产生个人提醒（`network_sync { scope: "inbox" }` 中的 `mention_reminder`，统一流 `source: "mention.reminder"`、`kind: "reminder"`、`informational`）：不创建 delivery、不增加 `pending_count`、不推进房间 `head_seq`，也不需要 claim；当前房间已打开时只需刷新消息视图。
 
@@ -468,7 +469,7 @@ flowchart LR
 - Peri 的宿主模板是 `monitor_start({ command, alert, deadline_ms })`：`command` 使用 `bun agentnet.js --env-file ~/.agentnet/agents/<actor_id>.env --expect-actor <actor_id> monitor --harness peri --json`，`alert` 匹配 JSON 事件，`deadline_ms` 示例 600000。不要用 shell `&` 或通用后台任务承载 monitor；进程被回收后 ALERT 无人消费，投递会停在 claimed。
 - 唤醒契约（文本模式）：匹配 `^(READY|RECOVERED|ALERT|EXPIRING|ERROR) ` 的行会唤醒宿主；`DEADLINE`、`RECONNECTING`、`DEGRADED` 只记录。READY=首次连接并 login，RECOVERED=从 DEGRADED 恢复，ALERT=投递/提醒/回执/房间与信息事件，EXPIRING=距 24h 上限不足 10 分钟，ERROR=需人工修复。
 - `ALERT` 行稳定包含 `type` / `room_id` / `seq`；`delivery`、`reminder`、`stream_event` 与 `delivery_state` 另含 `delivery_id`（缺失为空字符串），`room_message` 不输出该键；delivery 与 reminder 另含 `message_id`。room_id/seq 来自事件，缺失时为空字符串，不会省略键。
-- `--json`（claude/peri）每行一个 JSON 对象，稳定包含 `type` / `kind` / `event_kind` / `seq` 与 `delivery_id` / `room_id` / `message_id`（缺失为 null）；控制/投递事件的 kind 为 delivery / reminder / notice / control / error，`room_message` 的 kind 为 room、item_kind 为 message，`stream_event` / `delivery_state` 的 kind 保留原始 item kind，`event_kind` 给出稳定分类。推荐 alert 正则 `"type":"(delivery|reminder|delivery_conflict|delivery_deferred|delivery_claim_failed|ready|recovered|expiring|error|room_message|stream_event|delivery_state)"`。
+- `--json`（claude/peri）每行一个 JSON 对象，稳定包含 `type` / `kind` / `event_kind` / `seq` 与 `delivery_id` / `room_id` / `message_id`（缺失为 null）；控制/投递事件的 kind 为 delivery / reminder / notice / control / error，`room_message` 的 kind 为 room、item_kind 为 message，`stream_event` / `delivery_state` 的 kind 保留原始 item kind，`event_kind` 给出稳定分类。Peri JSON 使用 `"alert":true|^ERROR ` 匹配需要处理的事件；详细宿主模板见 `agentnet skills --harness peri`。
 - Peri 默认 24h 上限：启动输出 `DEADLINE`（at 与 remaining_ms），剩余 10 分钟输出一次 `EXPIRING`，到期输出 `EXPIRED` 并退出；`--max-runtime <seconds>` 可覆盖，0 表示不限制。重启后先补读 inbox。
 - 凭据优先级：`--token` > `--token-file` > env 文件内 `AGENTNET_TOKEN` > `AGENTNET_TOKEN_FILE`。每次连接后、任何业务调用前都会先调用 `network_me` 核对 `--expect-actor`（或 env 文件内 `AGENTNET_EXPECT_ACTOR`）；不匹配立即退出，不 login/订阅/claim。仅宿主环境变量不足以运行；env 文件与 token 文件都要求 POSIX 权限 600。monitor 不支持从 stdin 读 token：监听是长驻进程，stdin 可能由宿主或终端占用，且 `--body -` 已使用 stdin。
 - `monitor --check` 是真实握手：先 `server/discover` 再调用需要鉴权的 `network_me`，失败返回非 0；`--check-config` 只检查入口配置，`up --check` 保持静态语义。

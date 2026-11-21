@@ -890,7 +890,9 @@ async function main(): Promise<void> {
         `skills --harness ${harness} 输出本宿主指南`,
         guide.stdout.includes(`HARNESS ${harness}`) &&
           guide.stdout.includes(`monitor --harness ${harness}`) &&
-          guide.stdout.includes('reply --delivery') &&
+          (harness === 'codex'
+            ? guide.stdout.includes('桥接器会提交答复') && !guide.stdout.includes('reply --delivery')
+            : guide.stdout.includes('reply --delivery')) &&
           guide.stdout.includes('群聊 @ 规则') &&
           guide.stdout.includes('CREDENTIAL_INVALID'),
         guide.stdout,

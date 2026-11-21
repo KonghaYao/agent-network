@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
+import { LIMITS } from '../../src/contracts/limits';
 import { semanticColor } from './fixtures/semantic-colors';
 
 /**
@@ -43,6 +44,7 @@ async function readBrandColor(page: Page): Promise<string> {
 }
 
 async function readSidebarAccountGeometry(page: Page): Promise<SidebarAccountGeometry> {
+  await expect(page.locator('.account-actions #new-agent')).toBeVisible();
   return page.evaluate(() => {
     const read = (selector: string) => {
       const element = document.querySelector<HTMLElement>(selector);
@@ -452,6 +454,37 @@ test.describe('SPA Home', () => {
     expect(await activeId()).toBe('room-search');
   });
 
+  test('search retains the focused input and IME selection when Lenso arrives', async ({ page, context }) => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    await page.route('**/assets/index-*.js', async (route) => {
+      await gate;
+      await route.continue();
+    });
+    try {
+      await page.goto(`${base}/`, { waitUntil: 'domcontentloaded' });
+      const input = page.locator('#room-search');
+      await input.fill('abcd');
+      await input.evaluate((node: HTMLInputElement) => node.setSelectionRange(2, 2));
+      const cdp = await context.newCDPSession(page);
+      await cdp.send('Input.imeSetComposition', { text: '周', selectionStart: 1, selectionEnd: 1 });
+      await expect(input).toHaveValue('ab周cd');
+      const original = await input.elementHandle();
+      release();
+      await expect(page.locator('#new-group')).toHaveAttribute('data-lenso-slot', 'button');
+      expect(await original!.evaluate((node) => node === document.activeElement)).toBe(true);
+      await cdp.send('Input.insertText', { text: '周末' });
+      await page.keyboard.type('e');
+      await expect(input).toHaveValue('ab周末ecd');
+      await page.keyboard.press('Tab');
+      await expect(input).not.toBeFocused();
+      await expect(page.locator('.search-box [data-lenso-slot="search-field"]')).toBeVisible();
+      await expect(input).toHaveValue('ab周末ecd');
+    } finally {
+      release();
+    }
+  });
+
   test('keeps IME composition text when Escape cancels search', async ({ page, context }) => {
     await page.goto(`${base}/`);
     await expect(page.locator('#room-search')).toBeVisible();
@@ -555,6 +588,36 @@ test.describe('SPA Home', () => {
     expect(await page.evaluate(() => window.sessionStorage.getItem('__homeMarker'))).toBe('1');
   });
 
+  test('backs off across unacknowledged streams and recovers on the next ack', async ({ page }) => {
+    const starts: number[] = [];
+    await page.route('**/mcp', async route => {
+      if (route.request().headers()['mcp-method'] !== 'subscriptions/listen') {
+        await route.continue();
+        return;
+      }
+      starts.push(performance.now());
+      if (starts.length <= 2) {
+        await route.fulfill({ status: 200, contentType: 'text/event-stream', body: ': keepalive\n\n' });
+        return;
+      }
+      await route.continue();
+    });
+    await page.goto(base);
+    await expect.poll(() => starts.length, { timeout: 12_000 }).toBe(3);
+    const minimumSecondDelay = 2 * LIMITS.reconnectBaseMs * (1 - LIMITS.reconnectJitterRatio);
+    expect(starts[2]! - starts[1]!).toBeGreaterThanOrEqual(minimumSecondDelay - 20);
+    await expect(page.getByLabel('实时连接已断开，正在重试…')).toHaveCount(0);
+    const body = 'E2E 退避重连后的消息';
+    await callTool(base, tokenB, 'network_message_send', {
+      request_id: requestId('e2e_send'),
+      client_message_id: requestId('e2e_cm'),
+      room_id: roomId,
+      body,
+      invoke: [],
+    });
+    await expect(page.locator('#room-list .room-preview')).toContainText(body);
+  });
+
   test('clicking a room opens the chat page', async ({ page }) => {
     await page.goto(`${base}/`);
     await page.locator(`#room-list a[href="/c/${roomId}"]`).click();
@@ -619,6 +682,7 @@ test.describe('SPA Home', () => {
       await expect(page.locator('#room-search')).toBeVisible();
       const searchHit = await page.locator('.search-box').boundingBox();
       expect(searchHit?.height ?? 0).toBeGreaterThanOrEqual(44);
+      await expect(page.locator('.search-box [data-lenso-slot="search-field"]')).toBeVisible();
       const searchInput = await page.locator('#room-search').boundingBox();
       expect(searchInput?.height ?? 0).toBeGreaterThanOrEqual(30);
       expect(searchInput?.height ?? 0).toBeLessThanOrEqual(32);

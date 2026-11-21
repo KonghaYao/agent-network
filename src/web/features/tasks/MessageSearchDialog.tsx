@@ -525,9 +525,11 @@ export function MessageSearchDialog({
                   data-active={selectedIndex === index ? 'true' : 'false'}
                   aria-current={selectedIndex === index ? 'true' : undefined}
                 >
-                  <button
+                  <Button
                     type="button"
                     className="message-search-locate"
+                    variant="borderless"
+                    style={{ ...SEARCH_RESULT_STYLE, minHeight: 0, padding: 0 }}
                     data-search-locate
                     disabled={locating}
                     onFocus={() => setSelectedIndex(index)}
@@ -557,11 +559,13 @@ export function MessageSearchDialog({
                         ranges={item.match_ranges}
                       />
                     </span>
-                  </button>
+                  </Button>
                   <div className="message-search-result-actions">
-                    <button
+                    <Button
                       type="button"
                       className="message-search-context"
+                      variant="bordered"
+                      size="sm"
                       data-search-context
                       onClick={(event) => {
                         contextTrigger.current = event.currentTarget;
@@ -569,7 +573,7 @@ export function MessageSearchDialog({
                       }}
                     >
                       上下文
-                    </button>
+                    </Button>
                   </div>
                 </article>
               ))}

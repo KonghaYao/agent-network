@@ -24,15 +24,9 @@ import {
 } from '../../lib/chat';
 import {
   bindFileToRoom,
-  fileBadge,
-  formatFileSize,
   uploadFileToDrive,
 } from '../../lib/files';
-import {
-  fileSafeUrl,
-  previewImageMime,
-  type RoomFileItem,
-} from '../../lib/files-ui';
+import type { RoomFileItem } from '../../lib/files-ui';
 import { callTool } from '../../lib/mcp-client';
 import type { WebIdentity } from '../../lib/identity';
 import { composerUpdateBusy, setUpdateBusy } from '../../pwa/update-busy';
@@ -57,63 +51,11 @@ import {
   type MentionQuery,
 } from '../../lib/mentions';
 import type { SendOutcome } from '../../hooks/useSendQueue';
+import { ComposerFileChip, type ComposerFile } from './ComposerFileChip';
+import { loadDrawboard } from './composer-drawboard';
 
 const DRAFT_PREFIX = 'agent-network-draft-v1:';
 const MAX_TEXTAREA_HEIGHT = 96;
-/**
- * 发布构建注入本版本自己的哈希 URL；开发构建为空，回退到固定别名。
- * 绝不在打开画板时读取服务器“最新”模块，避免旧页混用新 API。
- */
-const DRAWBOARD_ASSET_URL =
-  typeof __WEB_DRAWBOARD_URL__ === 'string' && __WEB_DRAWBOARD_URL__.length > 0
-    ? __WEB_DRAWBOARD_URL__
-    : '/assets/chat-drawboard.js';
-
-interface DrawboardModule {
-  openDrawboard(options: {
-    onInsert: (file: File) => void;
-    onClose?: () => void;
-  }): void;
-}
-
-let drawboardPromise: Promise<DrawboardModule> | null = null;
-let drawboardRetry = 0;
-
-/** 成功只请求一次；重试加 query 绕过浏览器失败缓存。 */
-function loadDrawboard(forceRetry: boolean): Promise<DrawboardModule> {
-  if (!drawboardPromise || forceRetry) {
-    if (forceRetry) drawboardRetry += 1;
-    const url = forceRetry ? `${DRAWBOARD_ASSET_URL}?r=${drawboardRetry}` : DRAWBOARD_ASSET_URL;
-    drawboardPromise = import(/* @vite-ignore */ url)
-      .then((module: unknown) => {
-        const candidate = module as Partial<DrawboardModule>;
-        if (typeof candidate.openDrawboard !== 'function') {
-          throw new Error('invalid drawboard bundle');
-        }
-        return candidate as DrawboardModule;
-      })
-      .catch((error: unknown) => {
-        drawboardPromise = null;
-        throw error;
-      });
-  }
-  return drawboardPromise;
-}
-
-interface ComposerFile {
-  key: string;
-  name: string;
-  size: number;
-  mime: string;
-  status: 'uploading' | 'ready' | 'failed';
-  percent: number;
-  phase: 'upload' | 'join';
-  fileId: string | null;
-  publicUrl: string | null;
-  previewUrl: string | null;
-  downloadUrl: string | null;
-  error: string;
-}
 
 export interface ComposerSendInput {
   text: string;
@@ -189,96 +131,6 @@ function saveDraft(key: string, text: string): void {
   }
 }
 
-function fileMeta(file: ComposerFile): string {
-  if (file.status === 'uploading') {
-    return file.phase === 'join' ? '正在加入房间…' : `上传中 ${file.percent}%`;
-  }
-  if (file.status === 'failed') return file.error || '上传失败';
-  return formatFileSize(file.size);
-}
-
-/**
- * 待发送文件 chip。
- *
- * 已绑定且可判定的图片显示 48px 缩略图，地址只接受同源 `/f/` 的带票据
- * `preview_url`；加载失败或未就绪时回退到类型 badge，不显示破图。
- */
-function ComposerFileChip({
-  file,
-  onOpenFile,
-  onRemove,
-  removeDisabled,
-}: {
-  file: ComposerFile;
-  onOpenFile: (item: RoomFileItem) => void;
-  onRemove: () => void;
-  removeDisabled: boolean;
-}) {
-  const [thumbBroken, setThumbBroken] = useState(false);
-  const image = file.status === 'ready' ? previewImageMime(file.mime, file.name) : null;
-  const thumb = image ? fileSafeUrl(file.previewUrl ?? undefined) : null;
-  const item: RoomFileItem | null =
-    thumb && file.fileId
-      ? {
-          file_id: file.fileId,
-          name: file.name,
-          size: file.size,
-          mime_type: file.mime,
-          public_url: file.publicUrl ?? undefined,
-          preview_url: thumb,
-          download_url: file.downloadUrl ?? undefined,
-        }
-      : null;
-
-  return (
-    <div className="composer-file" role="listitem" data-file-id={file.fileId ?? ''}>
-      {thumb && item && !thumbBroken ? (
-        <Tooltip as={Button}
-          type="button"
-          variant="borderless"
-          size="sm"
-          className="composer-file-thumb"
-          hint={file.name}
-          aria-label={`预览图片 ${file.name}`}
-          onClick={() => onOpenFile(item)}
-        >
-          <img
-            src={thumb}
-            alt=""
-            loading="lazy"
-            decoding="async"
-            referrerPolicy="no-referrer"
-            onError={() => setThumbBroken(true)}
-          />
-        </Tooltip>
-      ) : (
-        <span className="composer-file-badge" aria-hidden="true">
-          {fileBadge(file.name)}
-        </span>
-      )}
-      <span className="composer-file-main">
-        <Tooltip as="span" className="composer-file-name" hint={file.name}>
-          {file.name}
-        </Tooltip>
-        <span className="composer-file-meta">{fileMeta(file)}</span>
-      </span>
-      <Tooltip as={Button}
-        type="button"
-        variant="borderless"
-        size="sm"
-        isIconOnly
-        className="composer-file-remove"
-        aria-label={`移除 ${file.name}`}
-        hint={`移除 ${file.name}`}
-        disabled={removeDisabled}
-        onClick={onRemove}
-      >
-        ×
-      </Tooltip>
-    </div>
-  );
-}
-
 /**
  * 输入区：IME、1–4 行自适应、@ 提及、附件上传与拖放。
  *
@@ -322,7 +174,8 @@ export function Composer({
   const drawboardOpening = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const textRef = useRef(text);
-  const pendingCaretRef = useRef<number | null>(null);  const autoCaretRef = useRef(false);
+  const pendingCaretRef = useRef<number | null>(null);
+  const autoCaretRef = useRef(false);
   const handledReplyRef = useRef<ComposerReply | null>(null);
   const handledDraftRef = useRef<ComposerDraftRequest | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);

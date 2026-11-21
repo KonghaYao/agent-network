@@ -582,6 +582,8 @@ export const LIMITS = {
   feedbackProblemBytes: 16 * 1024,
   /** Memory 后端作业租约（毫秒）；过期只表示可对账，不等于远端失败。 */
   memoryJobLeaseMs: 60_000,
+  /** 进程内缓存的已确认后端空间代次上限。 */
+  memoryReadySpaceCacheEntries: 512,
   /** 单轮 Memory 作业领取上限。 */
   memoryJobBatchLimit: 20,
   /** Memory 可重试作业最大尝试次数；耗尽后保持 failed 显式状态。 */

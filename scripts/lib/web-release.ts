@@ -9,6 +9,7 @@ import type { Dirent } from 'node:fs';
 import {
   copyFile,
   mkdir,
+  mkdtemp,
   readFile,
   readdir,
   rename,
@@ -43,14 +44,16 @@ import {
   WEB_RELEASE_MAX_CONTRACT,
   WEB_RELEASE_MIN_CONTRACT,
   WEB_RELEASE_SCHEMA_VERSION,
-  WEB_RELEASE_BUILD_ID,
   writeJsonAtomic,
   type ImmutableIndex,
-  type WebDeploymentRecord,
   type WebLegacyAliases,
   type WebReleaseAsset,
   type WebReleaseManifest,
 } from '../../src/web/web-release';
+
+import { readPins, withReleaseLock, writeReleasePin } from './web-release-state';
+
+export { addPin, readPins, withReleaseLock, type Pins } from './web-release-state';
 
 const REPO_ROOT = resolve(import.meta.dir, '../..');
 
@@ -96,42 +99,6 @@ export function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
   return `${(value / 1024 / 1024).toFixed(2)} MiB`;
-}
-
-interface ReleaseLock {
-  release(): Promise<void>;
-}
-
-/**
- * 简单本机目录锁：`mkdir` 原子成功即持有；超过 15 分钟的锁视为异常退出遗留。
- * 发布与清理共用，避免边清理边发布。
- */
-export async function withReleaseLock<T>(root: string, run: () => Promise<T>): Promise<T> {
-  await mkdir(root, { recursive: true });
-  const lockDir = join(root, '.release-lock');
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      await mkdir(lockDir);
-      const lock: ReleaseLock = {
-        release: async () => {
-          await rm(lockDir, { recursive: true, force: true });
-        },
-      };
-      try {
-        return await run();
-      } finally {
-        await lock.release();
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      const info = await stat(lockDir).catch(() => null);
-      if (!info || Date.now() - info.mtimeMs < 15 * 60_000) {
-        throw new Error(`另一个发布/清理进程正在运行（锁: ${lockDir}）`);
-      }
-      await rm(lockDir, { recursive: true, force: true });
-    }
-  }
-  throw new Error('无法取得发布锁');
 }
 
 async function pathInfo(path: string) {
@@ -295,10 +262,7 @@ export async function buildCandidate(options: BuildCandidateOptions): Promise<We
   const nonce = options.nonce ?? crypto.randomUUID();
   const candidatesRoot = join(options.releasesRoot, 'candidates');
   await mkdir(candidatesRoot, { recursive: true });
-  const candidateDir = join(
-    candidatesRoot,
-    `build-${Date.now()}-${nonce.replace(/[^A-Za-z0-9_-]/gu, '').slice(0, 8) || 'build'}`,
-  );
+  const candidateDir = await mkdtemp(join(candidatesRoot, 'build-'));
   const webDir = join(candidateDir, 'web');
   await mkdir(webDir, { recursive: true });
 
@@ -324,39 +288,24 @@ export async function buildCandidate(options: BuildCandidateOptions): Promise<We
   const modulesFile = join(candidateDir, 'modules.json');
   await writeJsonAtomic(modulesFile, { markdown: markdownUrl, drawboard: drawboardUrl });
 
-  const previous = {
-    outDir: process.env.WEB_BUILD_OUT_DIR,
-    modules: process.env.WEB_RELEASE_MODULES_FILE,
-    nonce: process.env.WEB_BUILD_NONCE,
-  };
-  try {
-    // 复用 `bun run build:web` 同一条 Vite CLI 路径；programmatic build 会
-    // 跳过 StyleX/lightningcss 的 CLI 侧初始化，导致 @lenso/tokens 编译失败。
-    log('vite build 开始');
-    const viteBin = resolve(REPO_ROOT, 'node_modules/.bin/vite');
-    const child = Bun.spawn([viteBin, 'build', '--outDir', webDir, '--emptyOutDir'], {
-      cwd: REPO_ROOT,
-      env: {
-        ...process.env,
-        WEB_BUILD_OUT_DIR: webDir,
-        WEB_RELEASE_MODULES_FILE: modulesFile,
-        WEB_BUILD_NONCE: nonce,
-      } as Record<string, string>,
-      stdout: 'inherit',
-      stderr: 'inherit',
-    });
-    const exitCode = await child.exited;
-    if (exitCode !== 0) throw new Error(`vite build 失败（退出码 ${exitCode}）`);
-  } finally {
-    if (previous.outDir === undefined) delete process.env.WEB_BUILD_OUT_DIR;
-    else process.env.WEB_BUILD_OUT_DIR = previous.outDir;
-    if (previous.modules === undefined) delete process.env.WEB_RELEASE_MODULES_FILE;
-    else process.env.WEB_RELEASE_MODULES_FILE = previous.modules;
-    if (previous.nonce === undefined) delete process.env.WEB_BUILD_NONCE;
-    else process.env.WEB_BUILD_NONCE = previous.nonce;
-  }
+  // 复用 `bun run build:web` 同一条 Vite CLI 路径；programmatic build 会
+  // 跳过 StyleX/lightningcss 的 CLI 侧初始化，导致 @lenso/tokens 编译失败。
+  log('vite build 开始');
+  const viteBin = resolve(REPO_ROOT, 'node_modules/.bin/vite');
+  const child = Bun.spawn([viteBin, 'build', '--outDir', webDir, '--emptyOutDir'], {
+    cwd: REPO_ROOT,
+    env: {
+      ...process.env,
+      WEB_BUILD_OUT_DIR: webDir,
+      WEB_RELEASE_MODULES_FILE: modulesFile,
+      WEB_BUILD_NONCE: nonce,
+    } as Record<string, string>,
+    stdout: 'inherit',
+    stderr: 'inherit',
+  });
+  const exitCode = await child.exited;
+  if (exitCode !== 0) throw new Error(`vite build 失败（退出码 ${exitCode}）`);
 
-  // Vite 已清空候选目录，模块在构建后落盘，避免被 emptyOutDir 删除。
   await writeFileAtomic(join(webDir, staticRelativeFromUrl(markdownUrl)), markdownBytes);
   await writeFileAtomic(join(webDir, staticRelativeFromUrl(drawboardUrl)), drawboardBytes);
 
@@ -451,6 +400,7 @@ export interface PublishOptions {
   readonly activate?: boolean;
   /** 只在首次迁移时使用；已存在 legacy.json 时拒绝覆盖。 */
   readonly freezeLegacy?: boolean;
+  readonly pin?: 'build' | 'migration-baseline';
   readonly keepCandidate?: boolean;
   readonly log?: (message: string) => void;
 }
@@ -466,10 +416,27 @@ export interface PublishResult {
 async function freezeLegacyAliases(
   releasesRoot: string,
   candidate: WebReleaseCandidate,
+  resumeMigration: boolean,
 ): Promise<WebLegacyAliases> {
   const legacyPath = join(releasesRoot, 'legacy.json');
-  if (await pathInfo(legacyPath)) {
-    throw new Error('legacy.json 已存在；固定别名只能冻结一次');
+  const existing = await readLegacyAliases(releasesRoot);
+  if (existing) {
+    if (!resumeMigration || existing.baselineBuildId !== candidate.manifest.buildId) {
+      throw new Error('legacy.json 已存在；固定别名只能冻结一次');
+    }
+    // A previous migration can stop after freezing aliases and before activating current.
+    for (const [name, module] of [
+      ['chat-markdown.js', candidate.manifest.modules.markdown],
+      ['chat-drawboard.js', candidate.manifest.modules.drawboard],
+    ] as const) {
+      const alias = existing.aliases[name];
+      if (alias.sha256 !== module.sha256 || alias.bytes !== module.bytes) {
+        throw new Error(`固定别名与迁移基线不一致: ${name}`);
+      }
+      const failure = await verifyFile(join(releasesRoot, alias.file), alias);
+      if (failure) throw new Error(failure);
+    }
+    return existing;
   }
   const legacyDir = join(releasesRoot, 'legacy');
   await mkdir(legacyDir, { recursive: true });
@@ -513,7 +480,11 @@ export async function publishCandidate(
   await validateCandidate(candidate);
   const publicDir = join(options.releasesRoot, 'public');
   const releaseDir = join(options.releasesRoot, 'releases', buildIdDirectory(candidate.manifest.buildId));
-  const index = await withReleaseLock(options.releasesRoot, async () => {
+  const baseline = options.pin === 'migration-baseline';
+  const deployment = await withReleaseLock(options.releasesRoot, async () => {
+    if (baseline && (await readCurrentBuildId(options.releasesRoot))) {
+      throw new Error(`发布根已有 current 指针，拒绝重复迁移: ${options.releasesRoot}`);
+    }
     await mkdir(publicDir, { recursive: true });
     const indexPath = join(options.releasesRoot, 'immutable-index.json');
     const indexInfo = await pathInfo(indexPath);
@@ -551,36 +522,21 @@ export async function publishCandidate(
         assets[relative] = asset;
       }
     }
-    // 索引只在整个候选资源全部可读后一次性提交。
     const nextIndex: ImmutableIndex = { schemaVersion: WEB_RELEASE_SCHEMA_VERSION, assets };
-    await writeJsonAtomic(join(options.releasesRoot, 'immutable-index.json'), nextIndex);
+    const failures = await verifyReleaseAssets({ manifest: candidate.manifest, publicDir, index: nextIndex });
+    if (failures.length) throw new Error(`发布后资源复核失败: ${failures.slice(0, 8).join('; ')}`);
+    await writeJsonAtomic(indexPath, nextIndex);
     await mkdir(releaseDir, { recursive: true });
     await writeJsonAtomic(join(releaseDir, 'release.json'), candidate.manifest);
-    return nextIndex;
+    if (options.freezeLegacy) {
+      await freezeLegacyAliases(options.releasesRoot, candidate, baseline);
+    }
+    if (options.pin) {
+      await writeReleasePin(options.releasesRoot, candidate.manifest.buildId, baseline);
+    }
+    if (options.activate === false) return null;
+    return activateDeployment(options.releasesRoot, candidate.manifest, 'deploy');
   });
-  const verified = await verifyReleaseAssets({
-    manifest: candidate.manifest,
-    publicDir,
-    index,
-  });
-  if (verified.length > 0) {
-    throw new Error(`发布后资源复核失败: ${verified.slice(0, 8).join('; ')}`);
-  }
-
-  let legacyFrozen = false;
-  if (options.freezeLegacy) {
-    await withReleaseLock(options.releasesRoot, async () => {
-      await freezeLegacyAliases(options.releasesRoot, candidate);
-    });
-    legacyFrozen = true;
-  }
-
-  let deployment: WebDeploymentRecord | null = null;
-  if (options.activate !== false) {
-    deployment = await withReleaseLock(options.releasesRoot, () =>
-      activateDeployment(options.releasesRoot, candidate.manifest, 'deploy'),
-    );
-  }
   if (options.keepCandidate !== true) {
     await rm(candidate.candidateDir, { recursive: true, force: true });
   }
@@ -592,45 +548,8 @@ export async function publishCandidate(
     deploymentId: deployment?.deploymentId ?? null,
     releaseDir,
     assets: candidate.manifest.assets.length,
-    legacyFrozen,
+    legacyFrozen: options.freezeLegacy === true,
   };
-}
-
-export interface Pins {
-  readonly schemaVersion: number;
-  readonly builds: readonly string[];
-  readonly legacyBaseline?: string;
-}
-
-export async function readPins(root: string): Promise<Pins> {
-  try {
-    const parsed = JSON.parse(await readFile(join(root, 'pins.json'), 'utf8')) as unknown;
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new Error('pins.json 必须是对象');
-    }
-    const record = parsed as Record<string, unknown>;
-    const builds = Array.isArray(record.builds)
-      ? record.builds.filter((item): item is string => typeof item === 'string' && WEB_RELEASE_BUILD_ID.test(item))
-      : [];
-    const legacyBaseline =
-      typeof record.legacyBaseline === 'string' && WEB_RELEASE_BUILD_ID.test(record.legacyBaseline)
-        ? record.legacyBaseline
-        : undefined;
-    return { schemaVersion: WEB_RELEASE_SCHEMA_VERSION, builds, ...(legacyBaseline ? { legacyBaseline } : {}) };
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return { schemaVersion: WEB_RELEASE_SCHEMA_VERSION, builds: [] };
-    }
-    throw error;
-  }
-}
-
-export async function addPin(root: string, buildId: string): Promise<Pins> {
-  const pins = await readPins(root);
-  const builds = [...new Set([...pins.builds, buildId])];
-  const next: Pins = { ...pins, builds };
-  await writeJsonAtomic(join(root, 'pins.json'), next);
-  return next;
 }
 
 export interface RollbackResult {
@@ -739,11 +658,15 @@ export async function pruneReleases(options: PruneOptions): Promise<PruneResult>
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [] as string[];
       throw error;
     });
+    const keepIndexed = new Set(referenced);
     for (const relative of files) {
       if (referenced.has(relative)) continue;
       const file = join(publicDir, relative);
       const info = await stat(file);
-      if (now - info.mtimeMs < options.graceMs) continue;
+      if (now - info.mtimeMs < options.graceMs) {
+        keepIndexed.add(relative);
+        continue;
+      }
       candidates.push({
         relative,
         bytes: info.size,
@@ -791,10 +714,9 @@ export async function pruneReleases(options: PruneOptions): Promise<PruneResult>
     }
     // 先提交新索引再删文件：中断时最多留下索引外的孤儿文件，
     // 不会出现索引仍指向已删除文件。
-    const nextAssets: Record<string, WebReleaseAsset> = {};
-    for (const [relative, asset] of Object.entries(index.assets)) {
-      if (referenced.has(relative)) nextAssets[relative] = asset;
-    }
+    const nextAssets = Object.fromEntries(
+      Object.entries(index.assets).filter(([relative]) => keepIndexed.has(relative)),
+    );
     await writeJsonAtomic(join(options.root, 'immutable-index.json'), {
       schemaVersion: WEB_RELEASE_SCHEMA_VERSION,
       assets: nextAssets,

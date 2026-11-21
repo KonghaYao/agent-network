@@ -1,9 +1,8 @@
 /**
  * 共享 Server-Sent Events 解析。
  *
- * CLI、monitor 与测试 harness 都使用同一份 eventsource-parser 行为，
+ * 浏览器、CLI、monitor 与测试 harness 共用 eventsource-parser，
  * 覆盖 BOM、CRLF/CR、多行 `data:`、`id`、`retry` 与注释行。
- * web 内联脚本不能 import 包，仍保留自己的解析器。
  */
 
 import { createParser } from 'eventsource-parser';

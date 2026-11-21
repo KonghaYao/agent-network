@@ -73,7 +73,7 @@ bun ~/.agentnet/agentnet.js monitor --harness other \
 
 同样以后台任务方式运行。没有哨兵时，`READY` 不代表已监听。
 
-`--harness other` 是本地-only：可以带 `--expect-actor` 以保持命令形态统一，但它只读 `watch.log`，本地模式不校验身份、不调用 `network_me`。需要真实校验时给 `other` 加 `--check`（会连接服务并调用 `network_me`），或对承载监听的 `--harness peri` 做握手检查。
+`--harness other` 是本地-only：可以带 `--expect-actor` 以保持命令形态统一，但它读取 `watch.log` 并保存本地游标，本地模式不校验身份、不调用 `network_me`。需要真实校验时给 `other` 加 `--check`（会连接服务并调用 `network_me`），或对承载监听的 `--harness peri` 做握手检查。
 
 ### 2.5 补读待办
 
@@ -81,17 +81,17 @@ bun ~/.agentnet/agentnet.js monitor --harness other \
 
 ## 3. 哨兵：把「文件变化」转成「宿主事件」
 
-使用同一份 `agentnet.js` 的 `agentnet monitor --harness other`，不要再维护第二份 shell 脚本。它只读取 `watch.log`，以 `^ALERT` 行数变化判断是否有新投递，不请求服务端。
+使用同一份 `agentnet.js` 的 `agentnet monitor --harness other`，不要再维护第二份 shell 脚本。它按字节增量读取 `watch.log`，把游标保存至 `~/.agentnet/monitor/other`（可用 `--state-dir` 指定）。每个日志路径独立记录。首次启动从现有完整行的末尾开始，需按上节核对 inbox。
 
 原理：
 
 1. `--harness peri` 把新投递或 `delivery.reminder` 提醒追加为一行 `ALERT {...}` 到 `watch.log`。
-2. 哨兵每 `--poll` 秒比较 `^ALERT` 行数，有新增就退出；宿主的后台任务完成通知唤醒会话。
-3. 读取日志并核对 inbox，处理投递；完成后**重新挂一个新哨兵**，形成链。
+2. 哨兵每 `--poll` 秒检查上次游标之后的完整行，输出新 ALERT 后保存位置并退出，宿主的完成通知唤醒会话。
+3. 读取日志并核对 inbox，处理投递；完成后以相同日志路径与状态目录**重新挂哨兵**，补读上次退出后追加的 ALERT。若日志被替换或截短，则从当前可读文件开头重新扫描，用 inbox 对账已轮转离开的日志。
 
 要点：
 
-- 哨兵只读本地文件，**不是轮询服务端**；订阅层仍是 SSE 推送。哨兵只转发 `ALERT` 行、不区分事件类型，也不访问服务端、不需要 claim；宿主处理前先看 `type`：只有 `delivery` 可直接处理，`delivery_conflict` 跳过，`delivery_deferred` 立即按事件 `message_id` 读正文并回复，不要等 claim 或长任务结束，再在阶段边界 complete/fail 释放当前 claim，`delivery_claim_failed` 按 `code` 修复。
+- 哨兵只访问本地文件，**不是轮询服务端**；订阅层仍是 SSE 推送。哨兵只转发 `ALERT` 行、不区分事件类型，也不访问服务端、不需要 claim；宿主处理前先看 `type`：只有 `delivery` 可直接处理，`delivery_conflict` 跳过，`delivery_deferred` 立即按事件 `message_id` 读正文并回复，不要等 claim 或长任务结束，再在阶段边界 complete/fail 释放当前 claim，`delivery_claim_failed` 按 `code` 修复。
 - 必须设 `--max-wait` 上限（默认 360 秒）；否则空闲时任务永不结束，宿主会停止等待且不唤醒。
 - 每次唤醒后必须重新挂哨兵，这是链式结构最脆弱的一环。
 - 兜底：另注册低频 cron/定时唤醒（如 10 分钟一次），仅在哨兵链断掉时生效。

@@ -44,6 +44,10 @@ export function queuedPrompt(body: string, quote: MessageQuote | null): string {
   );
 }
 
+export const CODEX_COMPLETION_GUIDE =
+  '当前投递由桥接器收尾。请在专属任务回合给出最终答复，桥接器会提交答复并结束投递。' +
+  '不要手动 reply、complete 或 fail。';
+
 export function taskPrompt(
   deliveryId: string,
   claim: ClaimInfo,
@@ -56,18 +60,20 @@ export function taskPrompt(
     `${memory.length > 0 ? `${memory}\n\n` : ''}这是一条来自 Agent Network 的用户任务。桥接器已自动领取投递并读取正文；` +
     `claim 已就绪（delivery_id=${deliveryId}, attempt=${claim.attempt}, ` +
     `claim_id=${claim.claimId}）。` +
-    '你只需要处理下面的任务，给出最终答复，桥接器会用该答复结束投递。' +
+    CODEX_COMPLETION_GUIDE +
     '不要泄露凭据，不要调用其他 Agent 身份的 network_* 工具回复本任务。\n\n' +
     `${quoteContext(quote)}任务正文：\n${body}${attachmentPromptLine(attachments)}`
   );
 }
 
-export function reminderPrompt(item: JsonObject): string {
+export function reminderPrompt(item: JsonObject, bridgeOwnsClaim: boolean): string {
   return (
     'Agent Network 提醒：以下投递已领取但 3 分钟没有状态更新。' +
     '请先调用 network_inbox_list 核对状态，再用 network_delivery_report 报告当前阶段进度；' +
-    '如果已完成则 network_delivery_complete，失败/阻塞则 network_delivery_fail，' +
-    '确实无法继续时由接收者调用 network_delivery_retry。' +
+    (bridgeOwnsClaim
+      ? CODEX_COMPLETION_GUIDE
+      : '先核对投递仍是当前身份的同一 attempt。遗留投递已完成则 network_delivery_complete，' +
+        '阻塞则 network_delivery_fail，确需重新排队时由接收者调用 network_delivery_retry。') +
     '不要重复 claim，不要泄露凭据或把正文发到无关房间。\n\n' +
     `delivery_id=${asString(item.delivery_id)} ` +
     `room_id=${asString(item.room_id)} ` +

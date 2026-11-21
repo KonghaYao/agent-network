@@ -1,4 +1,4 @@
-import { Button, Separator } from '../../app/lenso-controls';
+import { Button, List, ListItem, Separator } from '../../app/lenso-controls';
 import { Popover } from '../../app/lenso-popover';
 import {
   useCallback,
@@ -204,14 +204,14 @@ export function TaskPreviewPopover({
             {recent.length === 0 ? (
               <p className="task-preview-empty">暂无相关回复</p>
             ) : (
-              <ul className="task-preview-recent-list">
+              <List aria-label="最近回复">
                 {recent.map((message) => {
                   const sender = message.sender_name || message.sender_id;
                   const text = message.recalled
                     ? '此消息已撤回'
                     : message.preview || '（无正文）';
                   return (
-                    <li key={message.message_id}>
+                    <ListItem key={message.message_id}>
                       <Button
                         type="button"
                         variant="borderless"
@@ -234,10 +234,10 @@ export function TaskPreviewPopover({
                         </span>
                         <span className="task-preview-recent-text">{text}</span>
                       </Button>
-                    </li>
+                    </ListItem>
                   );
                 })}
-              </ul>
+              </List>
             )}
           </div>
           </div>

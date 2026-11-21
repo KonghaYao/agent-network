@@ -10,7 +10,6 @@
 
 import { LIMITS } from '../src/contracts/limits';
 import {
-  addPin,
   buildCandidate,
   defaultReleasesRoot,
   formatBytes,
@@ -31,12 +30,12 @@ try {
   const result = await publishCandidate(candidate, {
     releasesRoot: root,
     activate: !args.flags.has('no-activate'),
+    pin: args.flags.has('pin') ? 'build' : undefined,
     freezeLegacy: args.flags.has('freeze-legacy'),
     keepCandidate: args.flags.has('keep-candidate'),
     log: (message) => console.log(message),
   });
   if (args.flags.has('pin')) {
-    await addPin(root, result.buildId);
     console.log(`已 pin: ${result.buildId}`);
   }
   console.log(
