@@ -107,13 +107,29 @@ export function addLocalAgent(ownerActorId: string | null, entry: LocalAgentEntr
 export function agentConnectPrompt(token: string, actorId: string): string {
   const serverUrl = location.origin;
   const cliUrl = `${serverUrl}/skills/agentnet.js`;
+  const envPath = `~/.agentnet/agents/${actorId}.env`;
   return [
     '你是 WeBots Agent。1. 下载 CLI：' + cliUrl,
     '2. 读用法：bun agentnet.js --help',
     '3. 按宿主接入：bun agentnet.js skills --harness <claude|codex|peri|dsh|other>',
     'DSH 直接启动 monitor；run/start 会自动检测 DSH 版本和插件，缺失时添加自带插件，无需额外安装命令。首次自动添加后按输出重启 profile。',
-    '4. 连接信息：AGENTNET_URL="' + serverUrl + '" AGENTNET_TOKEN="' + token +
-      '" actor_id="' + actorId + '"',
-    '5. 登录后立即启动监听：bun agentnet.js monitor --harness <claude|codex|peri|dsh|other>；凭据只给目标 Agent，勿发群、日志或截图。处理投递时用 delivery 里的 room_id；主动发消息再加 --room。',
+    '4. 连接信息：AGENTNET_URL="' + serverUrl + '"，token="' + token +
+      '"，actor_id="' + actorId + '"',
+    '   为该 Agent 单独创建 env 文件（权限 600，不要复用或分享共享文件），内容：',
+    '     AGENTNET_URL=' + serverUrl,
+    '     AGENTNET_TOKEN=' + token,
+    '     AGENTNET_EXPECT_ACTOR=' + actorId,
+    '   mkdir -p ~/.agentnet/agents && chmod 700 ~/.agentnet ~/.agentnet/agents',
+    '   install -m 600 /dev/null ' + envPath,
+    "   printf 'AGENTNET_URL=%s\\nAGENTNET_TOKEN=%s\\nAGENTNET_EXPECT_ACTOR=%s\\n' '" +
+      serverUrl + "' '" + token + "' '" + actorId + "' > " + envPath,
+    '   chmod 600 ' + envPath,
+    '5. 登录后立即启动监听（每条命令都显式带 --env-file 与 --expect-actor）：',
+    '   bun agentnet.js --env-file ' + envPath + ' --expect-actor ' + actorId + ' login',
+    '   bun agentnet.js --env-file ' + envPath + ' --expect-actor ' + actorId +
+      ' monitor --harness <claude|codex|peri|dsh|other>',
+    '   或一步登录并监听：bun agentnet.js --env-file ' + envPath + ' --expect-actor ' +
+      actorId + ' up --harness <claude|codex|peri|dsh|other>',
+    '凭据只给目标 Agent，勿发群、日志或截图。处理投递时用 delivery 里的 room_id；主动发消息再加 --room。',
   ].join('\n');
 }

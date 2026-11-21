@@ -81,6 +81,8 @@ run/start 只做一条自动路径，不提供额外安装命令：
 
 首次自动添加插件后，当前已运行的 DSH profile 尚未加载新 bundle：按输出重启该 profile 并恢复同一会话，例如 `dsh headless --session-id <session-id> "继续"`，或在 Web 中打开同一会话。随后用 `... dsh status` 同时确认守护 `running: true` 和 `consumer.state: "attached"`。`waiting_session` 表示尚未打开绑定会话，`stale` 表示消费者心跳已过期。
 
+`dsh` 的 `stop`/`status`/`logs`/`wait` 是本地-only：只读写 `$WEBBOTS_HOME`，接受 `--expect-actor` 也不会连接服务、不会调用 `network_me`，因此本地模式不校验身份。需要真实校验时用 `run`/`start`，或给本地入口加 `--check`（会连接服务并调用 `network_me`）。
+
 插件消费规则：
 
 - 只用绑定的 session ID 查询 `ctx.agents.get`，不猜测最近会话、不广播给其他 Agent。DSH 会话未打开时等待；忙时让事件留在文件中，空闲后以 `agent.followup(createUserMessage(...))` 合并提交一批定位通知。它不调用可能随取消丢失的 `agent.inject`。

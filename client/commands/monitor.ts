@@ -439,9 +439,9 @@ export async function monitor(
     harness === 'other' ||
     (harness === 'dsh' && !['run', 'start'].includes(dshCommand!));
   if (localOnly) {
-    if (options.expectActor !== undefined) {
-      throw new CliError('--expect-actor 只支持连接服务的 monitor（dsh 仅 run/start）');
-    }
+    // 本地-only 入口（other；dsh 的 stop/status/logs/wait）不连接服务。
+    // --expect-actor 被接受以保持命令形态统一，但本地模式不校验身份，
+    // 也不会调用 network_me；需要真实校验时加 --check。
     if (checkOnly) return await checkHarnessLive(harness, context, options, extra);
   } else if (checkOnly) {
     // checkHarnessLive 自己按 URL → 凭据 → 身份 → network_me 的顺序输出诊断，

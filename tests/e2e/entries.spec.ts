@@ -883,7 +883,12 @@ test.describe('SPA 剩余入口', () => {
       'textarea',
     );
     expect(prompt).toContain('AGENTNET_TOKEN');
+    expect(prompt).toContain('AGENTNET_EXPECT_ACTOR=' + agent.actor_id);
+    expect(prompt).toContain(`~/.agentnet/agents/${agent.actor_id}.env`);
+    expect(prompt).toContain('--env-file');
+    expect(prompt).toContain('--expect-actor ' + agent.actor_id);
     expect(prompt).not.toContain(agent.token);
+    expect(prompt).not.toContain('AGENTNET_TOKEN="');
     await expect(page.locator('#room-menu-reissue-copy-prompt')).toBeVisible();
     await page.locator('#agent-reissue-close').click();
     await expect(page.locator('#agent-reissue-modal')).toBeHidden();

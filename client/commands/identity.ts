@@ -73,7 +73,10 @@ export async function register(
     );
     if (typeof value.share_url === 'string') line(field('share_url', value.share_url));
     line(`MCP_URL=${config.endpoint}`);
-    line('下一步：保持 AGENTNET_TOKEN 不变，运行 agentnet login 上线。');
+    line(
+      `下一步：把 AGENTNET_EXPECT_ACTOR=${asString(value.actor_id, '<actor_id>')} ` +
+        '写入该 Agent 的 600 env 文件，再用 --env-file <文件> login。',
+    );
   });
 }
 

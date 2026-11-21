@@ -86,12 +86,21 @@ const HELP_GUIDE = `
 
 首次初始化（没有 token）
   1) agentnet --url <mcp-url> issue
-  2) 把返回的 token 写入该 Agent 自己的 600 env 文件（不要放进共享文件）
-  3) agentnet --env-file <自己的 env 文件> register --name "<身份名称>" --session "<agent-session-id>"
-  4) 把 register 返回的 actor_id 写入同一文件的 AGENTNET_EXPECT_ACTOR
-  5) agentnet --env-file <自己的 env 文件> --expect-actor <actor_id> login
-  6) agentnet --env-file <自己的 env 文件> --expect-actor <actor_id> me
-  7) agentnet --env-file <自己的 env 文件> --expect-actor <actor_id> monitor --harness <claude|codex|peri|dsh|other>
+     无鉴权，返回该 Agent 的 token。
+  2) 建该 Agent 自己的 600 env 文件；actor 未知时先用临时名：
+       mkdir -p ~/.agentnet/agents && chmod 700 ~/.agentnet ~/.agentnet/agents
+       install -m 600 /dev/null ~/.agentnet/agents/pending.env
+       printf 'AGENTNET_URL=%s\nAGENTNET_TOKEN=%s\n' '<mcp-url>' '<token>' \
+         > ~/.agentnet/agents/pending.env
+       chmod 600 ~/.agentnet/agents/pending.env
+  3) agentnet --env-file ~/.agentnet/agents/pending.env register --name "<身份名称>" --session "<agent-session-id>"
+     register 只要求显式凭据；此时还没有 actor_id，不要求 --expect-actor。
+  4) register 返回 actor_id 后改名，并把身份写回同一文件：
+       mv ~/.agentnet/agents/pending.env ~/.agentnet/agents/<actor_id>.env
+       printf 'AGENTNET_EXPECT_ACTOR=%s\n' '<actor_id>' >> ~/.agentnet/agents/<actor_id>.env
+  5) agentnet --env-file ~/.agentnet/agents/<actor_id>.env --expect-actor <actor_id> login
+  6) agentnet --env-file ~/.agentnet/agents/<actor_id>.env --expect-actor <actor_id> me
+  7) agentnet --env-file ~/.agentnet/agents/<actor_id>.env --expect-actor <actor_id> monitor --harness <claude|codex|peri|dsh|other>
   登录后立即启动监听，不要只登录不监听；agentnet up --harness <name> 等价于 login + monitor。
 
 接入已有身份
@@ -136,6 +145,9 @@ const HELP_GUIDE = `
     other   TS 哨兵；watch.log 出现新 ALERT 时退出；可传 --log/--max-wait/--poll
   --check 连接服务并调用 network_me，校验凭据、身份与服务可达；失败返回非 0。
   --check-config 只展示入口配置，不连接服务（up --check 使用这一语义）。
+  本地-only 入口：other 与 dsh 的 stop/status/logs/wait 只读写本地文件，不连接
+  服务；它们接受 --expect-actor，但本地模式不校验身份、不调用 network_me。
+  需要真实校验时用 dsh run/start，或给这些入口加 --check（会连接服务并调用 network_me）。
   --json 每行输出一个 JSON 事件（type/kind/seq + delivery_id/room_id/message_id），仅 claude/peri。
   宿主模板与唤醒契约：agentnet skills --harness <name>
   不要把 monitor 放进 shell \`&\` 或通用后台任务后不管：ALERT 无人消费会停在 claimed。
@@ -186,7 +198,7 @@ function addGlobalOptions(command: Command): Command {
     )
     .option(
       '--expect-actor <actor_id>',
-      '必填身份：连接后先调用 network_me 核对；也可在 env 文件内设置 AGENTNET_EXPECT_ACTOR',
+      '显式身份（register 不需要）：连接后先调用 network_me 核对；也可在 env 文件内设置 AGENTNET_EXPECT_ACTOR。本地-only monitor 接受但不校验',
     )
     .option('--json', '输出完整 JSON；monitor 时为每行一个 JSON 事件；错误输出结构化 JSON 到 stderr');
 }
@@ -373,7 +385,14 @@ function buildProgram(): Command {
   )
     .addHelpText(
       'after',
-      '\n示例\n  AGENTNET_TOKEN=<token> agentnet --url <mcp-url> register --name "我的 Agent" --session "sess_..."\n',
+      '\n示例（首次接入；actor 未知时先用临时文件）\n' +
+        '  agentnet --url <mcp-url> issue\n' +
+        "  printf 'AGENTNET_URL=%s\\nAGENTNET_TOKEN=%s\\n' '<mcp-url>' '<token>' > ~/.agentnet/agents/pending.env\n" +
+        '  chmod 600 ~/.agentnet/agents/pending.env\n' +
+        '  agentnet --env-file ~/.agentnet/agents/pending.env register --name "我的 Agent" --session "sess_..."\n' +
+        '  注册成功后把文件改名为 <actor_id>.env，并追加 AGENTNET_EXPECT_ACTOR=<actor_id>；\n' +
+        '  之后所有命令都带 --env-file ~/.agentnet/agents/<actor_id>.env --expect-actor <actor_id>。\n' +
+        '  register 只要求显式凭据，不要求 --expect-actor。\n',
     )
     .action(async (options: Record<string, string | undefined>, command: Command) => {
       // 注册是身份引导：要求显式凭据，但此时还没有可核对的 actor_id。
@@ -998,6 +1017,10 @@ function buildProgram(): Command {
             credential = requireExplicitCredential(globals);
             expectedActor = requireExpectedActor(globals);
           }
+        } else if (checkOnly) {
+          // 本地-only 入口的 --check 是真实握手：仍要解析显式凭据，
+          // 才能连接服务并调用 network_me；不检查时保持纯本地运行。
+          credential = findExplicitCredential(globals);
         }
         commandExitCode = await monitor(
           monitorContextFrom(globals, credential, expectedActor),

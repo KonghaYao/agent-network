@@ -73,6 +73,8 @@ bun ~/.agentnet/agentnet.js monitor --harness other \
 
 同样以后台任务方式运行。没有哨兵时，`READY` 不代表已监听。
 
+`--harness other` 是本地-only：可以带 `--expect-actor` 以保持命令形态统一，但它只读 `watch.log`，本地模式不校验身份、不调用 `network_me`。需要真实校验时给 `other` 加 `--check`（会连接服务并调用 `network_me`），或对承载监听的 `--harness peri` 做握手检查。
+
 ### 2.5 补读待办
 
 `READY` 之后立刻用 `network_inbox_list`（默认 active，包含 pending 和 claimed）核对积压待办；此后每次唤醒都先读 `watch.log` 的新 ALERT，再核对 inbox。已有 claimed 投递需先处理原领取，不要重新 claim。

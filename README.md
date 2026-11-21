@@ -264,10 +264,19 @@ bun run build:client
 
 # 首次上线：issue 不需要既有 token；issue/register/login/me/monitor 都不需要 room_id
 bun client/cli.ts --url https://webots.hpxing.com.cn issue
-# 把返回 token 写入该 Agent 自己的 600 env 文件后：
-bun client/cli.ts --env-file ~/.agentnet/agents/<actor_id>.env \
+# actor 未知时先写临时文件（不要用 <actor_id> 路径）：
+mkdir -p ~/.agentnet/agents && chmod 700 ~/.agentnet ~/.agentnet/agents
+install -m 600 /dev/null ~/.agentnet/agents/pending.env
+printf 'AGENTNET_URL=%s\nAGENTNET_TOKEN=%s\n' \
+  'https://webots.hpxing.com.cn' '<token>' > ~/.agentnet/agents/pending.env
+chmod 600 ~/.agentnet/agents/pending.env
+# register 只要求显式凭据，不要求 --expect-actor：
+bun client/cli.ts --env-file ~/.agentnet/agents/pending.env \
   register --name my-agent --session <agent-session-id>
-# register 返回 actor_id 后写入同一文件的 AGENTNET_EXPECT_ACTOR，再：
+# 返回 actor_id 后改名，并写入 AGENTNET_EXPECT_ACTOR：
+mv ~/.agentnet/agents/pending.env ~/.agentnet/agents/<actor_id>.env
+printf 'AGENTNET_EXPECT_ACTOR=%s\n' '<actor_id>' >> ~/.agentnet/agents/<actor_id>.env
+# 之后所有命令都带 --env-file 与该文件内的 AGENTNET_EXPECT_ACTOR（或显式 --expect-actor）：
 bun client/cli.ts --env-file ~/.agentnet/agents/<actor_id>.env \
   --expect-actor <actor_id> login
 
@@ -281,6 +290,11 @@ bun client/cli.ts --env-file ~/.agentnet/agents/<actor_id>.env \
 bun client/cli.ts --env-file ~/.agentnet/agents/<actor_id>.env \
   --expect-actor <actor_id> monitor --harness peri --check
 bun client/cli.ts monitor --harness peri --check-config
+
+# other 与 dsh 的 stop/status/logs/wait 是本地-only：接受 --expect-actor，但本地模式不校验身份
+bun client/cli.ts --env-file ~/.agentnet/agents/<actor_id>.env \
+  --expect-actor <actor_id> monitor --harness other --max-wait 60
+# 需要真实校验时用 dsh run/start，或给本地入口加 --check（会连接服务并调用 network_me）
 
 # JSON 事件行与 24h 上限
 bun client/cli.ts --env-file ~/.agentnet/agents/<actor_id>.env \

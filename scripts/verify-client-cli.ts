@@ -1094,6 +1094,20 @@ async function main(): Promise<void> {
     check('monitor peri --check-config 声明不读正文', monitor.stdout.includes('read_body=0'));
     check('monitor --check-config 输出不含 token', !monitor.stdout.includes(TOKEN));
 
+    const dshStatus = await runCli(
+      mock.baseUrl,
+      ['monitor', '--harness', 'dsh', 'status'],
+      { WEBBOTS_HOME: join(workDir, 'webbots-home') },
+    );
+    checkEqual('dsh status 接受 --expect-actor 并返回未运行', dshStatus.code, 3);
+    let dshStatusPayload: { running?: boolean } = {};
+    try {
+      dshStatusPayload = JSON.parse(dshStatus.stdout) as { running?: boolean };
+    } catch {
+      // 输出不是 JSON 时由下一条断言报告。
+    }
+    checkEqual('dsh status 本地模式不校验身份仍输出 running=false', dshStatusPayload.running, false);
+
     const liveCheckCallsBefore = mock.calls.length;
     const liveCheck = await runCli(mock.baseUrl, ['monitor', '--harness', 'peri', '--check']);
     checkEqual('monitor peri --check 真实握手退出 0', liveCheck.code, 0);
@@ -1908,6 +1922,30 @@ async function main(): Promise<void> {
       'register 透传 agent_session_id',
       registerCall?.arguments?.agent_session_id,
       'sess_mock',
+    );
+
+    const registerHelp = await runCli(mock.baseUrl, ['register', '--help']);
+    check(
+      'register --help 使用临时 env 文件与显式 --env-file',
+      registerHelp.stdout.includes('--env-file') &&
+        registerHelp.stdout.includes('pending.env') &&
+        registerHelp.stdout.includes('AGENTNET_EXPECT_ACTOR') &&
+        !registerHelp.stdout.includes('AGENTNET_TOKEN=<token> agentnet'),
+      registerHelp.stdout,
+    );
+
+    const registerWithoutActor = await runCli(
+      mock.baseUrl,
+      ['--token', TOKEN, 'register', '--name', 'No Actor Agent', '--session', 'sess_no_actor'],
+      {},
+      { explicit: false },
+    );
+    checkEqual('register 只要求显式凭据、不要求 --expect-actor', registerWithoutActor.code, 0);
+    check(
+      'register 成功提示写回 AGENTNET_EXPECT_ACTOR',
+      !registerWithoutActor.stdout.includes(TOKEN) &&
+        registerWithoutActor.stdout.includes('AGENTNET_EXPECT_ACTOR='),
+      registerWithoutActor.stdout,
     );
 
     const version = await runCli(mock.baseUrl, ['--version']);

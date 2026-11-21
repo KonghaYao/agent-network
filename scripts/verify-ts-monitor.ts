@@ -4083,6 +4083,18 @@ async function runOtherChecks(): Promise<void> {
   const idle = runOtherCheck(['--max-wait', '1', '--poll', '1'], idlePath, 0, 'idle');
   checkEqual('idle 输出 WAKE reason=idle', idle.lines[0], 'WAKE reason=idle total_alerts=0');
 
+  const idleWithActor = runOtherCheck(
+    ['--max-wait', '1', '--poll', '1', '--expect-actor', 'actor_mock'],
+    idlePath,
+    0,
+    '本地哨兵带 --expect-actor',
+  );
+  checkEqual(
+    '本地哨兵接受 --expect-actor 且不校验身份',
+    idleWithActor.lines[0],
+    'WAKE reason=idle total_alerts=0',
+  );
+
   const alertPath = join(workdir, 'alert.log');
   writeFileSync(alertPath, 'ALERT {"delivery_id":"dlv_old"}\n');
   const alertWatcher = startProcess(

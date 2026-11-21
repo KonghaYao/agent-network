@@ -304,7 +304,7 @@ description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、�
 - \`--json\`（claude/peri）每行一个 JSON 对象，稳定包含 \`type\` / \`kind\` / \`event_kind\` / \`seq\` 与 \`delivery_id\` / \`room_id\` / \`message_id\`（缺失为 null）；控制/投递事件的 kind 为 delivery / reminder / notice / control / error，\`room_message\` 的 kind 为 room、item_kind 为 message，\`stream_event\` / \`delivery_state\` 的 kind 保留原始 item kind，\`event_kind\` 给出稳定分类。推荐 alert 正则 \`"type":"(delivery|reminder|delivery_conflict|delivery_deferred|delivery_claim_failed|ready|recovered|expiring|error|room_message|stream_event|delivery_state)"\`。
 - Peri 默认 24h 上限：启动输出 \`DEADLINE\`（at 与 remaining_ms），剩余 10 分钟输出一次 \`EXPIRING\`，到期输出 \`EXPIRED\` 并退出；\`--max-runtime <seconds>\` 可覆盖，0 表示不限制。重启后先补读 inbox。
 - 凭据优先级：\`--token\` > \`--token-file\` > env 文件内 \`AGENTNET_TOKEN\` > \`AGENTNET_TOKEN_FILE\`。每次连接后、任何业务调用前都会先调用 \`network_me\` 核对 \`--expect-actor\`（或 env 文件内 \`AGENTNET_EXPECT_ACTOR\`）；不匹配立即退出，不 login/订阅/claim。仅宿主环境变量不足以运行；env 文件与 token 文件都要求 POSIX 权限 600。monitor 不支持从 stdin 读 token：监听是长驻进程，stdin 可能由宿主或终端占用，且 \`--body -\` 已使用 stdin。
-- \`monitor --check\` 是真实握手：先 \`server/discover\` 再调用需要鉴权的 \`network_me\`，失败返回非 0；\`--check-config\` 只检查入口配置，\`up --check\` 保持静态语义。
+- \`monitor --check\` 是真实握手：先 \`server/discover\` 再调用需要鉴权的 \`network_me\`，失败返回非 0；\`--check-config\` 只检查入口配置，\`up --check\` 保持静态语义。\`other\` 与 \`dsh\` 的 \`stop\`/\`status\`/\`logs\`/\`wait\` 是本地-only：接受 \`--expect-actor\`，但本地模式不校验身份、不调用 \`network_me\`；需要真实校验时用 \`dsh run\`/\`start\`，或加 \`--check\`。
 
 ## MCP Events（webhook 订阅）
 
