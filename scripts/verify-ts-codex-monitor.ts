@@ -23,6 +23,8 @@ import { check, checkEqual, checksPassed } from './lib/harness';
 const ROOT = resolve(import.meta.dir, '..');
 const CLI = resolve(ROOT, 'client/cli.ts');
 const TOKEN = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
+const ACTOR = 'agt_me';
+const AUTH_ARGS = ['--token', TOKEN, '--expect-actor', ACTOR];
 const CLAIMED_AT = '2026-11-04T12:00:00.000Z';
 
 type JsonObject = Record<string, unknown>;
@@ -684,7 +686,7 @@ async function createFixture(
   const mcp = createMcpMock({ meKind: options.meKind });
   const codex = createCodexMock(join(home, 'app-server.sock'), options);
   const watcher = startProcess(
-    [process.execPath, CLI, 'monitor', '--harness', 'codex', ...(options.args ?? [])],
+    [process.execPath, CLI, ...AUTH_ARGS, 'monitor', '--harness', 'codex', ...(options.args ?? [])],
     {
       HOME: home,
       AGENTNET_URL: mcp.base,
@@ -797,13 +799,26 @@ async function runThreadOwnershipChecks(): Promise<void> {
     env: { CODEX_THREAD_ID: 'thr_a' },
   });
   const startAgent = (threadId: string): RunningWatcher =>
-    startProcess([process.execPath, CLI, 'monitor', '--harness', 'codex'], {
-      HOME: fixture.home,
-      AGENTNET_URL: fixture.mcp.base,
-      AGENTNET_TOKEN: `ank_${crypto.randomUUID().replaceAll('-', '')}`,
-      AGENTNET_CODEX_SOCKET: fixture.codex.socketPath,
-      CODEX_THREAD_ID: threadId,
-    });
+    startProcess(
+      [
+        process.execPath,
+        CLI,
+        '--token',
+        `ank_${crypto.randomUUID().replaceAll('-', '')}`,
+        '--expect-actor',
+        ACTOR,
+        'monitor',
+        '--harness',
+        'codex',
+      ],
+      {
+        HOME: fixture.home,
+        AGENTNET_URL: fixture.mcp.base,
+        AGENTNET_TOKEN: `ank_${crypto.randomUUID().replaceAll('-', '')}`,
+        AGENTNET_CODEX_SOCKET: fixture.codex.socketPath,
+        CODEX_THREAD_ID: threadId,
+      },
+    );
   let otherThread: RunningWatcher | null = null;
   let sameThread: RunningWatcher | null = null;
   try {
@@ -1603,11 +1618,15 @@ async function runCheckAndConfigChecks(): Promise<void> {
   check('codex 拒绝旧脚本位置参数', withArgs.code !== 0);
   check('codex 提示不接受位置参数', withArgs.stderr.includes('不接受位置参数'), withArgs.stderr);
 
-  const missingToken = await runCli(['monitor', '--harness', 'codex'], {
+  const missingToken = await runCli(['--expect-actor', ACTOR, 'monitor', '--harness', 'codex'], {
     AGENTNET_URL: 'http://127.0.0.1:9',
   });
-  checkEqual('缺 token 退出 1', missingToken.code, 1);
-  check('缺 token 输出 missing_token', missingToken.stdout.includes('missing_token'), missingToken.stdout);
+  checkEqual('缺显式凭据退出 1', missingToken.code, 1);
+  check(
+    '缺显式凭据输出 credentials_required',
+    missingToken.stderr.includes('credentials_required'),
+    missingToken.stderr,
+  );
 
   const multi = await createFixture('multi-thread', { threads: ['thr_a', 'thr_b'] });
   try {

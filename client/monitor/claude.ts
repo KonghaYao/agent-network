@@ -19,6 +19,8 @@ import { MonitorState, defaultMonitorStateDirectory } from './state';
 export interface MonitorContext {
   baseUrl: string | null;
   token: string | null;
+  /** CLI 预检已确认的 actor；设置后引擎跳过重复 network_me。 */
+  verifiedActor?: string;
 }
 
 function writeStderr(line: string): void {
@@ -90,6 +92,7 @@ export async function runClaudeMonitor(
       memoryMode: options.memoryContext === false ? 'off' : 'full',
       // claude 宿主让 Agent 直接 Read 本地文件，因此下载同源图片/PDF 附件。
       attachments: true,
+      ...(context.verifiedActor === undefined ? {} : { verifiedActor: context.verifiedActor }),
     });
     return await engine.run();
   } finally {

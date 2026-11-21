@@ -75,6 +75,8 @@ import { defaultMonitorStateDirectory } from './state';
 export interface MonitorContext {
   baseUrl: string | null;
   token: string | null;
+  /** CLI 预检已确认的 actor；设置后引擎跳过重复 network_me。 */
+  verifiedActor?: string;
 }
 
 const STREAM_URI = 'agentnet://stream';
@@ -114,6 +116,8 @@ interface CodexWatcherOptions {
   memoryContext?: boolean;
   /** claim 后下载同源附件；缺省不下载。 */
   attachments?: { directory: string; origins: string[] };
+  /** CLI 预检已确认的 actor；设置后跳过重复 network_me。 */
+  verifiedActor?: string;
 }
 
 class CodexWatcher {
@@ -140,6 +144,8 @@ class CodexWatcher {
   private threadLock: WatcherLock | null = null;
   private threadId = '';
   private actorId = '';
+  /** CLI 预检已确认的 actor；非空时跳过重复 network_me。 */
+  private readonly verifiedActor: string;
   private activeTurn: ActiveTurn | null = null;
   private finalMessage: string | null = null;
   private ackTimer: ReturnType<typeof setTimeout> | null = null;
@@ -151,6 +157,7 @@ class CodexWatcher {
     this.roomEvents = options.roomEvents !== false;
     this.memoryContext = options.memoryContext !== false;
     this.attachmentConfig = options.attachments;
+    this.verifiedActor = options.verifiedActor ?? '';
     this.rpc = new MonitorRpc({
       endpoint: options.endpoint,
       token: options.token,
@@ -293,6 +300,10 @@ class CodexWatcher {
     } catch (error) {
       if (error instanceof MonitorFatalError) throw error;
       throw new WatchStop('discover_failed');
+    }
+    if (this.verifiedActor !== '') {
+      this.actorId = this.verifiedActor;
+      return;
     }
     let me;
     try {
@@ -1043,6 +1054,7 @@ export async function runCodexMonitor(
       roomEvents: options.roomEvents,
       memoryContext: options.memoryContext,
       attachments,
+      ...(context.verifiedActor === undefined ? {} : { verifiedActor: context.verifiedActor }),
     });
     return await watcher.run();
   } finally {

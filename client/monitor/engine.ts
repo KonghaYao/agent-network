@@ -178,6 +178,8 @@ export interface MonitorEngineOptions {
    * 只有会读正文并让 Agent 直接处理的 harness（claude）开启。
    */
   attachments?: boolean;
+  /** CLI 已在连接前用 network_me 校验过的 actor；设置后引擎不再重复调用。 */
+  verifiedActor?: string;
 }
 
 type EmitResult = 'emitted' | 'deferred' | 'error';
@@ -390,6 +392,8 @@ export class MonitorEngine {
   private roomBackfillRounds = 0;
 
   private meId = '';
+  /** CLI 预检已确认的 actor；非空时跳过重复 network_me。 */
+  private readonly verifiedActor: string;
   private readyEmitted = false;
   private lastDisconnectReason = 'connection_closed';
   private reconnectAttempt = 0;
@@ -435,6 +439,7 @@ export class MonitorEngine {
     this.roomEventScope = options.roomEvents === false ? null : 'all';
     this.memoryMode = options.memoryMode ?? 'off';
     this.attachmentsEnabled = options.attachments === true;
+    this.verifiedActor = options.verifiedActor ?? '';
     this.attachmentOrigins = attachmentOrigins(options.rpc.endpoint);
     for (const [roomId, cursor] of this.state.roomCursors()) {
       this.roomHistoryCursors.set(roomId, cursor);
@@ -629,6 +634,11 @@ export class MonitorEngine {
     } catch (error) {
       if (error instanceof MonitorFatalError) throw error;
       throw new MonitorStop('ERROR type=protocol message=discover_failed');
+    }
+
+    if (this.verifiedActor !== '') {
+      this.meId = this.verifiedActor;
+      return;
     }
 
     let me;

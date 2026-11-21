@@ -27,6 +27,7 @@ const DOC_FILES = [
   'docs/feature-matrix.md',
   'src/mcp/skill.ts',
   'client/cli.ts',
+  'client/credentials.ts',
   'client/harness-guides.ts',
   'public/skills/agent-network-skills.md',
   ...readdirSync(join(ROOT, 'public/skills'))
@@ -115,6 +116,47 @@ check(
 );
 check('CLI 不引用旧任务工具', !RETIRED_TASK_TOOL_PATTERN.test(cli));
 check('CLI 不声明旧任务状态命令', !cli.includes('--task ') && !cli.includes('task_id'));
+check(
+  'CLI 暴露显式凭据与身份选项',
+  cli.includes("'--env-file <path>'") &&
+    cli.includes("'--token-file <path>'") &&
+    cli.includes("'--expect-actor <actor_id>'"),
+);
+check(
+  'CLI 区分 credentials_required 与 actor_required',
+  cli.includes("'--env-file <path>'") &&
+    read('client/credentials.ts').includes("'credentials_required'") &&
+    read('client/credentials.ts').includes("'actor_required'") &&
+    cli.includes('AGENTNET_EXPECT_ACTOR'),
+);
+for (const file of [
+  'README.md',
+  'client/harness-guides.ts',
+  'src/mcp/skill.ts',
+  'public/skills/agent-network-skills.md',
+]) {
+  const text = read(file);
+  check(
+    `${file} 使用每 Agent 自己的 env 文件`,
+    text.includes('~/.agentnet/agents/<actor_id>.env') &&
+      text.includes('--env-file') &&
+      text.includes('--expect-actor'),
+  );
+  check(`${file} 说明仅宿主环境变量不足`, text.includes('credentials_required'));
+}
+const monitorScript = read('scripts/webbots-monitor.sh');
+check(
+  'webbots-monitor.sh 从 AGENTNET_ENV_FILE / AGENTNET_ACTOR 读取凭据与身份',
+  monitorScript.includes('AGENTNET_ENV_FILE') &&
+    monitorScript.includes('AGENTNET_ACTOR') &&
+    monitorScript.includes('--env-file') &&
+    monitorScript.includes('--expect-actor'),
+);
+check(
+  'webbots-monitor.sh 不写死共享路径或 actor',
+  !monitorScript.includes('webbots-agent.env') &&
+    !/agt_[0-9a-f]{32}/u.test(monitorScript),
+);
 
 const harness = DOC_FILES.filter((file) => file.startsWith('public/skills/harness-'));
 for (const file of harness) {

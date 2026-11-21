@@ -772,12 +772,25 @@ async function runProcess(
   return { code, stdout, stderr };
 }
 
+interface RunCliOptions {
+  /** 默认注入显式 --token 与 --expect-actor；凭据测试可关闭。 */
+  explicit?: boolean;
+  token?: string;
+  expectActor?: string;
+}
+
 function runCli(
   baseUrl: string,
   args: string[],
   extraEnv: Record<string, string | undefined> = {},
+  options: RunCliOptions = {},
 ): Promise<RunResult> {
-  return runProcess([process.execPath, CLI, ...args], {
+  const prefix: string[] = [];
+  if (options.explicit !== false) {
+    prefix.push('--token', options.token ?? TOKEN);
+    prefix.push('--expect-actor', options.expectActor ?? 'actor_mock');
+  }
+  return runProcess([process.execPath, CLI, ...prefix, ...args], {
     env: { AGENTNET_URL: baseUrl, AGENTNET_TOKEN: TOKEN, ...extraEnv },
   });
 }
@@ -835,9 +848,11 @@ async function main(): Promise<void> {
       help.stdout,
     );
     check(
-      '--help 提供 up 登录并监听入口',
+      '--help 提供显式凭据的 up 登录并监听入口',
       help.stdout.includes('agentnet up --harness <name>') &&
-        help.stdout.includes('agentnet up --harness codex'),
+        help.stdout.includes('--expect-actor <actor_id> up --harness codex') &&
+        help.stdout.includes('--env-file') &&
+        help.stdout.includes('/.agentnet/agents/<actor_id>.env'),
       help.stdout,
     );
     check(
@@ -921,7 +936,9 @@ async function main(): Promise<void> {
           !loginAndMonitor.includes('--room') &&
           loginAndMonitor.includes('登录后立即启动监听') &&
           loginAndMonitor.includes('agentnet up --harness <name>') &&
-          guide.stdout.includes('登录、me 与 monitor 只需要 URL 与 token，不需要 room_id。') &&
+          loginAndMonitor.includes('--env-file <file> --expect-actor <actor_id> login') &&
+          loginAndMonitor.includes('--env-file <file> --expect-actor <actor_id> monitor') &&
+          guide.stdout.includes('登录、me 与 monitor 只需要 URL、token 与 actor_id，不需要 room_id。') &&
           guide.stdout.includes('room_id 来自投递事件'),
         guide.stdout,
       );
@@ -1139,21 +1156,42 @@ async function main(): Promise<void> {
       liveCheckNoUrl.stderr,
     );
 
-    const liveCheckNoToken = await runCli(mock.baseUrl, ['monitor', '--harness', 'peri', '--check'], {
-      AGENTNET_TOKEN: undefined,
-      AGENTNET_TOKEN_FILE: undefined,
-    });
-    check('monitor --check 缺少 token 退出非 0', liveCheckNoToken.code !== 0);
+    const envOnlyToken = await runCli(
+      mock.baseUrl,
+      ['me'],
+      { AGENTNET_TOKEN: TOKEN },
+      { explicit: false },
+    );
+    check('仅宿主环境 token 不足以运行', envOnlyToken.code !== 0);
     check(
-      'monitor --check 缺少 token 给出可操作提示',
-      liveCheckNoToken.stderr.includes('missing_token') &&
-        liveCheckNoToken.stderr.includes('AGENTNET_TOKEN_FILE'),
+      '仅宿主环境 token 报 credentials_required',
+      envOnlyToken.stderr.includes('credentials_required') &&
+        !envOnlyToken.stderr.includes(TOKEN),
+      envOnlyToken.stderr,
+    );
+
+    const liveCheckNoToken = await runCli(
+      mock.baseUrl,
+      ['--expect-actor', 'actor_mock', 'monitor', '--harness', 'peri', '--check'],
+      { AGENTNET_TOKEN: undefined, AGENTNET_TOKEN_FILE: undefined },
+      { explicit: false },
+    );
+    check('monitor --check 缺少显式凭据退出非 0', liveCheckNoToken.code !== 0);
+    check(
+      'monitor --check 缺少显式凭据给出可操作提示',
+      liveCheckNoToken.stderr.includes('credentials_required') &&
+        liveCheckNoToken.stderr.includes('--env-file') &&
+        !liveCheckNoToken.stderr.includes('missing_token'),
       liveCheckNoToken.stderr,
     );
 
-    const liveCheckBadToken = await runCli(mock.baseUrl, ['monitor', '--harness', 'peri', '--check'], {
-      AGENTNET_TOKEN: 'ank_invalid_token_for_check',
-    });
+    const liveCheckBadToken = await runCli(
+      mock.baseUrl,
+      ['--token', 'ank_invalid_token_for_check', '--expect-actor', 'actor_mock',
+        'monitor', '--harness', 'peri', '--check'],
+      {},
+      { explicit: false },
+    );
     check('monitor --check 凭据无效退出非 0', liveCheckBadToken.code !== 0);
     check(
       'monitor --check 凭据无效不打印 token',
@@ -1165,25 +1203,42 @@ async function main(): Promise<void> {
     const tokenFile = join(workDir, 'agentnet-token');
     writeFileSync(tokenFile, `${TOKEN}\nignored-second-line\n`, { mode: 0o600 });
     chmodSync(tokenFile, 0o600);
-    const fileTokenMe = await runCli(mock.baseUrl, ['me'], {
-      AGENTNET_TOKEN: undefined,
-      AGENTNET_TOKEN_FILE: tokenFile,
-    });
-    checkEqual('AGENTNET_TOKEN_FILE 读取首行并认证', fileTokenMe.code, 0);
+    const fileTokenMe = await runCli(
+      mock.baseUrl,
+      ['--token-file', tokenFile, '--expect-actor', 'actor_mock', 'me'],
+      { AGENTNET_TOKEN: undefined },
+      { explicit: false },
+    );
+    checkEqual('--token-file 读取首行并认证', fileTokenMe.code, 0);
     check(
-      'AGENTNET_TOKEN_FILE 认证到 mock 身份',
+      '--token-file 认证到 mock 身份',
       fileTokenMe.stdout.includes('Mock Agent') && !fileTokenMe.stdout.includes(TOKEN),
       fileTokenMe.stdout,
     );
 
-    chmodSync(tokenFile, 0o644);
-    const tokenFileBadMode = await runCli(mock.baseUrl, ['me'], {
-      AGENTNET_TOKEN: undefined,
-      AGENTNET_TOKEN_FILE: tokenFile,
-    });
-    check('AGENTNET_TOKEN_FILE 权限非 600 退出非 0', tokenFileBadMode.code !== 0);
+    const envOnlyTokenFile = await runCli(
+      mock.baseUrl,
+      ['me'],
+      { AGENTNET_TOKEN: undefined, AGENTNET_TOKEN_FILE: tokenFile },
+      { explicit: false },
+    );
+    check('仅 AGENTNET_TOKEN_FILE 环境变量不足以运行', envOnlyTokenFile.code !== 0);
     check(
-      'AGENTNET_TOKEN_FILE 权限错误可操作且不泄露 token',
+      '仅 AGENTNET_TOKEN_FILE 报 credentials_required',
+      envOnlyTokenFile.stderr.includes('credentials_required'),
+      envOnlyTokenFile.stderr,
+    );
+
+    chmodSync(tokenFile, 0o644);
+    const tokenFileBadMode = await runCli(
+      mock.baseUrl,
+      ['--token-file', tokenFile, '--expect-actor', 'actor_mock', 'me'],
+      { AGENTNET_TOKEN: undefined },
+      { explicit: false },
+    );
+    check('--token-file 权限非 600 退出非 0', tokenFileBadMode.code !== 0);
+    check(
+      '--token-file 权限错误可操作且不泄露 token',
       tokenFileBadMode.stderr.includes('权限必须是 600') &&
         tokenFileBadMode.stderr.includes('chmod 600') &&
         !tokenFileBadMode.stderr.includes(TOKEN),
@@ -1192,23 +1247,103 @@ async function main(): Promise<void> {
 
     writeFileSync(tokenFile, 'ank_file_token_that_would_fail\n', { mode: 0o600 });
     chmodSync(tokenFile, 0o600);
-    const tokenPrecedence = await runCli(mock.baseUrl, ['me'], {
-      AGENTNET_TOKEN: TOKEN,
-      AGENTNET_TOKEN_FILE: tokenFile,
-    });
-    checkEqual('AGENTNET_TOKEN 优先于 AGENTNET_TOKEN_FILE', tokenPrecedence.code, 0);
+    const tokenPrecedence = await runCli(
+      mock.baseUrl,
+      ['--token', TOKEN, '--token-file', tokenFile, '--expect-actor', 'actor_mock', 'me'],
+      {},
+      { explicit: false },
+    );
+    checkEqual('--token 优先于 --token-file', tokenPrecedence.code, 0);
 
     writeFileSync(tokenFile, '\n  \n', { mode: 0o600 });
     chmodSync(tokenFile, 0o600);
-    const tokenFileEmpty = await runCli(mock.baseUrl, ['me'], {
-      AGENTNET_TOKEN: undefined,
-      AGENTNET_TOKEN_FILE: tokenFile,
-    });
-    check('空 AGENTNET_TOKEN_FILE 退出非 0', tokenFileEmpty.code !== 0);
+    const tokenFileEmpty = await runCli(
+      mock.baseUrl,
+      ['--token-file', tokenFile, '--expect-actor', 'actor_mock', 'me'],
+      { AGENTNET_TOKEN: undefined },
+      { explicit: false },
+    );
+    check('空 --token-file 退出非 0', tokenFileEmpty.code !== 0);
     check(
-      '空 AGENTNET_TOKEN_FILE 给出可读错误',
-      tokenFileEmpty.stderr.includes('AGENTNET_TOKEN_FILE 为空'),
+      '空 --token-file 给出可读错误',
+      tokenFileEmpty.stderr.includes('--token-file 为空'),
       tokenFileEmpty.stderr,
+    );
+
+    const agentEnvFile = join(workDir, 'agent.env');
+    writeFileSync(
+      agentEnvFile,
+      [
+        `AGENTNET_URL=${mock.baseUrl}`,
+        `AGENTNET_TOKEN=${TOKEN}`,
+        'AGENTNET_EXPECT_ACTOR=actor_mock',
+      ].join('\n') + '\n',
+      { mode: 0o600 },
+    );
+    chmodSync(agentEnvFile, 0o600);
+    const envFileMe = await runCli(
+      mock.baseUrl,
+      ['--env-file', agentEnvFile, 'me'],
+      { AGENTNET_TOKEN: undefined },
+      { explicit: false },
+    );
+    checkEqual('--env-file + AGENTNET_EXPECT_ACTOR 成功', envFileMe.code, 0);
+    check(
+      '--env-file 认证到 mock 身份且不泄露 token',
+      envFileMe.stdout.includes('Mock Agent') && !envFileMe.stdout.includes(TOKEN),
+      envFileMe.stdout,
+    );
+
+    const noActorEnvFile = join(workDir, 'no-actor.env');
+    writeFileSync(
+      noActorEnvFile,
+      [`AGENTNET_URL=${mock.baseUrl}`, `AGENTNET_TOKEN=${TOKEN}`].join('\n') + '\n',
+      { mode: 0o600 },
+    );
+    chmodSync(noActorEnvFile, 0o600);
+    const noActor = await runCli(
+      mock.baseUrl,
+      ['--env-file', noActorEnvFile, 'me'],
+      { AGENTNET_TOKEN: undefined },
+      { explicit: false },
+    );
+    check('--env-file 缺少 AGENTNET_EXPECT_ACTOR 退出非 0', noActor.code !== 0);
+    check(
+      '缺少显式身份报 actor_required',
+      noActor.stderr.includes('actor_required') && noActor.stderr.includes('--expect-actor'),
+      noActor.stderr,
+    );
+
+    chmodSync(agentEnvFile, 0o644);
+    const envFileBadMode = await runCli(
+      mock.baseUrl,
+      ['--env-file', agentEnvFile, 'me'],
+      { AGENTNET_TOKEN: undefined },
+      { explicit: false },
+    );
+    check('--env-file 权限非 600 退出非 0', envFileBadMode.code !== 0);
+    check(
+      '--env-file 权限错误只报告路径与 mode',
+      envFileBadMode.stderr.includes('permission=644') &&
+        envFileBadMode.stderr.includes('required=600') &&
+        !envFileBadMode.stderr.includes(TOKEN),
+      envFileBadMode.stderr,
+    );
+
+    const envFileNoToken = join(workDir, 'no-token.env');
+    writeFileSync(envFileNoToken, `AGENTNET_URL=${mock.baseUrl}\n`, { mode: 0o600 });
+    chmodSync(envFileNoToken, 0o600);
+    const hostTokenFallback = await runCli(
+      mock.baseUrl,
+      ['--env-file', envFileNoToken, '--expect-actor', 'actor_mock', 'me'],
+      { AGENTNET_TOKEN: TOKEN },
+      { explicit: false },
+    );
+    check('显式 env 文件无 token 时不回退宿主环境', hostTokenFallback.code !== 0);
+    check(
+      'env 文件无 token 报 credentials_required',
+      hostTokenFallback.stderr.includes('credentials_required'),
+      hostTokenFallback.stderr,
     );
 
     const monitorArgs = await runCli(
@@ -1290,15 +1425,18 @@ async function main(): Promise<void> {
       upNoHarness.stderr,
     );
 
-    const upNoToken = await runCli(mock.baseUrl, ['up', '--harness', 'peri'], {
-      AGENTNET_TOKEN: undefined,
-    });
-    check('up 缺少 token 退出非 0', upNoToken.code !== 0);
+    const upNoToken = await runCli(
+      mock.baseUrl,
+      ['--expect-actor', 'actor_mock', 'up', '--harness', 'peri'],
+      { AGENTNET_TOKEN: undefined, AGENTNET_TOKEN_FILE: undefined },
+      { explicit: false },
+    );
+    check('up 缺少显式凭据退出非 0', upNoToken.code !== 0);
     check(
-      'up 缺少 token 提示先 issue/register',
-      upNoToken.stderr.includes('缺少 token') &&
-        upNoToken.stderr.includes('issue') &&
-        upNoToken.stderr.includes('register'),
+      'up 缺少显式凭据提示每个 Agent 使用自己的 env 文件',
+      upNoToken.stderr.includes('credentials_required') &&
+        upNoToken.stderr.includes('--env-file') &&
+        upNoToken.stderr.includes('AGENTNET_TOKEN'),
       upNoToken.stderr,
     );
 

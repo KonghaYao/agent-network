@@ -10,6 +10,8 @@ import { CliError } from './mcp';
 export interface GlobalOptions {
   url?: string;
   token?: string;
+  tokenFile?: string;
+  expectActor?: string;
   json?: boolean;
 }
 

@@ -48,12 +48,19 @@ const server = Bun.serve({
   },
 });
 
-async function run(args: string[]) {
+async function run(
+  args: string[],
+  extraEnv: Record<string, string | undefined> = {},
+) {
   const env = { ...process.env };
   // 不继承操作者的身份/服务配置；测试凭据只在内存中随机生成。
   delete env.AGENTNET_TOKEN;
   delete env.AGENTNET_TOKEN_FILE;
   delete env.AGENTNET_URL;
+  for (const [key, value] of Object.entries(extraEnv)) {
+    if (value === undefined) delete env[key];
+    else env[key] = value;
+  }
   const child = Bun.spawn([process.execPath, cli, ...args], {
     env, stdout: 'pipe', stderr: 'pipe', stdin: 'ignore',
   });
@@ -96,7 +103,7 @@ try {
   checkEqual('-- 后不消费选项', loadEnvFiles(['--', '--env-file', envFile], {}).length, 3);
 
   let identityCalls = 0;
-  await assertExpectedActor({ async callTool() { identityCalls += 1; return {}; } }, undefined);
+  await assertExpectedActor({ async verifyActor() { identityCalls += 1; return {}; } }, undefined);
   checkEqual('未传 expected 不增加身份请求', identityCalls, 0);
 
   const endpointFile = join(directory, 'agent.env');
@@ -104,6 +111,144 @@ try {
   for (const flag of [['--env-file', endpointFile], [`--env-file=${endpointFile}`]]) {
     const result = await run([...flag, 'login', '--expect-actor', 'agt_actual', '--json']);
     checkEqual('env 参数经过真实 commander 入口', result.code, 0);
+  }
+
+  // 新版本：宿主环境变量不再是可用凭据来源。
+  const noCredential = await run(['--url', server.url.origin, 'me']);
+  checkEqual('缺少显式凭据退出 1', noCredential.code, 1);
+  check(
+    '缺少显式凭据报 credentials_required 且不含 token',
+    noCredential.stderr.includes('credentials_required') &&
+      noCredential.stderr.includes('--env-file') &&
+      !noCredential.stderr.includes(token),
+    noCredential.stderr,
+  );
+
+  const envOnly = await run(['--url', server.url.origin, 'me'], {
+    AGENTNET_TOKEN: token,
+  });
+  checkEqual('仅环境变量 token 退出 1', envOnly.code, 1);
+  check(
+    '仅环境变量 token 报 credentials_required',
+    envOnly.stderr.includes('credentials_required') && !envOnly.stderr.includes(token),
+    envOnly.stderr,
+  );
+
+  const noActor = await run([
+    '--env-file', endpointFile, 'me',
+  ]);
+  checkEqual('缺少显式身份退出 1', noActor.code, 1);
+  check(
+    '缺少显式身份报 actor_required',
+    noActor.stderr.includes('actor_required') && noActor.stderr.includes('AGENTNET_EXPECT_ACTOR'),
+    noActor.stderr,
+  );
+
+  calls.length = 0;
+  const explicitToken = await run([
+    '--url', server.url.origin, '--token', token, '--expect-actor', 'agt_actual', 'me',
+  ]);
+  checkEqual('显式 --token + 正确 actor 成功', explicitToken.code, 0);
+  check('显式 --token 认证到实际 actor', explicitToken.stdout.includes('agt_actual'), explicitToken.stdout);
+
+  const tokenFile = join(directory, 'explicit token');
+  writeFileSync(tokenFile, `${token}\nignored\n`, { mode: 0o600 });
+  chmodSync(tokenFile, 0o600);
+  calls.length = 0;
+  const explicitTokenFile = await run([
+    '--url', server.url.origin, '--token-file', tokenFile, '--expect-actor', 'agt_actual', 'me',
+  ]);
+  checkEqual('显式 --token-file + 正确 actor 成功', explicitTokenFile.code, 0);
+  check(
+    '显式 --token-file 不泄露 token',
+    !explicitTokenFile.stdout.includes(token) && !explicitTokenFile.stderr.includes(token),
+  );
+
+  chmodSync(tokenFile, 0o644);
+  const tokenFileBadMode = await run([
+    '--url', server.url.origin, '--token-file', tokenFile, '--expect-actor', 'agt_actual', 'me',
+  ]);
+  checkEqual('--token-file 权限非 600 退出 1', tokenFileBadMode.code, 1);
+  check(
+    '--token-file 权限错误不泄露 token',
+    tokenFileBadMode.stderr.includes('权限必须是 600') &&
+      !tokenFileBadMode.stderr.includes(token),
+    tokenFileBadMode.stderr,
+  );
+
+  chmodSync(endpointFile, 0o644);
+  const envFileBadMode = await run([
+    '--env-file', endpointFile, '--expect-actor', 'agt_actual', 'me',
+  ]);
+  checkEqual('--env-file 权限非 600 退出 1', envFileBadMode.code, 1);
+  check(
+    '--env-file 权限错误只报告路径与 mode',
+    envFileBadMode.stderr.includes('permission=644') &&
+      envFileBadMode.stderr.includes('required=600') &&
+      !envFileBadMode.stderr.includes(token),
+    envFileBadMode.stderr,
+  );
+  chmodSync(endpointFile, 0o600);
+
+  const actorEnvFile = join(directory, 'actor.env');
+  writeFileSync(
+    actorEnvFile,
+    [
+      `AGENTNET_URL=${server.url.origin}`,
+      `AGENTNET_TOKEN='${token}'`,
+      'AGENTNET_EXPECT_ACTOR=agt_actual',
+    ].join('\n'),
+    { mode: 0o600 },
+  );
+  chmodSync(actorEnvFile, 0o600);
+  const actorFromEnvFile = await run(['--env-file', actorEnvFile, 'login']);
+  checkEqual('env 文件内 AGENTNET_EXPECT_ACTOR 成功', actorFromEnvFile.code, 0);
+
+  for (const command of [
+    ['send', '--room', 'rm_test', '--body', 'hello'],
+    ['inbox'],
+    ['claim', 'dlv_test'],
+    ['call', 'network_rooms_list', '{}'],
+    ['me'],
+  ]) {
+    calls.length = 0;
+    const result = await run([
+      '--env-file', endpointFile, '--expect-actor', 'agt_expected', ...command,
+    ]);
+    checkEqual(`${command[0]} 错身份退出 1`, result.code, 1);
+    checkEqual(
+      `${command[0]} 错身份精确错误输出`,
+      result.stderr.trim(),
+      'ERROR actor_mismatch expected=agt_expected actual=agt_actual',
+    );
+    checkEqual(`${command[0]} 错身份不调用业务工具`, calls.join(), 'network_me');
+    check(`${command[0]} 错身份不输出 token`, !result.stderr.includes(token));
+  }
+
+  const businessTools: Record<string, string> = {
+    send: 'network_message_send',
+    inbox: 'network_inbox_list',
+    claim: 'network_delivery_claim',
+    call: 'network_rooms_list',
+    me: 'network_me',
+  };
+  for (const command of [
+    ['send', '--room', 'rm_test', '--body', 'hello'],
+    ['inbox'],
+    ['claim', 'dlv_test'],
+    ['call', 'network_rooms_list', '{}'],
+    ['me'],
+  ]) {
+    calls.length = 0;
+    const result = await run([
+      '--env-file', endpointFile, '--expect-actor', 'agt_actual', ...command,
+    ]);
+    checkEqual(`${command[0]} 正确身份退出 0`, result.code, 0);
+    check(
+      `${command[0]} 正确身份先校验再调用业务工具`,
+      calls[0] === 'network_me' && calls.includes(businessTools[command[0]!]!),
+      calls.join(),
+    );
   }
 
   for (const harness of ['claude', 'peri', 'codex', 'dsh']) {

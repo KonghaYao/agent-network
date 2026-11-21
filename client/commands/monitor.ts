@@ -13,7 +13,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { assertExpectedActor, ActorMismatchError } from '../expect-actor';
+import { ActorMismatchError } from '../expect-actor';
 import {
   CLIENT_NAME,
   CLIENT_VERSION,
@@ -55,7 +55,14 @@ export function assertHarness(harness: string | undefined): string {
 
 export interface MonitorContext {
   baseUrl: string | null;
+  /** 只包含显式来源的 token；宿主环境中的 AGENTNET_TOKEN 不再兜底。 */
   token: string | null;
+  /** 显式预期身份；传入 dsh 子进程并用于启动前校验。 */
+  expectActor?: string;
+  /** CLI 预检已确认的 actor；仅 claude/peri/codex 引擎会用它跳过重复 network_me。 */
+  verifiedActor?: string;
+  /** 显式凭据来源；dsh start 优先转发 env-file/token-file，避免 token 进入子进程 argv。 */
+  credential?: { source: '--token' | '--token-file' | '--env-file'; path?: string };
 }
 
 export interface MonitorOptions {
@@ -250,9 +257,18 @@ async function checkHarnessLive(
     return checkFailure(
       harness,
       json,
-      'missing_token',
-      '缺少 token',
-      '通过 --token、AGENTNET_TOKEN 或 AGENTNET_TOKEN_FILE 提供 token 后重试',
+      'credentials_required',
+      '缺少显式凭据',
+      '每个 Agent 使用自己的 env 文件：--env-file <file>；也可显式 --token 或 --token-file',
+    );
+  }
+  if (!options.expectActor) {
+    return checkFailure(
+      harness,
+      json,
+      'actor_required',
+      '缺少显式身份',
+      '使用 --expect-actor <actor_id>，或在 --env-file 文件中设置 AGENTNET_EXPECT_ACTOR',
     );
   }
 
@@ -302,6 +318,12 @@ async function checkHarnessLive(
         'network_me 未返回 actor_id',
         '确认服务与协议版本后重试',
       );
+    }
+    if (options.expectActor !== undefined && actorId !== options.expectActor) {
+      process.stderr.write(
+        `ERROR actor_mismatch expected=${options.expectActor} actual=${actorId}\n`,
+      );
+      return 1;
     }
     if (actorKind !== 'agent') {
       return checkFailure(
@@ -411,30 +433,60 @@ export async function monitor(
     );
   }
   if (options.checkConfig === true) return checkHarnessConfig(harness, options, extra);
-  if (options.expectActor !== undefined) {
-    if (harness === 'other' || (harness === 'dsh' && !['run', 'start'].includes(dshCommand!))) {
+  let runtimeContext = context;
+  const checkOnly = options.check === true || options.dryRun === true;
+  const localOnly =
+    harness === 'other' ||
+    (harness === 'dsh' && !['run', 'start'].includes(dshCommand!));
+  if (localOnly) {
+    if (options.expectActor !== undefined) {
       throw new CliError('--expect-actor 只支持连接服务的 monitor（dsh 仅 run/start）');
     }
-    const config = resolveConfig({
-      url: context.baseUrl ?? undefined,
-      token: context.token ?? undefined,
-      json: false,
-    });
+    if (checkOnly) return await checkHarnessLive(harness, context, options, extra);
+  } else if (checkOnly) {
+    // checkHarnessLive 自己按 URL → 凭据 → 身份 → network_me 的顺序输出诊断，
+    // 并在返回身份后立即核对 actor；不在这里重复连接。
+    return await checkHarnessLive(harness, context, options, extra);
+  } else {
+    if (!context.token) {
+      throw new CliError('缺少显式凭据：使用 --env-file、--token 或 --token-file', {
+        code: 'credentials_required',
+      });
+    }
+    if (!options.expectActor) {
+      throw new CliError(
+        '缺少显式身份：使用 --expect-actor 或在 env 文件内设置 AGENTNET_EXPECT_ACTOR',
+        { code: 'actor_required' },
+      );
+    }
     try {
-      // READY 在订阅 ack/login 后才输出；必须更早检查，才能保证错身份零订阅。
-      await assertExpectedActor(new McpClient(config), options.expectActor);
+      const config = resolveConfig({
+        url: context.baseUrl ?? undefined,
+        token: context.token,
+        json: false,
+      });
+      const me = await new McpClient(config, { expectActor: options.expectActor })
+        .verifyActor(options.expectActor);
+      // 只有确认是 agent 才把预检结果交给引擎跳过重复 network_me；
+      // human token 仍由引擎输出既有的 agent_token_required 诊断。
+      if (asString(me.kind) === 'agent') {
+        runtimeContext = { ...context, verifiedActor: asString(me.actor_id) };
+      }
     } catch (error) {
-      if (!(error instanceof ActorMismatchError)) throw error;
-      process.stderr.write(`${redact(error.message, context.token)}\n`);
-      return 1;
+      if (error instanceof ActorMismatchError) {
+        process.stderr.write(`${redact(error.message, context.token)}\n`);
+        return 1;
+      }
+      // dsh 的 run/start 自己把 CREDENTIAL_INVALID / NOT_AGENT / PROTOCOL
+      // 映射为既有退出码、ALERT 与 fatal state；这里放行，避免抢占它的
+      // 故障语义。actor 不匹配仍由上面的 ActorMismatchError 先拦截。
+      if (harness !== 'dsh') throw error;
     }
   }
-  const checkOnly = options.check === true || options.dryRun === true;
-  if (checkOnly) return await checkHarnessLive(harness, context, options, extra);
 
   const runtimeMs = maxRuntimeMs(harness, options.maxRuntime);
   if (harness === 'claude') {
-    return runClaudeMonitor(context, {
+    return runClaudeMonitor(runtimeContext, {
       stateDir: options.stateDir,
       json: options.json,
       maxRuntimeMs: runtimeMs,
@@ -443,7 +495,7 @@ export async function monitor(
     });
   }
   if (harness === 'peri') {
-    return runPeriMonitor(context, {
+    return runPeriMonitor(runtimeContext, {
       stateDir: options.stateDir,
       json: options.json,
       maxRuntimeMs: runtimeMs,
@@ -463,10 +515,10 @@ export async function monitor(
           `dsh_version=${detected.dshVersion}\n`,
       );
     }
-    return runDshMonitor(context, extra, { roomEvents: roomEvents !== false });
+    return runDshMonitor(runtimeContext, extra, { roomEvents: roomEvents !== false });
   }
   if (harness === 'codex') {
-    return runCodexMonitor(context, {
+    return runCodexMonitor(runtimeContext, {
       roomEvents: roomEvents !== false,
       memoryContext: options.memoryContext !== false,
     });

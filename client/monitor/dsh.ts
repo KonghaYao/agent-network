@@ -58,6 +58,10 @@ import { MonitorState } from './state';
 export interface MonitorContext {
   baseUrl: string | null;
   token: string | null;
+  /** 启动守护子进程时显式转发，保证子进程也通过身份校验。 */
+  expectActor?: string;
+  /** 优先转发 env-file/token-file，避免 token 出现在子进程 argv。 */
+  credential?: { source: '--token' | '--token-file' | '--env-file'; path?: string };
 }
 
 const STREAM_URI = 'agentnet://stream';
@@ -598,6 +602,18 @@ function selfCommand(): string[] {
   return [process.execPath];
 }
 
+/** 子进程也必须有显式凭据；优先转发文件，避免 token 出现在 argv。 */
+function childCredentialArgs(context: MonitorContext, token: string): string[] {
+  const credential = context.credential;
+  if (credential?.source === '--env-file' && credential.path !== undefined) {
+    return ['--env-file', credential.path];
+  }
+  if (credential?.source === '--token-file' && credential.path !== undefined) {
+    return ['--token-file', credential.path];
+  }
+  return ['--token', token];
+}
+
 async function startDaemon(context: MonitorContext, roomEvents: boolean): Promise<number> {
   const resolved = resolveEndpoint(context);
   if ('line' in resolved) {
@@ -632,6 +648,10 @@ async function startDaemon(context: MonitorContext, roomEvents: boolean): Promis
     child = Bun.spawn({
       cmd: [
         ...selfCommand(),
+        ...childCredentialArgs(context, token),
+        ...(context.expectActor === undefined
+          ? []
+          : ['--expect-actor', context.expectActor]),
         'monitor',
         '--harness',
         'dsh',

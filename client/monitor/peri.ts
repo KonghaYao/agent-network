@@ -26,6 +26,8 @@ import { MonitorState, defaultMonitorStateDirectory } from './state';
 export interface MonitorContext {
   baseUrl: string | null;
   token: string | null;
+  /** CLI 预检已确认的 actor；设置后引擎跳过重复 network_me。 */
+  verifiedActor?: string;
 }
 
 const ALERT_PREFIX = 'ALERT ';
@@ -251,6 +253,7 @@ export async function runPeriMonitor(
       onDeadline: stop,
       roomEvents: options.roomEvents,
       memoryMode: options.memoryContext === false ? 'off' : 'pointer',
+      ...(context.verifiedActor === undefined ? {} : { verifiedActor: context.verifiedActor }),
     });
     return await engine.run();
   } finally {

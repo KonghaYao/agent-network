@@ -9,6 +9,29 @@ export class EnvFileError extends Error {
   }
 }
 
+/** 权限错误只报告路径与 mode，不读取或回显文件内容。 */
+export class EnvFilePermissionError extends Error {
+  constructor(path: string, mode: number) {
+    super(
+      `ERROR env_file=${JSON.stringify(path)} permission=${mode
+        .toString(8)
+        .padStart(3, '0')} required=600`,
+    );
+    this.name = 'EnvFilePermissionError';
+  }
+}
+
+export interface LoadedEnvFile {
+  path: string;
+  /** 文件内声明的赋值；显式凭据只从这些声明中解析。 */
+  entries: Array<[string, string]>;
+}
+
+export interface EnvFileLoadResult {
+  argv: string[];
+  files: LoadedEnvFile[];
+}
+
 export function parseEnvFile(text: string): Array<[string, string]> {
   const entries: Array<[string, string]> = [];
   for (const line of text.split(/\r?\n/u)) {
@@ -36,12 +59,18 @@ export function parseEnvFile(text: string): Array<[string, string]> {
   return entries;
 }
 
-/** 先加载再交给 commander；已存在（包括空串）的环境变量始终优先。 */
-export function loadEnvFiles(
+/**
+ * 先加载再交给 commander；已存在（包括空串）的环境变量始终优先。
+ *
+ * `--env-file` 是显式凭据来源，因此 POSIX 下要求文件权限恰好为 600；
+ * 只在读取成功后检查，保证不可读文件仍得到原有的 env_file 错误。
+ */
+export function loadEnvFilesDetailed(
   argv: readonly string[],
   env: NodeJS.ProcessEnv = process.env,
-): string[] {
+): EnvFileLoadResult {
   const remaining: string[] = [];
+  const files: LoadedEnvFile[] = [];
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!;
     if (arg === '--') {
@@ -55,13 +84,28 @@ export function loadEnvFiles(
     const path = arg === '--env-file' ? argv[++index] : arg.slice('--env-file='.length);
     if (!path || path.startsWith('--')) throw new EnvFileError('<missing>');
     let text: string;
+    let mode: number;
     try {
-      if (!statSync(path).isFile()) throw new EnvFileError(path);
+      const stats = statSync(path);
+      if (!stats.isFile()) throw new EnvFileError(path);
+      mode = stats.mode & 0o777;
       text = readFileSync(path, 'utf8');
     } catch {
       throw new EnvFileError(path);
     }
-    for (const [key, value] of parseEnvFile(text)) env[key] ??= value;
+    if (process.platform !== 'win32' && mode !== 0o600) {
+      throw new EnvFilePermissionError(path, mode);
+    }
+    const entries = parseEnvFile(text);
+    for (const [key, value] of entries) env[key] ??= value;
+    files.push({ path, entries });
   }
-  return remaining;
+  return { argv: remaining, files };
+}
+
+export function loadEnvFiles(
+  argv: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  return loadEnvFilesDetailed(argv, env).argv;
 }

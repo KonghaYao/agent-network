@@ -49,6 +49,8 @@ import { LIMITS } from '../src/contracts/limits';
 const ROOT = resolve(import.meta.dir, '..');
 const CLI = resolve(ROOT, 'client/cli.ts');
 const TOKEN = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
+const ACTOR = 'agt_me';
+const AUTH_ARGS = ['--token', TOKEN, '--expect-actor', ACTOR];
 const LONG_MESSAGE_ID = 'msg_dlv_long';
 const LONG_BODY = `${'投递正文'.repeat(1200)}尾部标记`;
 
@@ -809,13 +811,16 @@ function startWatcher(
   extraEnv: Record<string, string> = {},
   extraArgs: string[] = [],
 ): RunningWatcher {
-  return startProcess([process.execPath, CLI, 'monitor', '--harness', 'claude', ...extraArgs], {
-    AGENTNET_URL: base,
-    AGENTNET_TOKEN: TOKEN,
-    // 每个 watcher 独立状态目录，避免持久游标/seen 在测试间串扰。
-    AGENTNET_MONITOR_STATE_DIR: mkdtempSync(join(tmpdir(), 'ts-monitor-claude-')),
-    ...extraEnv,
-  });
+  return startProcess(
+    [process.execPath, CLI, ...AUTH_ARGS, 'monitor', '--harness', 'claude', ...extraArgs],
+    {
+      AGENTNET_URL: base,
+      AGENTNET_TOKEN: TOKEN,
+      // 每个 watcher 独立状态目录，避免持久游标/seen 在测试间串扰。
+      AGENTNET_MONITOR_STATE_DIR: mkdtempSync(join(tmpdir(), 'ts-monitor-claude-')),
+      ...extraEnv,
+    },
+  );
 }
 
 function startPeriWatcher(
@@ -823,12 +828,15 @@ function startPeriWatcher(
   extraEnv: Record<string, string> = {},
   extraArgs: string[] = [],
 ): RunningWatcher {
-  return startProcess([process.execPath, CLI, 'monitor', '--harness', 'peri', ...extraArgs], {
-    AGENTNET_URL: base,
-    AGENTNET_TOKEN: TOKEN,
-    AGENTNET_MONITOR_STATE_DIR: mkdtempSync(join(tmpdir(), 'ts-monitor-peri-')),
-    ...extraEnv,
-  });
+  return startProcess(
+    [process.execPath, CLI, ...AUTH_ARGS, 'monitor', '--harness', 'peri', ...extraArgs],
+    {
+      AGENTNET_URL: base,
+      AGENTNET_TOKEN: TOKEN,
+      AGENTNET_MONITOR_STATE_DIR: mkdtempSync(join(tmpdir(), 'ts-monitor-peri-')),
+      ...extraEnv,
+    },
+  );
 }
 
 async function waitForLine(
@@ -2314,7 +2322,7 @@ async function runRoomEventChecks(): Promise<void> {
   const defaultHome = mkdtempSync(join(tmpdir(), 'ts-monitor-home-'));
   const defaultStateMock = createMock();
   const defaultStateWatcher = startProcess(
-    [process.execPath, CLI, 'monitor', '--harness', 'claude', '--room-events'],
+    [process.execPath, CLI, ...AUTH_ARGS, 'monitor', '--harness', 'claude', '--room-events'],
     {
       HOME: defaultHome,
       AGENTNET_URL: defaultStateMock.base,
@@ -3398,7 +3406,9 @@ process.exit(args.includes('add') ? 0 : 2);
 }
 
 function dshCommand(...args: string[]): string[] {
-  return [process.execPath, CLI, 'monitor', '--harness', 'dsh', ...args];
+  const subcommand = args[0] ?? 'run';
+  const auth = ['run', 'start'].includes(subcommand) ? AUTH_ARGS : [];
+  return [process.execPath, CLI, ...auth, 'monitor', '--harness', 'dsh', ...args];
 }
 
 function dshEnv(
@@ -3911,7 +3921,7 @@ async function runDshLifecycleChecks(): Promise<void> {
   const mock = createMock();
   try {
     const missing = Bun.spawnSync({
-      cmd: dshCommand('run'),
+      cmd: [process.execPath, CLI, 'monitor', '--harness', 'dsh', 'run'],
       cwd: ROOT,
       env: {
         ...process.env,
@@ -3923,10 +3933,10 @@ async function runDshLifecycleChecks(): Promise<void> {
       stdout: 'pipe',
       stderr: 'pipe',
     });
-    checkEqual('dsh 缺少 token 退出码', missing.exitCode, 2);
+    checkEqual('dsh 缺少显式凭据退出码', missing.exitCode, 1);
     check(
-      'dsh 缺少 token 输出 AGENTNET_TOKEN_required',
-      new TextDecoder().decode(missing.stderr).includes('AGENTNET_TOKEN_required'),
+      'dsh 缺少显式凭据输出 credentials_required',
+      new TextDecoder().decode(missing.stderr).includes('credentials_required'),
     );
 
     const start = runDshCli(['start'], dshEnv(mock, fixture));

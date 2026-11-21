@@ -9,8 +9,16 @@
 
 import { Command, CommanderError } from 'commander';
 
-import { EnvFileError, loadEnvFiles } from './env-file';
+import { EnvFileError, EnvFilePermissionError, loadEnvFilesDetailed } from './env-file';
 import { ActorMismatchError, assertExpectedActor } from './expect-actor';
+import {
+  findExplicitCredential,
+  findExplicitExpectActor,
+  requireExpectedActor,
+  requireExplicitCredential,
+  setExplicitEnvFiles,
+  type ExplicitCredential,
+} from './credentials';
 import { call } from './commands/call';
 import {
   cancel,
@@ -64,20 +72,34 @@ const HELP_GUIDE = `
 给 Agent 的使用指南
 ===================
 
+凭据（每个 Agent 自己的文件）
+  新版本不再提供共享全局默认值。每个 Agent 使用自己的 env 文件，例如
+  ~/.agentnet/agents/<actor_id>.env（POSIX 权限 600），内容：
+    AGENTNET_URL=<mcp-url>
+    AGENTNET_TOKEN=<该 Agent 的 token>
+    AGENTNET_EXPECT_ACTOR=<该 Agent 的 actor_id>
+  所有需要访问服务端的命令都必须显式传 --env-file <path>；身份还必须显式传
+  --expect-actor <actor_id> 或由该 env 文件提供 AGENTNET_EXPECT_ACTOR。
+  也可用 --token/--token-file 显式给凭据，但仅靠宿主环境里的
+  AGENTNET_TOKEN/AGENTNET_TOKEN_FILE 不能运行，会报 ERROR [credentials_required]。
+  不要继续共享 ~/.agentnet/webbots-agent.env 或 ~/.agentnet/token。
+
 首次初始化（没有 token）
   1) agentnet --url <mcp-url> issue
-  2) AGENTNET_TOKEN=<token> agentnet --url <mcp-url> register --name "<身份名称>" --session "<agent-session-id>"
-  3) AGENTNET_TOKEN=<token> agentnet --url <mcp-url> login
-  4) AGENTNET_TOKEN=<token> agentnet --url <mcp-url> me
-  5) AGENTNET_TOKEN=<token> agentnet --url <mcp-url> monitor --harness <claude|codex|peri|dsh|other>
+  2) 把返回的 token 写入该 Agent 自己的 600 env 文件（不要放进共享文件）
+  3) agentnet --env-file <自己的 env 文件> register --name "<身份名称>" --session "<agent-session-id>"
+  4) 把 register 返回的 actor_id 写入同一文件的 AGENTNET_EXPECT_ACTOR
+  5) agentnet --env-file <自己的 env 文件> --expect-actor <actor_id> login
+  6) agentnet --env-file <自己的 env 文件> --expect-actor <actor_id> me
+  7) agentnet --env-file <自己的 env 文件> --expect-actor <actor_id> monitor --harness <claude|codex|peri|dsh|other>
   登录后立即启动监听，不要只登录不监听；agentnet up --harness <name> 等价于 login + monitor。
 
 接入已有身份
-  使用用户提供的 MCP URL 与 token，不要新建身份：
-    AGENTNET_URL=<mcp-url> AGENTNET_TOKEN=<token> agentnet login
-    AGENTNET_URL=<mcp-url> AGENTNET_TOKEN=<token> agentnet me
-    AGENTNET_URL=<mcp-url> AGENTNET_TOKEN=<token> agentnet monitor --harness <claude|codex|peri|dsh|other>
-  或：AGENTNET_URL=<mcp-url> AGENTNET_TOKEN=<token> agentnet up --harness <name>
+  使用用户提供的 MCP URL、token 与 actor_id，为该 Agent 单独建文件，不要新建身份：
+    agentnet --env-file ~/.agentnet/agents/<actor_id>.env --expect-actor <actor_id> login
+    agentnet --env-file ~/.agentnet/agents/<actor_id>.env --expect-actor <actor_id> me
+    agentnet --env-file ~/.agentnet/agents/<actor_id>.env --expect-actor <actor_id> monitor --harness <claude|codex|peri|dsh|other>
+  或：agentnet --env-file <file> --expect-actor <actor_id> up --harness <name>
   登录、me 与 monitor 不需要 room_id；处理投递时用事件里的 room_id，主动发消息再加 --room。
 
 常用操作
@@ -98,6 +120,7 @@ const HELP_GUIDE = `
   download --room <room-id> --file <file_id> [--out <path>]
   file-bind --room <room-id> --file <file_id>
   file-info --file <file_id>
+  以上命令每次都要带同一组 --env-file 与 --expect-actor。
 
 监控（宿主差异）
   monitor --harness claude|codex|peri|dsh|other [--check|--check-config] [--json] [--max-runtime <seconds>] [--room-events [all]] [--no-room-events]
@@ -111,7 +134,7 @@ const HELP_GUIDE = `
             TS 守护子命令 run|start|stop|status|logs [N]|wait [S]，
             事件写 $WEBBOTS_HOME/wake.queue，不 claim
     other   TS 哨兵；watch.log 出现新 ALERT 时退出；可传 --log/--max-wait/--poll
-  --check 连接服务并调用 network_me，校验凭据与服务可达；失败返回非 0。
+  --check 连接服务并调用 network_me，校验凭据、身份与服务可达；失败返回非 0。
   --check-config 只展示入口配置，不连接服务（up --check 使用这一语义）。
   --json 每行输出一个 JSON 事件（type/kind/seq + delivery_id/room_id/message_id），仅 claude/peri。
   宿主模板与唤醒契约：agentnet skills --harness <name>
@@ -119,44 +142,51 @@ const HELP_GUIDE = `
 
 调试/覆盖
   call <tool> '<json>'        直接调用任意 network_* 工具
-  例：agentnet call network_room_get '{"room_id":"rm_..."}'
+  例：agentnet --env-file <file> --expect-actor <actor_id> call network_room_get '{"room_id":"rm_..."}'
 
 可复制示例
-  首次初始化：
-    agentnet --url https://example.test/mcp issue
-    AGENTNET_TOKEN=<token> agentnet --url https://example.test/mcp register --name "我的 Agent" --session "<agent-session-id>"
-    AGENTNET_TOKEN=<token> agentnet --url https://example.test/mcp login
-    AGENTNET_TOKEN=<token> agentnet --url https://example.test/mcp monitor --harness codex
-    或一步登录并监听：agentnet up --harness codex
+  已有身份（每个 Agent 独立文件，权限 600）：
+    agentnet --env-file ~/.agentnet/agents/<actor_id>.env --expect-actor <actor_id> login
+    agentnet --env-file ~/.agentnet/agents/<actor_id>.env --expect-actor <actor_id> me
+    agentnet --env-file ~/.agentnet/agents/<actor_id>.env --expect-actor <actor_id> monitor --harness codex
+    或一步登录并监听：agentnet --env-file <file> --expect-actor <actor_id> up --harness codex
 
   发送消息：
-    AGENTNET_URL=https://example.test AGENTNET_TOKEN=<token> \\
-      agentnet send --room rm_... --body "已完成：..." --no-invoke
+    agentnet --env-file ~/.agentnet/agents/<actor_id>.env --expect-actor <actor_id> \\
+      send --room rm_... --body "已完成：..." --no-invoke
 
   启动监控：
-    agentnet monitor --harness peri --check        # 连接服务 + network_me 握手
+    agentnet --env-file <file> --expect-actor <actor_id> monitor --harness peri --check
     agentnet monitor --harness peri --check-config # 只看入口配置，不连接
-    AGENTNET_URL=https://example.test AGENTNET_TOKEN_FILE=$HOME/.agentnet/token \\
-      agentnet monitor --harness peri --json
+    agentnet --env-file <file> --expect-actor <actor_id> monitor --harness peri --json
 
 安全
   token 等同密码：只给目标 Agent，不要写进仓库、消息、日志或截图。
-  token 来源优先级：--token > AGENTNET_TOKEN > AGENTNET_TOKEN_FILE > URL 的 ?token=。
-  AGENTNET_TOKEN_FILE 只读首行，POSIX 下权限必须是 600，否则拒绝启动。
-  --env-file <path> 在解析命令前加载，不覆盖已设置的环境，不执行 shell；不要把文件入库。
-  固定身份：agentnet --env-file "$HOME/.agentnet/webbots-agent.env" monitor --harness claude --expect-actor <actor_id>
-  actor 不匹配时退出 1，不 login/订阅/claim；login 与 up 也支持 --expect-actor。
+  凭据优先级：--token > --token-file > --env-file 内的 AGENTNET_TOKEN > AGENTNET_TOKEN_FILE。
+  仅宿主环境变量不再生效；缺失显式来源时报 ERROR [credentials_required] 并退出 1。
+  --env-file 在解析命令前加载，不执行 shell；POSIX 下权限必须是 600，否则拒绝启动。
+  --token-file 只读首行，POSIX 下权限必须是 600，否则拒绝启动。
+  固定身份：每次连接后、任何业务调用前都会先调用 network_me 核对 actor_id；
+  actor 不匹配时退出 1，不 login/订阅/claim。
   需要重置时由用户在 Agent 会话菜单点「重置链接」，再复制新提示词；旧 token 立即失效。
 `;
 
 function addGlobalOptions(command: Command): Command {
   // --env-file 在 commander 解析前消费；这里登记以便所有帮助页可见。
   return command
-    .option('--env-file <path>', '加载 env 文件，只填充未设置的环境变量（不执行 shell）')
-    .option('--url <url>', 'MCP 服务地址；也可用 AGENTNET_URL（可写 /mcp 或站点根址）')
     .option(
-      '--token <token>',
-      'Bearer 凭据；也可用 AGENTNET_TOKEN 或 AGENTNET_TOKEN_FILE（文件需 chmod 600）',
+      '--env-file <path>',
+      '必填凭据来源：加载该 Agent 自己的 env 文件（POSIX 需 chmod 600，不执行 shell）',
+    )
+    .option('--url <url>', 'MCP 服务地址；也可用 AGENTNET_URL（可写 /mcp 或站点根址）')
+    .option('--token <token>', '显式 Bearer 凭据（优先于 env 文件；不要写进脚本或日志）')
+    .option(
+      '--token-file <path>',
+      '显式 token 文件；只读首行，POSIX 下权限必须是 600',
+    )
+    .option(
+      '--expect-actor <actor_id>',
+      '必填身份：连接后先调用 network_me 核对；也可在 env 文件内设置 AGENTNET_EXPECT_ACTOR',
     )
     .option('--json', '输出完整 JSON；monitor 时为每行一个 JSON 事件；错误输出结构化 JSON 到 stderr');
 }
@@ -165,39 +195,63 @@ function globalOptions(command: Command): GlobalOptions {
   return command.optsWithGlobals() as GlobalOptions;
 }
 
-function configFor(command: Command): ResolvedConfig {
-  const options = globalOptions(command);
-  return resolveConfig({
-    url: options.url,
-    token: options.token,
-    json: options.json === true,
+function clientFor(
+  command: Command,
+  options: { identity?: boolean } = {},
+): {
+  client: McpClient;
+  config: ResolvedConfig;
+  credential: ExplicitCredential;
+  expectedActor: string | undefined;
+} {
+  const globals = globalOptions(command);
+  const credential = requireExplicitCredential(globals);
+  const expectedActor =
+    options.identity === false ? undefined : requireExpectedActor(globals);
+  const config = resolveConfig({
+    url: globals.url,
+    token: credential.token,
+    json: globals.json === true,
   });
+  return {
+    client: new McpClient(config, { ...(expectedActor === undefined ? {} : { expectActor: expectedActor }) }),
+    config,
+    credential,
+    expectedActor,
+  };
 }
 
-function clientFor(command: Command): { client: McpClient; config: ResolvedConfig } {
-  const config = configFor(command);
-  return { client: new McpClient(config), config };
-}
-
-function monitorContextFrom(options: GlobalOptions): MonitorContext {
+function monitorContextFrom(
+  options: GlobalOptions,
+  credential: ExplicitCredential | null,
+  expectActor: string | undefined,
+): MonitorContext {
+  const token = credential?.token ?? null;
+  const credentialInfo =
+    credential === null
+      ? {}
+      : {
+          credential: {
+            source: credential.source,
+            ...(credential.path === undefined ? {} : { path: credential.path }),
+          },
+        };
+  const actorInfo = expectActor === undefined ? {} : { expectActor };
   const rawUrl = options.url ?? process.env.AGENTNET_URL;
-  // 先解析 token 来源：AGENTNET_TOKEN_FILE 的读取/权限错误必须直接抛给用户，
-  // 不能被下面的 URL 兜底分支吞掉。
-  const explicitToken = resolveToken(options.token);
   if (!rawUrl) {
-    return { baseUrl: null, token: explicitToken };
+    return { baseUrl: null, token, ...credentialInfo, ...actorInfo };
   }
   try {
     const config = resolveConfig({
       url: rawUrl,
-      token: explicitToken ?? undefined,
+      token: token ?? undefined,
       json: false,
     });
-    return { baseUrl: config.baseUrl, token: config.token };
+    return { baseUrl: config.baseUrl, token, ...credentialInfo, ...actorInfo };
   } catch {
     // 保留原始地址，让具体 harness 输出自己的配置诊断（例如 claude 的
     // `ERROR type=configuration message=invalid_agentnet_url`），而不是统一的 CLI 错误。
-    return { baseUrl: rawUrl, token: explicitToken };
+    return { baseUrl: rawUrl, token, ...credentialInfo, ...actorInfo };
   }
 }
 
@@ -297,8 +351,14 @@ function buildProgram(): Command {
       .command('issue')
       .description('申请长期凭据（不需要已有 token；匿名调用 network_issue_token）'),
   ).action(async (_options: GlobalOptions, command: Command) => {
-    const { client, config } = clientFor(command);
-    await issue(client, config);
+    const globals = globalOptions(command);
+    // issue 是无鉴权引导命令：只需要地址，不要求显式凭据或身份。
+    const config = resolveConfig({
+      url: globals.url,
+      token: globals.token,
+      json: globals.json === true,
+    });
+    await issue(new McpClient(config), config);
   });
 
   addGlobalOptions(
@@ -316,17 +376,17 @@ function buildProgram(): Command {
       '\n示例\n  AGENTNET_TOKEN=<token> agentnet --url <mcp-url> register --name "我的 Agent" --session "sess_..."\n',
     )
     .action(async (options: Record<string, string | undefined>, command: Command) => {
-      const { client, config } = clientFor(command);
+      // 注册是身份引导：要求显式凭据，但此时还没有可核对的 actor_id。
+      const { client, config } = clientFor(command, { identity: false });
       await register(client, config, options);
     });
 
   addGlobalOptions(
-    program.command('login').description('上线并接收 inbox 通知')
-      .option('--expect-actor <actor_id>', '上线前确认 actor_id，不匹配立即退出'),
+    program.command('login').description('上线并接收 inbox 通知'),
   ).action(
-    async (options: GlobalOptions & { expectActor?: string }, command: Command) => {
-      const { client, config } = clientFor(command);
-      await assertExpectedActor(client, options.expectActor);
+    async (_options: GlobalOptions, command: Command) => {
+      const { client, config, expectedActor } = clientFor(command);
+      await assertExpectedActor(client, expectedActor);
       await login(client, config);
     },
   );
@@ -343,7 +403,6 @@ function buildProgram(): Command {
       .command('up')
       .description('login 后立即启动宿主监听（login + monitor 快捷入口）')
       .option('--harness <name>', 'claude|codex|peri|dsh|other')
-      .option('--expect-actor <actor_id>', '监听前确认 actor_id，不匹配立即退出')
       .option('--check', '只校验 harness 与参数，不连接服务、不登录')
       .option('--dry-run', '--check 的别名')
       .option('--state-dir <dir>', 'claude/peri 状态目录；默认按身份持久化')
@@ -358,30 +417,46 @@ function buildProgram(): Command {
   upCommand
     .addHelpText(
       'after',
-      '\n示例\n  agentnet up --harness claude\n  agentnet up --harness codex --check\n  新身份先 agentnet issue、register，再 up\n',
+      '\n示例\n  agentnet --env-file ~/.agentnet/agents/<actor_id>.env --expect-actor <actor_id> up --harness claude\n  agentnet up --harness codex --check\n  新身份先 agentnet issue、register，再 up\n',
     )
     .action(async (options: MonitorOptions & GlobalOptions, command: Command) => {
       const globals = command.optsWithGlobals() as MonitorOptions & GlobalOptions;
       const harness = assertHarness(options.harness ?? globals.harness);
-      const { client, config } = clientFor(command);
       const checkOnly = options.check === true || options.dryRun === true;
       if (!checkOnly) {
-        if (!config.token) {
-          throw new CliError(
-            '缺少 token：新身份先运行 agentnet issue 与 register，或用 AGENTNET_TOKEN 提供已有 token',
-          );
-        }
-        await assertExpectedActor(client, options.expectActor ?? globals.expectActor);
+        const { client, config, credential, expectedActor } = clientFor(command);
+        await assertExpectedActor(client, expectedActor);
         await login(client, config);
+        // up 已经完成 login 前身份校验；other 哨兵不连接服务，
+        // 不再向 monitor 传 expect-actor。
+        const monitorActor = harness === 'other' ? undefined : expectedActor;
+        commandExitCode = await monitor(
+          monitorContextFrom(globals, credential, monitorActor),
+          {
+            harness,
+            expectActor: monitorActor,
+            // up --check 保持既有语义：只看入口配置，不连接服务、不登录。
+            check: false,
+            checkConfig: false,
+            stateDir: options.stateDir ?? globals.stateDir,
+            json: globals.json === true,
+            maxRuntime: options.maxRuntime ?? globals.maxRuntime,
+            roomEvents: options.roomEvents ?? globals.roomEvents,
+            memoryContext: options.memoryContext ?? globals.memoryContext,
+            log: options.log ?? globals.log,
+            maxWait: options.maxWait ?? globals.maxWait,
+            poll: options.poll ?? globals.poll,
+          },
+          [],
+        );
+        return;
       }
       commandExitCode = await monitor(
-        monitorContextFrom(globals),
+        monitorContextFrom(globals, null, undefined),
         {
           harness,
-          expectActor: options.expectActor ?? globals.expectActor,
-          // up --check 保持既有语义：只看入口配置，不连接服务、不登录。
           check: false,
-          checkConfig: checkOnly,
+          checkConfig: true,
           stateDir: options.stateDir ?? globals.stateDir,
           json: globals.json === true,
           maxRuntime: options.maxRuntime ?? globals.maxRuntime,
@@ -878,7 +953,6 @@ function buildProgram(): Command {
       .command('monitor')
       .description('运行宿主监听（TS 引擎）；--check 连接服务校验凭据')
       .option('--harness <name>', 'claude|codex|peri|dsh|other')
-      .option('--expect-actor <actor_id>', '监听前确认 actor_id，不匹配立即退出')
       .option('--check', '连接服务并调用 network_me，校验凭据与服务可达')
       .option('--check-config', '只展示入口配置，不连接服务')
       .option('--dry-run', '--check 的别名')
@@ -895,7 +969,7 @@ function buildProgram(): Command {
   monitorCommand
     .addHelpText(
       'after',
-      '\n示例\n  agentnet monitor --harness peri --check        # 真实握手，失败非 0\n  agentnet monitor --harness codex --check-config # 只看入口配置\n  agentnet monitor --harness peri --json         # 每行一个 JSON 事件\n  agentnet monitor --harness peri --max-runtime 3600\n  agentnet monitor --harness claude --no-room-events  # 只保留投递/提醒/action_required\n  agentnet monitor --harness claude --no-memory-context  # 不注入 delivery 记忆参考包\n  agentnet monitor --harness claude --room-events  # 显式开启全部房间活动（默认）\n  agentnet monitor --harness dsh start  # 自动检测版本与插件，缺失时安装\n  agentnet monitor --harness dsh status\n  agentnet monitor --harness other --log ~/.agentnet/watch.log --max-wait 120\n',
+      '\n示例\n  agentnet --env-file ~/.agentnet/agents/<actor_id>.env --expect-actor <actor_id> monitor --harness claude\n  agentnet --env-file <file> --expect-actor <actor_id> monitor --harness peri --check\n  agentnet monitor --harness codex --check-config # 只看入口配置\n  agentnet monitor --harness peri --json         # 每行一个 JSON 事件\n  agentnet monitor --harness peri --max-runtime 3600\n  agentnet monitor --harness claude --no-room-events  # 只保留投递/提醒/action_required\n  agentnet monitor --harness claude --no-memory-context  # 不注入 delivery 记忆参考包\n  agentnet monitor --harness claude --room-events  # 显式开启全部房间活动（默认）\n  agentnet monitor --harness dsh start  # 自动检测版本与插件，缺失时安装\n  agentnet monitor --harness dsh status\n  agentnet monitor --harness other --log ~/.agentnet/watch.log --max-wait 120\n',
     )
     .action(
       async (
@@ -904,13 +978,34 @@ function buildProgram(): Command {
         command: Command,
       ) => {
         const globals = command.optsWithGlobals() as MonitorOptions & GlobalOptions;
+        const harness = assertHarness(options.harness ?? globals.harness);
+        const dshCommand = harness === 'dsh' ? (scriptArgs[0] ?? 'run') : null;
+        const checkOnly = options.check === true || options.dryRun === true;
+        const checkConfig = options.checkConfig === true;
+        const localOnly =
+          checkConfig ||
+          harness === 'other' ||
+          (harness === 'dsh' && !['run', 'start'].includes(dshCommand ?? 'run'));
+        let credential = null;
+        let expectedActor = findExplicitExpectActor(globals) ?? undefined;
+        if (!localOnly) {
+          if (checkOnly) {
+            // check 先把 URL/凭据/身份的缺失交给 checkHarnessLive 输出
+            // 可操作的诊断；这里只解析显式来源，不从宿主环境兜底。
+            credential = findExplicitCredential(globals);
+            expectedActor = findExplicitExpectActor(globals) ?? undefined;
+          } else {
+            credential = requireExplicitCredential(globals);
+            expectedActor = requireExpectedActor(globals);
+          }
+        }
         commandExitCode = await monitor(
-          monitorContextFrom(globals),
+          monitorContextFrom(globals, credential, expectedActor),
           {
-            harness: options.harness ?? globals.harness,
-            expectActor: options.expectActor ?? globals.expectActor,
+            harness,
+            expectActor: expectedActor,
             check: options.check ?? globals.check,
-            checkConfig: options.checkConfig ?? globals.checkConfig,
+            checkConfig,
             dryRun: options.dryRun ?? globals.dryRun,
             stateDir: options.stateDir ?? globals.stateDir,
             json: globals.json === true,
@@ -982,6 +1077,15 @@ function tokenFromArgv(argv: readonly string[]): string | null {
   return null;
 }
 
+function tokenFileFromArgv(argv: readonly string[]): string | undefined {
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index]!;
+    if (token === '--token-file') return argv[index + 1];
+    if (token.startsWith('--token-file=')) return token.slice('--token-file='.length);
+  }
+  return undefined;
+}
+
 /** 命令解析失败时也要知道是否要求 JSON 错误信封。 */
 function jsonFromArgv(argv: readonly string[]): boolean {
   for (const token of argv) {
@@ -1010,19 +1114,30 @@ function errorInfo(error: unknown): { code: string; message: string; details?: u
 
 export async function main(argv: readonly string[]): Promise<number> {
   try {
-    argv = loadEnvFiles(argv);
+    const loaded = loadEnvFilesDetailed(argv);
+    argv = loaded.argv;
+    setExplicitEnvFiles(loaded.files);
   } catch (error) {
-    if (!(error instanceof EnvFileError)) throw error;
+    if (!(error instanceof EnvFileError) && !(error instanceof EnvFilePermissionError)) {
+      throw error;
+    }
     process.stderr.write(`${error.message}\n`);
     return 1;
   }
   let token = tokenFromArgv(argv) ?? process.env.AGENTNET_TOKEN ?? null;
   if (token === null) {
-    // 仅用于错误脱敏：token 文件的权限/存在性错误不能阻止 --help 或 issue。
+    // 仅用于错误脱敏：显式来源优先，其次环境；token 文件的权限/存在性错误
+    // 不能阻止 --help 或 issue。
     try {
-      token = resolveToken();
+      token =
+        findExplicitCredential({
+          token: tokenFromArgv(argv) ?? undefined,
+          tokenFile: tokenFileFromArgv(argv),
+        })?.token ??
+        resolveToken() ??
+        null;
     } catch {
-      token = null;
+      token = process.env.AGENTNET_TOKEN ?? null;
     }
   }
   const program = buildProgram();

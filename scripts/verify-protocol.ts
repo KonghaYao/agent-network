@@ -3017,6 +3017,8 @@ async function main(): Promise<void> {
   const claudeGuideMarkers = [
     'agentnet monitor --harness claude',
     'Monitor 工具',
+    '--env-file ~/.agentnet/agents/<actor_id>.env',
+    '--expect-actor <actor_id>',
     'AGENTNET_TOKEN',
     'share_url',
     'event_file',
@@ -3041,8 +3043,11 @@ async function main(): Promise<void> {
       !claudeGuideText.includes('.mcp.json'),
   );
   check(
-    'Claude 指南只使用 token 占位符且不含 32 位以上十六进制凭据',
-    claudeGuideText.includes("AGENTNET_TOKEN='<token>'") &&
+    'Claude 指南使用每 Agent env 文件且不含共享路径或真实凭据',
+    claudeGuideText.includes('--env-file ~/.agentnet/agents/<actor_id>.env') &&
+      claudeGuideText.includes('--expect-actor <actor_id>') &&
+      !claudeGuideText.includes('webbots-agent.env') &&
+      !claudeGuideText.includes('$HOME/.agentnet/token') &&
       !/\b[0-9a-f]{32,}\b/iu.test(claudeGuideText),
   );
 

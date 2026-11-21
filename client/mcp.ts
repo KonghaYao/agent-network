@@ -12,6 +12,8 @@
 import { readFileSync, statSync } from 'node:fs';
 
 import { parseSseJsonText } from '../src/contracts/sse';
+import { ActorMismatchError } from './expect-actor';
+import { asString } from './output';
 
 export const PROTOCOL_VERSION = '2026-07-28';
 export const CLIENT_NAME = 'agentnet-cli';
@@ -68,27 +70,27 @@ export function redactValue(value: unknown, token: string | null | undefined): u
 }
 
 /**
- * 读取 AGENTNET_TOKEN_FILE。
+ * 读取 token 文件。
  *
  * - 只取首行并去掉首尾空白；空文件视为配置错误。
  * - POSIX 下要求权限恰好为 600，避免凭据被同机其他用户读取；Windows 不做这项检查。
  * - 错误信息只包含路径与权限，不回显文件内容。
  */
-function readTokenFile(path: string): string {
+export function readTokenFile(path: string, label = 'AGENTNET_TOKEN_FILE'): string {
   let stats;
   try {
     stats = statSync(path);
   } catch {
-    throw new CliError(`无法读取 AGENTNET_TOKEN_FILE：${path}（检查路径与权限）`);
+    throw new CliError(`无法读取 ${label}：${path}（检查路径与权限）`);
   }
   if (!stats.isFile()) {
-    throw new CliError(`AGENTNET_TOKEN_FILE 不是普通文件：${path}`);
+    throw new CliError(`${label} 不是普通文件：${path}`);
   }
   if (process.platform !== 'win32') {
     const mode = stats.mode & 0o777;
     if (mode !== 0o600) {
       throw new CliError(
-        `AGENTNET_TOKEN_FILE 权限必须是 600（当前 ${mode.toString(8).padStart(3, '0')}）：` +
+        `${label} 权限必须是 600（当前 ${mode.toString(8).padStart(3, '0')}）：` +
           `运行 chmod 600 ${path} 后重试`,
       );
     }
@@ -97,11 +99,11 @@ function readTokenFile(path: string): string {
   try {
     text = readFileSync(path, 'utf8');
   } catch {
-    throw new CliError(`无法读取 AGENTNET_TOKEN_FILE：${path}（检查路径与权限）`);
+    throw new CliError(`无法读取 ${label}：${path}（检查路径与权限）`);
   }
   const first = (text.split(/\r?\n/u)[0] ?? '').trim();
   if (first.length === 0) {
-    throw new CliError(`AGENTNET_TOKEN_FILE 为空：${path}`);
+    throw new CliError(`${label} 为空：${path}`);
   }
   return first;
 }
@@ -240,18 +242,90 @@ function toolErrorDetail(result: ToolResult): { message: string; code?: string; 
   };
 }
 
+export interface RpcOptions {
+  name?: string;
+  /** 仅供身份闸门内部调用 network_me 时跳过递归校验。 */
+  skipIdentity?: boolean;
+}
+
+export interface McpClientOptions {
+  /** 设置后，任何 RPC 前先调用 network_me 并核对 actor_id。 */
+  expectActor?: string;
+}
+
 export class McpClient {
-  constructor(private readonly config: ResolvedConfig) {}
+  private verifiedActor: string | null = null;
+
+  constructor(
+    private readonly config: ResolvedConfig,
+    private readonly options: McpClientOptions = {},
+  ) {}
 
   get resolved(): ResolvedConfig {
     return this.config;
   }
 
+  private toolResult(result: ToolResult): Record<string, unknown> {
+    if (result.isError) {
+      const detail = toolErrorDetail(result);
+      throw new CliError(detail.message, { code: detail.code, details: detail.details });
+    }
+    if (result.structuredContent && typeof result.structuredContent === 'object') {
+      return result.structuredContent;
+    }
+    const text = (result.content ?? []).find((item) => item.type === 'text')?.text;
+    if (!text) return {};
+    try {
+      const parsed: unknown = JSON.parse(text);
+      return parsed !== null && typeof parsed === 'object'
+        ? (parsed as Record<string, unknown>)
+        : { value: parsed };
+    } catch {
+      return { text };
+    }
+  }
+
+  private async callToolUnchecked(
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    return this.toolResult(
+      (await this.rpc('tools/call', { name, arguments: args }, { name, skipIdentity: true })) as ToolResult,
+    );
+  }
+
+  /**
+   * 在业务调用前确认凭据归属。与 network_me 复用同一次请求；
+   * 错误只包含 actor id，绝不包含 token。
+   */
+  async verifyActor(expected: string): Promise<Record<string, unknown>> {
+    if (!/^[A-Za-z0-9_-]+$/u.test(expected)) {
+      throw new CliError('--expect-actor 必须是非空 actor_id');
+    }
+    if (this.verifiedActor === expected) return {};
+    // network_me 自己就是身份调用；绕过闸门，避免递归。
+    const me = await this.callToolUnchecked('network_me', {});
+    const actual = asString(me.actor_id);
+    if (!/^[A-Za-z0-9_-]+$/u.test(actual)) {
+      throw new CliError('network_me 未返回有效 actor_id');
+    }
+    if (actual !== expected) throw new ActorMismatchError(expected, actual);
+    this.verifiedActor = expected;
+    return me;
+  }
+
+  private async ensureIdentity(): Promise<void> {
+    const expected = this.options.expectActor;
+    if (!expected || this.verifiedActor === expected) return;
+    await this.verifyActor(expected);
+  }
+
   async rpc(
     method: string,
     params: Record<string, unknown> = {},
-    options: { name?: string } = {},
+    options: RpcOptions = {},
   ): Promise<Record<string, unknown>> {
+    if (!options.skipIdentity) await this.ensureIdentity();
     const id = `cli-${crypto.randomUUID()}`;
     const headers: Record<string, string> = {
       'content-type': 'application/json',
@@ -316,24 +390,14 @@ export class McpClient {
   }
 
   async callTool(name: string, args: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
-    const result = (await this.rpc('tools/call', { name, arguments: args }, { name })) as ToolResult;
-    if (result.isError) {
-      const detail = toolErrorDetail(result);
-      throw new CliError(detail.message, { code: detail.code, details: detail.details });
+    if (name === 'network_me' && this.options.expectActor) {
+      if (this.verifiedActor !== this.options.expectActor) {
+        return this.verifyActor(this.options.expectActor);
+      }
+    } else {
+      await this.ensureIdentity();
     }
-    if (result.structuredContent && typeof result.structuredContent === 'object') {
-      return result.structuredContent;
-    }
-    const text = (result.content ?? []).find((item) => item.type === 'text')?.text;
-    if (!text) return {};
-    try {
-      const parsed: unknown = JSON.parse(text);
-      return parsed !== null && typeof parsed === 'object'
-        ? (parsed as Record<string, unknown>)
-        : { value: parsed };
-    } catch {
-      return { text };
-    }
+    return this.callToolUnchecked(name, args);
   }
 
   async readResource(uri: string): Promise<string> {
