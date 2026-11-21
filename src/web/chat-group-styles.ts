@@ -1,6 +1,6 @@
 /** Group settings and shared member-picker styles, inserted before responsive overrides. */
 export const GROUP_STYLE = `
-  .members-card { width: min(760px, 100%); display: flex; flex-direction: column;
+  .members-card { width: min(1140px, 100%); display: flex; flex-direction: column;
     overflow: hidden; }
   #members-form { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
   .members-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; }

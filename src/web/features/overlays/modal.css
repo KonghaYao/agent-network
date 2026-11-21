@@ -29,8 +29,16 @@
 }
 
 .spa-dialog-content.members-card[data-lenso-slot='modal-popup'] {
-  width: min(760px, calc(100vw - 32px));
+  /* 双栏成员列表需要比普通弹窗宽：760px 下名字列过早折行。 */
+  width: min(1140px, calc(100vw - 32px));
   overflow: hidden;
+}
+
+/* 桌面保留 40px 视口边距；<1220 时仍用 32px 边距，避免平板无谓收窄。 */
+@media (min-width: 1220px) {
+  .spa-dialog-content.members-card[data-lenso-slot='modal-popup'] {
+    width: min(1140px, calc(100vw - 80px));
+  }
 }
 
 .spa-dialog-content.message-search-card[data-lenso-slot='modal-popup'] {

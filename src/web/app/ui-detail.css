@@ -121,7 +121,7 @@ button[data-button-role]:focus-visible {
 }
 
 .spa-dialog-content.members-card {
-  width: min(760px, calc(100vw - 32px));
+  width: min(1140px, calc(100vw - 32px));
   /* 双栏与底部动作固定在卡片内，只有 `.members-scroll` 滚动。 */
   display: flex;
   flex-direction: column;

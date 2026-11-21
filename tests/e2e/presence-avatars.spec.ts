@@ -56,9 +56,9 @@ test.beforeAll(async () => {
   groupTitle = `Presence 群 ${suffix}`;
   shortAgentName = `短名${suffix}`;
   longNames = [
-    '超长成员名称甲用于验证群成员弹窗名字折行与操作按钮布局并在两行后省略其余内容的完整展示效果补充文字确保超过两行',
+    '超长成员名称甲用于验证群成员弹窗名字折行与操作按钮布局并在两行后省略其余内容的完整展示效果补充文字确保超过两行并继续追加更多文字覆盖加宽后的名字列仍然溢出再补充一段用于确认省略号',
     'Metalnfer-Bridge-Architecture-Agent-Long-Display-Name-ABCDEFGHIJKLMNOPQRSTUVWXYZ-0123456789',
-    '这是一个非常非常长的群成员名称乙需要折行显示并验证最多两行其余内容用省略号替代再补充一些文字确保超过两行的展示',
+    '这是一个非常非常长的群成员名称乙需要折行显示并验证最多两行其余内容用省略号替代再补充一些文字确保超过两行的展示并继续追加更多文字覆盖加宽后的名字列仍然溢出再补充一段用于确认省略号',
   ];
 
   tokenA = crypto.randomUUID();
@@ -363,78 +363,128 @@ test('群成员弹窗名字优先占宽，长名最多两行且操作按钮可�
   await page.locator('#members-button').click();
   await expect(page.locator('#members-modal')).toBeVisible();
 
-  const layout = await page.evaluate((names) => {
-    const dialog = document.getElementById('members-modal')!.getBoundingClientRect();
-    const columnWidths = Array.from(
-      document.querySelectorAll<HTMLElement>('#members-modal .members-column'),
-    ).map((column) => column.getBoundingClientRect().width);
-    const rows = names.map((name) => {
-      const row = Array.from(
-        document.querySelectorAll<HTMLElement>('#members-current .spa-member'),
-      ).find((item) => item.querySelector('.member-roster-name')?.textContent?.includes(name));
-      if (!row) throw new Error(`缺少成员行：${name}`);
-      const column = row.closest<HTMLElement>('.members-column')!;
-      const nameEl = row.querySelector<HTMLElement>('.member-roster-name')!;
-      const roleEl = row.querySelector<HTMLElement>('.member-roster-role')!;
-      const actionsEl = row.querySelector<HTMLElement>('.member-roster-actions');
-      const nameRect = nameEl.getBoundingClientRect();
-      const roleRect = roleEl.getBoundingClientRect();
-      const actionsRect = actionsEl?.getBoundingClientRect() ?? null;
-      const style = getComputedStyle(nameEl);
-      const lineHeight = Number.parseFloat(style.lineHeight);
+  const readLayout = (names: string[]) =>
+    page.evaluate((names) => {
+      const dialog = document.getElementById('members-modal')!.getBoundingClientRect();
+      const dialogEl = document.getElementById('members-modal')!;
+      const columnWidths = Array.from(
+        document.querySelectorAll<HTMLElement>('#members-modal .members-column'),
+      ).map((column) => column.getBoundingClientRect().width);
+      const title = document.getElementById('members-modal-title')!;
+      const titleRange = document.createRange();
+      titleRange.selectNodeContents(title);
+      const titleRect = titleRange.getBoundingClientRect();
+      const close = document.getElementById('members-close')!.getBoundingClientRect();
+      const footer = document.querySelector<HTMLElement>('#members-modal .members-actions')!;
+      const transfer = document.getElementById('members-transfer');
+      const transferRect = transfer && !transfer.hidden ? transfer.getBoundingClientRect() : null;
+      const rows = names.map((name) => {
+        const row = Array.from(
+          document.querySelectorAll<HTMLElement>('#members-current .spa-member'),
+        ).find((item) => item.querySelector('.member-roster-name')?.textContent?.includes(name));
+        if (!row) throw new Error(`缺少成员行：${name}`);
+        const column = row.closest<HTMLElement>('.members-column')!;
+        const nameEl = row.querySelector<HTMLElement>('.member-roster-name')!;
+        const roleEl = row.querySelector<HTMLElement>('.member-roster-role')!;
+        const actionsEl = row.querySelector<HTMLElement>('.member-roster-actions');
+        const nameRect = nameEl.getBoundingClientRect();
+        const roleRect = roleEl.getBoundingClientRect();
+        const actionsRect = actionsEl?.getBoundingClientRect() ?? null;
+        const style = getComputedStyle(nameEl);
+        const lineHeight = Number.parseFloat(style.lineHeight);
+        return {
+          name,
+          columnWidth: column.getBoundingClientRect().width,
+          nameWidth: nameRect.width,
+          nameRight: nameRect.right,
+          nameBottom: nameRect.bottom,
+          roleTop: roleRect.top,
+          actionsLeft: actionsRect?.left ?? null,
+          lines: Math.round(nameRect.height / lineHeight),
+          lineClamp: style.webkitLineClamp,
+          overflowWrap: style.overflowWrap,
+          truncated: nameEl.scrollHeight > nameEl.clientHeight + 1,
+          buttons: Array.from(actionsEl?.querySelectorAll<HTMLElement>('button') ?? []).map(
+            (button) => button.getBoundingClientRect(),
+          ),
+        };
+      });
       return {
-        name,
-        columnWidth: column.getBoundingClientRect().width,
-        nameWidth: nameRect.width,
-        nameRight: nameRect.right,
-        nameBottom: nameRect.bottom,
-        roleTop: roleRect.top,
-        actionsLeft: actionsRect?.left ?? null,
-        lines: Math.round(nameRect.height / lineHeight),
-        lineClamp: style.webkitLineClamp,
-        overflowWrap: style.overflowWrap,
-        truncated: nameEl.scrollHeight > nameEl.clientHeight + 1,
-        buttons: Array.from(actionsEl?.querySelectorAll<HTMLElement>('button') ?? []).map(
-          (button) => button.getBoundingClientRect(),
-        ),
+        columnWidths,
+        rows,
+        dialogWidth: dialog.width,
+        viewport: window.innerWidth,
+        dialogOverflow: dialogEl.scrollWidth - dialogEl.clientWidth,
+        titleRight: titleRect.right,
+        titleHeight: titleRect.height,
+        closeLeft: close.left,
+        footerHeight: footer.getBoundingClientRect().height,
+        footerScrollWidth: footer.scrollWidth,
+        footerClientWidth: footer.clientWidth,
+        transferWidth: transferRect?.width ?? null,
+        transferOverflow: transfer && !transfer.hidden ? transfer.scrollWidth - transfer.clientWidth : 0,
       };
-    });
-    return { columnWidths, rows, dialogWidth: dialog.width, viewport: window.innerWidth };
-  }, [...longNames, shortAgentName]);
+    }, names);
 
-  expect(layout.dialogWidth).toBeLessThanOrEqual(layout.viewport + 1);
-  expect(layout.columnWidths).toHaveLength(2);
-  expect(layout.columnWidths[0]! / layout.columnWidths[1]!).toBeGreaterThan(1.35);
-
-  const longRows = layout.rows.filter((row) => longNames.includes(row.name));
-  expect(longRows).toHaveLength(3);
-  for (const row of layout.rows) {
-    expect(row.nameWidth).toBeGreaterThanOrEqual(180);
-    expect(row.nameWidth).toBeGreaterThanOrEqual(row.columnWidth * 0.5);
-    expect(row.actionsLeft).not.toBeNull();
-    expect(row.nameRight).toBeLessThanOrEqual(row.actionsLeft! - 3);
-    expect(row.roleTop).toBeGreaterThanOrEqual(row.nameBottom - 1);
-    expect(row.lineClamp).toBe('2');
-    expect(row.overflowWrap).toBe('anywhere');
-    expect(row.lines).toBeLessThanOrEqual(2);
-    expect(row.buttons.length).toBeGreaterThan(0);
-    expect(row.buttons.every((button) => button.width > 0 && button.height > 0)).toBe(true);
-    // 桌面操作按钮收窄为固定 28px，不再按文字内容撑宽。
-    expect(
-      row.buttons.every((button) => button.width <= 30 && button.height <= 30),
-    ).toBe(true);
-  }
-  for (const row of longRows) {
-    expect(row.lines).toBe(2);
-  }
-  // 超过两行的名字仍渲染两行并省略剩余内容。
-  expect(longRows.some((row) => row.truncated)).toBe(true);
-  for (const row of longRows.filter((visible) => visible.truncated)) {
-    expect(row.lines).toBe(2);
+  // 1280/1440 均应稳定在 1140px；左/右栏 3:2，名字列跟左栏一起变宽。
+  const layouts = [];
+  for (const width of [1280, 1440]) {
+    await page.setViewportSize({ width, height: 800 });
+    await expect
+      .poll(async () => Math.round((await page.locator('#members-modal').boundingBox())?.width ?? 0))
+      .toBe(1140);
+    layouts.push(await readLayout([...longNames, shortAgentName]));
   }
 
-  const shortRow = layout.rows.find((row) => row.name === shortAgentName)!;
-  expect(shortRow.lines).toBe(1);
+  for (const layout of layouts) {
+    expect(layout.dialogWidth).toBeGreaterThanOrEqual(1139);
+    expect(layout.dialogWidth).toBeLessThanOrEqual(1141);
+    expect(layout.dialogWidth).toBeLessThanOrEqual(layout.viewport - 80);
+    expect(layout.dialogOverflow).toBeLessThanOrEqual(1);
+    expect(layout.columnWidths).toHaveLength(2);
+    expect(layout.columnWidths[0]! / layout.columnWidths[1]!).toBeCloseTo(1.5, 1);
+    expect(layout.columnWidths[0]!).toBeGreaterThan(640);
+    expect(layout.columnWidths[1]!).toBeGreaterThan(420);
+    // 标题与关闭按钮同排；底部动作保持单行，不因加宽后字号/顺序变化而错位。
+    expect(layout.titleRight).toBeLessThan(layout.closeLeft);
+    expect(layout.titleHeight).toBeLessThanOrEqual(26);
+    expect(layout.footerHeight).toBeLessThanOrEqual(40);
+    expect(layout.footerScrollWidth).toBeLessThanOrEqual(layout.footerClientWidth + 1);
+    if (layout.transferWidth !== null) {
+      expect(layout.transferWidth).toBeLessThanOrEqual(layout.columnWidths[0]!);
+      expect(layout.transferOverflow).toBeLessThanOrEqual(1);
+    }
+
+    const longRows = layout.rows.filter((row) => longNames.includes(row.name));
+    expect(longRows).toHaveLength(3);
+    for (const row of layout.rows) {
+      expect(row.nameWidth).toBeGreaterThanOrEqual(480);
+      expect(row.nameWidth).toBeGreaterThanOrEqual(row.columnWidth * 0.7);
+      expect(row.actionsLeft).not.toBeNull();
+      expect(row.nameRight).toBeLessThanOrEqual(row.actionsLeft! - 3);
+      expect(row.roleTop).toBeGreaterThanOrEqual(row.nameBottom - 1);
+      expect(row.lineClamp).toBe('2');
+      expect(row.overflowWrap).toBe('anywhere');
+      expect(row.lines).toBeLessThanOrEqual(2);
+      expect(row.buttons.length).toBeGreaterThan(0);
+      expect(row.buttons.every((button) => button.width > 0 && button.height > 0)).toBe(true);
+      // 桌面操作按钮收窄为固定 28px，不再按文字内容撑宽。
+      expect(
+        row.buttons.every((button) => button.width <= 30 && button.height <= 30),
+      ).toBe(true);
+    }
+    for (const row of longRows) {
+      expect(row.lines).toBe(2);
+    }
+    // 超过两行的名字仍渲染两行并省略剩余内容。
+    expect(longRows.some((row) => row.truncated)).toBe(true);
+    for (const row of longRows.filter((visible) => visible.truncated)) {
+      expect(row.lines).toBe(2);
+    }
+
+    const shortRow = layout.rows.find((row) => row.name === shortAgentName)!;
+    expect(shortRow.lines).toBe(1);
+  }
 
   // 收缩后的操作按钮仍可点击：移除按钮打开确认框，取消后弹窗保留。
   await page.getByRole('button', { name: `移除 ${longNames[0]!}`, exact: true }).click();
@@ -477,6 +527,7 @@ test('群成员弹窗名字优先占宽，长名最多两行且操作按钮可�
   }, longNames[0]!);
 
   expect(mobile.overflow).toBeLessThanOrEqual(1);
+  expect(mobile.dialogWidth).toBe(390);
   expect(mobile.dialogWidth).toBeLessThanOrEqual(mobile.viewport + 1);
   expect(mobile.columns).toHaveLength(2);
   expect(mobile.columns[1]!.top).toBeGreaterThanOrEqual(
@@ -484,7 +535,7 @@ test('群成员弹窗名字优先占宽，长名最多两行且操作按钮可�
   );
   expect(mobile.buttons.length).toBeGreaterThan(0);
   expect(mobile.buttons.every((button) => button.height >= 44 && button.width >= 44)).toBe(true);
-  expect(mobile.nameWidth).toBeGreaterThan(0);
+  expect(mobile.nameWidth).toBeGreaterThanOrEqual(180);
   expect(mobile.nameRight).toBeLessThanOrEqual(mobile.actionsLeft - 3);
   expect(mobile.roleTop).toBeGreaterThanOrEqual(mobile.nameBottom - 1);
   expect(mobile.lines).toBe(2);

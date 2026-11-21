@@ -380,7 +380,7 @@ for (const width of [1280, 390]) {
         const scrollBefore = await page.evaluate(() => [document.body, document.documentElement].map((node) => node.style.cssText));
         await item.open(page);
         const dialog = await contract(page, item);
-        await expect.poll(async () => Math.round((await dialog.boundingBox())?.width ?? 0)).toBe(width === 390 ? 390 : item.name === 'ContactRequestsDialog' ? 760 : item.name === 'MembersDialog' ? 760 : ['MessageSearchDialog', 'MessageContextDialog'].includes(item.name) ? 680 : 440);
+        await expect.poll(async () => Math.round((await dialog.boundingBox())?.width ?? 0)).toBe(width === 390 ? 390 : item.name === 'ContactRequestsDialog' ? 760 : item.name === 'MembersDialog' ? 1140 : ['MessageSearchDialog', 'MessageContextDialog'].includes(item.name) ? 680 : 440);
         const box = (await dialog.boundingBox())!;
         if (width === 390) expect(box).toMatchObject({ x: 0, y: 0, height: 844 });
         else expect(Math.abs(box.x + box.width / 2 - 640)).toBeLessThan(1);
