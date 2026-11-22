@@ -1,5 +1,5 @@
 import {
-  cloneElement, createContext, useContext, useLayoutEffect, useRef, useState,
+  cloneElement, createContext, useContext, useEffect, useLayoutEffect, useRef, useState,
   type HTMLAttributes, type ReactElement, type ReactNode,
 } from 'react';
 import { createPortal, flushSync } from 'react-dom';
@@ -39,6 +39,7 @@ export function ContextMenu({
   onCloseAutoFocus, portalContainer,
 }: ContextMenuProps) {
   const [localOpen, setLocalOpen] = useState(false);
+  const [placed, setPlaced] = useState(false);
   const open = controlled ?? localOpen;
   const backend = useBackendLease(open);
   const module = useLenso();
@@ -80,12 +81,59 @@ export function ContextMenu({
   const show = (element: HTMLElement, x: number, y: number) => {
     origin.current = element;
     point.current = { x, y };
+    setPlaced(false);
     change(true);
   };
   const longPress = useLongPress((element, x, y) => {
     suppressClick.current = true;
     show(element, x, y);
   });
+
+  useEffect(() => {
+    if (!open) setPlaced(false);
+  }, [open]);
+
+  /**
+   * Lenso 打开 ContextMenu 时先按锚点画一帧，再在下一次定位把菜单翻到正确
+   * 方向；玻璃面与条目也会晚一帧才不透明。直接在首帧显示会看到菜单从错误
+   * 位置跳到最终位置（靠近底部的文件卡最明显）。
+   *
+   * 打开后先以 opacity 0 参与布局与焦点，等浮层矩形和 data-side 连续三帧
+   * 不变再显示。fallback 由适配器同步定位，不需要等待。
+   */
+  useLayoutEffect(() => {
+    if (!open || !lenso) {
+      setPlaced(true);
+      return undefined;
+    }
+    setPlaced(false);
+    let frame = 0;
+    let previous = '';
+    let stable = 0;
+    let attempts = 0;
+    const measure = () => {
+      const element = menu.current;
+      if (!element) {
+        if (++attempts >= 12) setPlaced(true);
+        else frame = requestAnimationFrame(measure);
+        return;
+      }
+      const rect = element.getBoundingClientRect();
+      const key = [
+        Math.round(rect.x), Math.round(rect.y), Math.round(rect.width), Math.round(rect.height),
+        element.getAttribute('data-side'),
+      ].join(',');
+      stable = key === previous ? stable + 1 : 1;
+      previous = key;
+      if ((rect.width > 0 && stable >= 3) || ++attempts >= 12) {
+        setPlaced(true);
+        return;
+      }
+      frame = requestAnimationFrame(measure);
+    };
+    frame = requestAnimationFrame(measure);
+    return () => cancelAnimationFrame(frame);
+  }, [open, lenso]);
 
   useLayoutEffect(() => {
     if (!open || !menu.current) return;
@@ -207,6 +255,7 @@ export function ContextMenu({
     {lenso ? <lenso.ContextMenu open modal="pointer" container={portalContainer?.() ?? document.body}
       onOpenChange={close}>
       <lenso.ContextMenu.Content {...contentProps} anchor={anchor} sideOffset={GAP}
+        style={{ ...contentProps.style, opacity: placed ? undefined : 0 }}
         collisionPadding={GAP} dim={false} finalFocus="none" render={<div className={className} />}>
         {children}
       </lenso.ContextMenu.Content>

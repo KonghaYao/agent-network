@@ -135,6 +135,34 @@ export function RoomRowMenu({
     retry: false,
     staleTime: 10_000,
   });
+  // 第一次右键时详情还在路上，菜单会先画 3 行“正在读取会话…”再长成完整
+  // 菜单，高度变化会让菜单在打开后明显跳动。鼠标通常先经过行再右键，
+  // 提前取一次详情可以让绝大多数首开直接是稳定高度；失败静默，打开时
+  // 仍由 detailQuery 重试并保留加载态。
+  useEffect(() => {
+    if (!token) return undefined;
+    const row = findRowElement(room.room_id);
+    if (!row) return undefined;
+    const prefetch = () => {
+      void queryClient.prefetchQuery({
+        queryKey: queryKeys.room(room.room_id),
+        queryFn: ({ signal }) =>
+          callTool<RoomDetail>(
+            'network_room_get',
+            { room_id: room.room_id },
+            { token, signal },
+          ),
+        retry: false,
+        staleTime: 10_000,
+      });
+    };
+    row.addEventListener('pointerenter', prefetch, { once: true });
+    row.addEventListener('focus', prefetch, { once: true });
+    return () => {
+      row.removeEventListener('pointerenter', prefetch);
+      row.removeEventListener('focus', prefetch);
+    };
+  }, [queryClient, room.room_id, token]);
   const detail = detailQuery.data ?? null;
   const roomView = detail?.room ?? null;
   const members = useMemo(

@@ -122,64 +122,71 @@
  * 去掉 popup 的 1px 描边：Lenso 的 0.5px inset edge 与 fallback 的
  * `border: 1px` 都会在浅色底上呈现为细边框。圆角保留；键盘 focus outline
  * 在条目的 :focus-visible 上，不受这里影响。
+ *
+ * 下拉菜单与右键菜单共用 Lenso Menu/ContextMenu；这里按 slot 覆盖全部
+ * 菜单，而不是逐个 id 枚举，新增菜单不会重新带回描边与首帧问题。
  */
-:is(
-  #room-menu, #message-action-menu, #account-menu, #attach-menu
-)[data-lenso-slot='menu-popup'],
-:is(
-  #room-menu, #message-action-menu, #account-menu, #attach-menu
-)[data-lenso-slot='menu-fallback'],
-:is(#room-row-menu, #message-context-menu)[data-lenso-slot='context-menu-layout'],
-:is(#room-row-menu, #message-context-menu)[data-lenso-slot='context-menu-fallback'],
+[data-lenso-slot='menu-popup'],
+[data-lenso-slot='menu-fallback'],
+[data-lenso-slot='context-menu-layout'],
+[data-lenso-slot='context-menu-fallback'],
 #memory-avatar-menu {
   border: 0 !important;
 }
 /*
  * Lenso ContextMenu 的根节点仍是 `.room-menu`，旧壳的 inset 0.5px 阴影
  * 就是截图里的细边框；fallback/账号/附件菜单同样用这条 Lenso 投影替换。
- * 只保留 drop shadow，不再叠加 inset 描边。
+ * 只保留 drop shadow，不再叠加 inset 描边。Lenso 下拉菜单继续使用材质
+ * 自带的投影，避免改变头部菜单既有的层次。
  */
-:is(#room-row-menu, #message-context-menu)[data-lenso-slot='context-menu-layout'],
-:is(#room-row-menu, #message-context-menu)[data-lenso-slot='context-menu-fallback'],
-:is(
-  #room-menu, #message-action-menu, #account-menu, #attach-menu
-)[data-lenso-slot='menu-fallback'],
+[data-lenso-slot='context-menu-layout'],
+[data-lenso-slot='context-menu-fallback'],
+[data-lenso-slot='menu-fallback'],
 #memory-avatar-menu {
   box-shadow: 0 12px 40px var(--lenso-material-control-shadow) !important;
 }
 /*
  * Lenso glass 在 `[data-material-lens]` 内追加 `canvas[data-lenso-live-rim]`，
  * 定位到菜单盒外侧 1px（宽高 +2px），CSS border 与 box-shadow 都覆盖不到，
- * 会在浅色/深色下留下单像素暗槽。只隐藏 rim canvas；玻璃层、圆角与投影保留。
+ * 会在浅色/深色下留下单像素暗槽。只隐藏菜单里的 rim canvas；玻璃层、
+ * 圆角与投影保留。
  */
-:is(
-  #room-menu, #message-action-menu, #account-menu, #attach-menu,
-  #room-row-menu, #message-context-menu, #memory-avatar-menu
-) [data-material-lens] canvas[data-lenso-live-rim] {
+[data-lenso-slot='menu-popup'] canvas[data-lenso-live-rim],
+[data-lenso-slot='context-menu-layout'] canvas[data-lenso-live-rim] {
   display: none !important;
 }
 /*
- * Lenso 右键菜单先按最终尺寸铺好玻璃面，再在动画后段淡入条目；玻璃面的
+ * Lenso 菜单先按最终尺寸铺好玻璃面，再在动画后段淡入条目；玻璃面的
  * backdrop-filter 首帧就会绘制，浅色下表现为一整块空白白板，深色下是同
- * 尺寸的暗块，肉眼就是一次瞬态闪烁。
+ * 尺寸的暗块，肉眼就是一次瞬态闪烁。下拉菜单（头部/账号/附件/消息操作）
+ * 与右键菜单走同一套 Lenso Menu 动画，必须统一覆盖，否则右键菜单修好、
+ * 左键菜单仍会闪。
  *
- * 覆盖 Lenso 写入 surface/content 的内联位移、模糊和透明度，让背景与条目
- * 同一时刻出现。定位、尺寸与命中区仍由 Lenso 与适配器的 position() 决定；
- * `!important` 只用于压过内联动画帧。
+ * 覆盖 Lenso 写入 surface/content 的内联位移、模糊、裁剪和透明度，让背景
+ * 与条目同一时刻出现。定位、尺寸与命中区仍由 Lenso 与适配器的 position()
+ * 决定；`!important` 只用于压过内联动画帧。
  *
  * 不给 popup 加整体淡入：投影挂在 layout 根节点上，popup 单独淡入时根节点
  * 会先画出一圈空白投影，仍是一帧“空菜单”。去掉动画后根节点与 popup 在
  * 同一帧合成，首帧就是完整菜单。
  */
-:is(#room-row-menu, #message-context-menu, #memory-avatar-menu)[data-lenso-slot='context-menu-layout']
-  > [data-lenso-slot='menu-popup'] > :is(
-    [data-lenso-slot='menu-surface'],
-    [data-lenso-slot='menu-content']
-  ) {
+:is([data-lenso-slot='menu-popup'], [data-lenso-slot='context-menu-layout'])
+  :is([data-lenso-slot='menu-surface'], [data-lenso-slot='menu-content']) {
   opacity: 1 !important;
   filter: none !important;
   transform: none !important;
   clip-path: none !important;
+}
+
+/*
+ * Lenso 的玻璃层是 surface 内的独立 lens 节点，透明度由 surface 上的
+ * `--lg-menu-surface-opacity` 驱动；只覆盖 surface 自身的 opacity 不够，
+ * 首帧仍会透出下面的文件卡/图片。这里同步把材质变量锁到 1，保证菜单出现
+ * 的那一帧就是完整玻璃面。
+ */
+[data-lenso-slot='menu-surface'] {
+  --lg-menu-surface-opacity: 1 !important;
+  --lenso-glass-face-opacity: 1 !important;
 }
 
 .mention-picker.spa-floating {

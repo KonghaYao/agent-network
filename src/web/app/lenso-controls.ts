@@ -540,8 +540,14 @@ export function Menu({
 
   const handleOpenChange = useCallback(
     (next: boolean, details?: MenuOpenChangeDetails) => {
-      // 重新打开时恢复可见；选中关闭导致的隐藏不能泄漏到下一次打开。
+      // 重新打开时恢复可见；关闭导致的隐藏不能泄漏到下一次打开。
       if (next) setInstantHidden(false);
+      else {
+        // Lenso 关闭后会保活 popup 播放约 300ms 的退场动画。右键或点击
+        // 另一个入口时，旧菜单会一边缩小/下移一边淡出，和新浮层叠在一起，
+        // 出现两层菜单文字与投影。关闭瞬间同步隐藏，退场动画保留但不绘制。
+        flushSync(() => setInstantHidden(true));
+      }
       onOpenChange(next, details);
       if (!next) restoreMenuFocus(triggerRef);
     },
