@@ -4157,7 +4157,7 @@ function runAutoMentionPlanChecks(): void {
   checkEqual('计划：回复时跳过 legacy 自动 @', replied.body, '接着处理');
   checkEqual('计划：回复时没有目标则省略 invoke', replied.invokeExplicit, false);
 
-  // 发送前兜底读取：只在已加载窗口无法确定“上一位成员”时需要回读服务端。
+  // 发送前兜底读取：只在已加载窗口落后于房间 head 时需要回读服务端。
   const presence: HistoryItem = {
     kind: 'presence',
     presence_event_id: 'presence_1',
@@ -4169,6 +4169,7 @@ function runAutoMentionPlanChecks(): void {
     timeline_seq: '60',
     time_basis: 'observed',
   };
+  const roomAt = (head: string): RoomView => ({ ...room, head_seq: head });
   const probe = (
     options: {
       body?: string;
@@ -4191,22 +4192,53 @@ function runAutoMentionPlanChecks(): void {
       items: options.items ?? [],
       hasReply: options.hasReply ?? false,
     });
-  check('探测：窗口为空时需要回读', probe());
+  check('探测：空窗口且 head 已推进时需要回读', probe({ room: roomAt('1') }));
   check(
-    '探测：窗口最后一条是自己时需要回读',
-    probe({ items: [planMessage(agentA.actor_id, '60'), planMessage(human.actor_id, '61')] }),
+    '探测：滞后窗口最后一条是自己时需要回读',
+    probe({
+      room: roomAt('62'),
+      items: [planMessage(agentA.actor_id, '60'), planMessage(human.actor_id, '61')],
+    }),
   );
   check(
-    '探测：窗口最后一条是其他成员时不需要回读',
-    !probe({ items: [planMessage(agentA.actor_id, '62')] }),
+    '探测：新鲜窗口最后一条是自己时不回读',
+    !probe({
+      room: roomAt('61'),
+      items: [planMessage(agentA.actor_id, '60'), planMessage(human.actor_id, '61')],
+    }),
+  );
+  check(
+    '探测：新鲜窗口最后一条是其他成员时不回读',
+    !probe({
+      room: roomAt('62'),
+      items: [planMessage(agentA.actor_id, '62')],
+    }),
+  );
+  check(
+    '探测：滞后窗口最后一条是旧成员时仍要回读',
+    probe({
+      room: roomAt('63'),
+      items: [planMessage(agentA.actor_id, '62')],
+    }),
   );
   check(
     '探测：presence 之后仍按最近一条消息判断',
-    !probe({ items: [planMessage(agentA.actor_id, '63'), presence] }),
+    !probe({
+      room: roomAt('63'),
+      items: [planMessage(agentA.actor_id, '63'), presence],
+    }),
   );
   check(
-    '探测：发送者不在成员列表时需要回读',
+    '探测：新鲜窗口发送者不在成员列表时不回读',
+    !probe({
+      room: roomAt('64'),
+      items: [planMessage('plan_unknown', '64')],
+    }),
+  );
+  check(
+    '探测：滞后窗口发送者不在成员列表时需要回读',
     probe({
+      room: roomAt('65'),
       items: [planMessage('plan_unknown', '64')],
     }),
   );
@@ -4223,7 +4255,11 @@ function runAutoMentionPlanChecks(): void {
   );
   check(
     '探测：回复状态不需要回读',
-    !probe({ hasReply: true, items: [planMessage(agentA.actor_id, '65')] }),
+    !probe({
+      hasReply: true,
+      room: roomAt('65'),
+      items: [planMessage(agentA.actor_id, '65')],
+    }),
   );
   check(
     '探测：Agent 身份不需要回读',
@@ -4239,7 +4275,7 @@ function runAutoMentionPlanChecks(): void {
   );
   check(
     '探测：空窗口附件仍先探测上一位再兜底维护员',
-    probe({ members: attachMembers }),
+    probe({ room: roomAt('1'), members: attachMembers }),
   );
 }
 

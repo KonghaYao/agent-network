@@ -222,6 +222,18 @@ async function recallOwnMessage(page: Page, messageId: string): Promise<void> {
   ).toBeVisible();
 }
 
+/** 撤回并断言墓碑在给定预算内出现；用于证明可选读取没有拖过窗口。 */
+async function recallWithin(page: Page, messageId: string, budgetMs: number): Promise<number> {
+  await openMessageMenu(page, messageId);
+  const started = Date.now();
+  await page.locator('#message-action-recall').click();
+  await page.locator('#confirm-dialog-ok').click();
+  await expect(
+    page.locator(`li.msg-system.msg-recalled[data-message-id="${messageId}"]`),
+  ).toBeVisible({ timeout: budgetMs });
+  return Date.now() - started;
+}
+
 /** 读取当前 actor 的撤回副本 message_id；key 规则与 `recalledDraftStorageKey` 一致。 */
 async function recalledDraftIds(page: Page, actorId: string): Promise<string[]> {
   return page.evaluate((key) => {
@@ -236,6 +248,71 @@ async function recalledDraftIds(page: Page, actorId: string): Promise<string[]> 
       return [];
     }
   }, `agent-network-recalled-drafts:v1:${actorId}`);
+}
+
+/**
+ * 注入撤回边界所需的客户端条件：把目标消息的 created_at 改老，
+ * 并可按需延迟 `network_message_read`。只改写历史响应，不动其他工具。
+ */
+async function ageMessageAndDelayRead(
+  page: Page,
+  options: { messageId: string; ageMs: number; readDelayMs?: number },
+): Promise<{ readCount: () => number }> {
+  const readMessageIds: string[] = [];
+  await page.route('**/mcp', async (route) => {
+    const request = route.request();
+    const name = request.headers()['mcp-name'];
+    if (name === 'network_message_read') {
+      const payload = request.postDataJSON() as {
+        params?: { arguments?: { message_id?: string } };
+      };
+      readMessageIds.push(payload.params?.arguments?.message_id ?? '');
+      if (options.readDelayMs) {
+        await new Promise((resolve) => setTimeout(resolve, options.readDelayMs));
+      }
+      try {
+        await route.continue();
+      } catch {
+        // 客户端已超时取消，路由可能随请求一起失效。
+      }
+      return;
+    }
+    if (name !== 'network_history_list') {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    const payload = (await response.json()) as {
+      result?: {
+        structuredContent?: {
+          timeline_items?: { message_id?: string; created_at?: string }[];
+        };
+      };
+    };
+    for (const item of payload.result?.structuredContent?.timeline_items ?? []) {
+      if (item.message_id === options.messageId) {
+        item.created_at = String(Date.now() - options.ageMs);
+      }
+    }
+    await route.fulfill({ response, json: payload });
+  });
+  return { readCount: () => readMessageIds.length };
+}
+
+/** 打开房间后重载一次，让注入的历史响应和读取延迟先生效。 */
+async function openAgedRoom(
+  browser: Browser,
+  base: string,
+  token: string,
+  roomId: string,
+  messageId: string,
+  options: { ageMs: number; readDelayMs?: number },
+): Promise<{ page: Page; close: () => Promise<void>; readCount: () => number }> {
+  const opened = await openRoom(browser, base, token, roomId);
+  const probe = await ageMessageAndDelayRead(opened.page, { messageId, ...options });
+  await opened.page.reload();
+  await expect(messageNode(opened.page, messageId)).toBeVisible();
+  return { ...opened, ...probe };
 }
 
 test.describe.serial('群主消息管理前端', () => {
@@ -955,6 +1032,82 @@ test.describe.serial('群主消息管理前端', () => {
       expect(await recalledDraftIds(page, room.actorMember)).toEqual([]);
     } finally {
       await close();
+    }
+  });
+
+  test('普通成员 119s 边界跳过读取并立即撤回', async ({ browser }) => {
+    const room = await createModerationRoom(base);
+    const body = `边界跳过读取 ${crypto.randomUUID().replaceAll('-', '').slice(0, 8)}`;
+    const messageId = await sendMessage(base, room.tokenMember, room.roomId, body);
+    const opened = await openAgedRoom(browser, base, room.tokenMember, room.roomId, messageId, {
+      ageMs: 119_000,
+      readDelayMs: 3_000,
+    });
+    try {
+      const elapsed = await recallWithin(opened.page, messageId, 2_500);
+      // 读取路由即使延迟 3s 也不会被调用；撤回在窗口内立即发出。
+      expect(opened.readCount()).toBe(0);
+      expect(elapsed).toBeLessThan(2_500);
+      expect(await recalledDraftIds(opened.page, room.actorMember)).toEqual([]);
+    } finally {
+      await opened.close();
+    }
+  });
+
+  test('普通成员剩余窗口 3s 时读取超时被压到 1s，撤回仍成功', async ({ browser }) => {
+    const room = await createModerationRoom(base);
+    const body = `边界读取超时 ${crypto.randomUUID().replaceAll('-', '').slice(0, 8)}`;
+    const messageId = await sendMessage(base, room.tokenMember, room.roomId, body);
+    const opened = await openAgedRoom(browser, base, room.tokenMember, room.roomId, messageId, {
+      ageMs: 117_000,
+      readDelayMs: 3_000,
+    });
+    try {
+      const elapsed = await recallWithin(opened.page, messageId, 2_500);
+      expect(opened.readCount()).toBe(1);
+      // 读取在 1s 超时后放弃，撤回没有被 3s 的读取延迟拖住。
+      expect(elapsed).toBeLessThan(2_500);
+      expect(await recalledDraftIds(opened.page, room.actorMember)).toEqual([]);
+    } finally {
+      await opened.close();
+    }
+  });
+
+  test('普通成员剩余窗口充足时仍读取并缓存原文', async ({ browser }) => {
+    const room = await createModerationRoom(base);
+    const body = `充足窗口仍读取 ${crypto.randomUUID().replaceAll('-', '').slice(0, 8)}`;
+    const messageId = await sendMessage(base, room.tokenMember, room.roomId, body);
+    const opened = await openAgedRoom(browser, base, room.tokenMember, room.roomId, messageId, {
+      ageMs: 100_000,
+    });
+    try {
+      await recallOwnMessage(opened.page, messageId);
+      expect(opened.readCount()).toBe(1);
+      await expect(
+        opened.page.locator(`[data-reedit-message-id="${messageId}"]`),
+      ).toBeVisible();
+      await expect.poll(() => recalledDraftIds(opened.page, room.actorMember)).toContain(messageId);
+    } finally {
+      await opened.close();
+    }
+  });
+
+  test('群主撤回超过两分钟的本人消息仍读取并缓存原文', async ({ browser }) => {
+    const room = await createModerationRoom(base);
+    const body = `群主超窗读取 ${crypto.randomUUID().replaceAll('-', '').slice(0, 8)}`;
+    const messageId = await sendMessage(base, room.tokenOwner, room.roomId, body);
+    const opened = await openAgedRoom(browser, base, room.tokenOwner, room.roomId, messageId, {
+      ageMs: 300_000,
+    });
+    try {
+      await recallOwnMessage(opened.page, messageId);
+      expect(opened.readCount()).toBe(1);
+      await expect(
+        opened.page.locator(`[data-reedit-message-id="${messageId}"]`),
+      ).toBeVisible();
+      await expect.poll(() => recalledDraftIds(opened.page, room.actorOwner)).toContain(messageId);
+    } finally {
+      await opened.close();
     }
   });
 });

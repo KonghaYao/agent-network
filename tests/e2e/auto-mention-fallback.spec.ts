@@ -280,6 +280,7 @@ test.describe('SPA group auto mention fallback', () => {
   let base = '';
   let humanToken = '';
   let agent: { token: string; actor: Actor } | null = null;
+  let newerAgent: { token: string; actor: Actor } | null = null;
   let groupRoomId = '';
 
   test.beforeAll(async () => {
@@ -300,11 +301,19 @@ test.describe('SPA group auto mention fallback', () => {
       agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
     });
     agent = { token, actor };
+    const newerToken = `ank_${crypto.randomUUID().replaceAll('-', '')}`;
+    const newerActor = await callTool<Actor>(base, newerToken, 'network_register', {
+      request_id: requestId('e2e_reg'),
+      kind: 'agent',
+      name: `兜底新 Agent ${suffix}`,
+      agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
+    });
+    newerAgent = { token: newerToken, actor: newerActor };
     const group = await callTool<RoomCreated>(base, humanToken, 'network_room_create', {
       request_id: requestId('e2e_group'),
       kind: 'group',
       title: `兜底提及群 ${suffix}`,
-      members: [actor.actor_id],
+      members: [actor.actor_id, newerActor.actor_id],
     });
     groupRoomId = group.room.room_id;
   });
@@ -436,6 +445,101 @@ test.describe('SPA group auto mention fallback', () => {
     const args = await sendAndCapture(page, marker);
     // 读取失败按现有窗口语义降级：不补 @，但消息必须发出。
     expect(args.body).toBe(marker);
+    await latestMessageId(base, humanToken, groupRoomId, marker);
+  });
+
+  test('fresh window ending with my own message neither probes nor mentions', async ({ page }) => {
+    const mine = `我的最新一条 ${Date.now()}`;
+    await callTool(base, humanToken, 'network_message_send', {
+      request_id: requestId('e2e_send'),
+      client_message_id: crypto.randomUUID(),
+      room_id: groupRoomId,
+      body: mine,
+      invoke: [],
+    });
+    await page.goto(`${base}/c/${groupRoomId}`);
+    await expect(page.locator('#messages .msg').filter({ hasText: mine })).toBeVisible();
+    const before = (await historyCalls(page)).filter((call) => call.probe).length;
+
+    const marker = `自身上一条发送 ${Date.now()}`;
+    const args = await sendAndCapture(page, marker);
+    expect(args.body).toBe(marker);
+    const after = (await historyCalls(page)).filter((call) => call.probe).length;
+    expect(after).toBe(before);
+  });
+
+  test('lagging window with an old Agent mentions the newest Agent', async ({ page }) => {
+    if (!agent || !newerAgent) throw new Error('fixture 未初始化');
+    // 先制造“旧 Agent 在窗口末尾、新 Agent 是服务端最新”，并在导航前注入
+    // 滞后窗口，避免依赖订阅刷新时序。
+    const oldLatest = `旧 Agent 窗口末尾 ${Date.now()}`;
+    await callTool(base, agent.token, 'network_message_send', {
+      request_id: requestId('e2e_send'),
+      client_message_id: crypto.randomUUID(),
+      room_id: groupRoomId,
+      body: oldLatest,
+      invoke: [],
+    });
+    const newLatest = `新 Agent 最新 ${Date.now()}`;
+    await callTool(base, newerAgent.token, 'network_message_send', {
+      request_id: requestId('e2e_send'),
+      client_message_id: crypto.randomUUID(),
+      room_id: groupRoomId,
+      body: newLatest,
+      invoke: [],
+    });
+    await page.addInitScript(() => {
+      (
+        window as unknown as { __historyWindowMode?: 'trim' | 'empty' | null }
+      ).__historyWindowMode = 'trim';
+    });
+    await page.goto(`${base}/c/${groupRoomId}`);
+    await expect(page.locator('#messages .msg').filter({ hasText: oldLatest })).toBeVisible();
+    await expect(page.locator('#messages .msg').filter({ hasText: newLatest })).toHaveCount(0);
+
+    const before = (await historyCalls(page)).filter((call) => call.probe).length;
+    const marker = `滞后旧成员发送 ${Date.now()}`;
+    const args = await sendAndCapture(page, marker);
+    expect(args.body).toBe(`${marker}\n@${newerAgent.actor.name}`);
+    const after = (await historyCalls(page)).filter((call) => call.probe).length;
+    expect(after - before).toBe(1);
+    await latestMessageId(base, humanToken, groupRoomId, marker);
+  });
+
+  test('lagging window whose newest message is mine probes once without mention', async ({ page }) => {
+    if (!agent) throw new Error('fixture 未初始化');
+    const oldLatest = `滞后窗口旧消息 ${Date.now()}`;
+    await callTool(base, agent.token, 'network_message_send', {
+      request_id: requestId('e2e_send'),
+      client_message_id: crypto.randomUUID(),
+      room_id: groupRoomId,
+      body: oldLatest,
+      invoke: [],
+    });
+    const myLatest = `服务端最新是我 ${Date.now()}`;
+    await callTool(base, humanToken, 'network_message_send', {
+      request_id: requestId('e2e_send'),
+      client_message_id: crypto.randomUUID(),
+      room_id: groupRoomId,
+      body: myLatest,
+      invoke: [],
+    });
+    // 窗口去掉最新一条后停在旧 Agent，但 head 指向自己的最新消息。
+    await page.addInitScript(() => {
+      (
+        window as unknown as { __historyWindowMode?: 'trim' | 'empty' | null }
+      ).__historyWindowMode = 'trim';
+    });
+    await page.goto(`${base}/c/${groupRoomId}`);
+    await expect(page.locator('#messages .msg').filter({ hasText: oldLatest })).toBeVisible();
+    await expect(page.locator('#messages .msg').filter({ hasText: myLatest })).toHaveCount(0);
+
+    const before = (await historyCalls(page)).filter((call) => call.probe).length;
+    const marker = `滞后最新自身发送 ${Date.now()}`;
+    const args = await sendAndCapture(page, marker);
+    expect(args.body).toBe(marker);
+    const after = (await historyCalls(page)).filter((call) => call.probe).length;
+    expect(after - before).toBe(1);
     await latestMessageId(base, humanToken, groupRoomId, marker);
   });
 });

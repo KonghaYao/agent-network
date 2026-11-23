@@ -670,16 +670,40 @@ export interface AutoMentionProbeInput {
   hasReply?: boolean;
 }
 
+/** 已加载消息窗口的最大 created_seq；presence 没有消息序号，不参与。 */
+function latestLoadedMessageSeq(items: HistoryItem[]): number {
+  let latest = 0;
+  for (const item of items) {
+    if (item.kind === 'presence') continue;
+    const seq = Number(item.created_seq);
+    if (Number.isFinite(seq) && seq > latest) latest = seq;
+  }
+  return latest;
+}
+
+/**
+ * 已加载窗口是否落后于房间 head。
+ *
+ * 窗口冻结在旧页、补读尚未完成或读取失败时，窗口里的“最后一条”不是房间
+ * 真正的最后一条；此时不能把它当成自动 @ 的权威答案。
+ */
+export function historyWindowLagsHead(room: RoomView | null, items: HistoryItem[]): boolean {
+  if (!room) return false;
+  const head = Number(room.head_seq);
+  if (!Number.isFinite(head) || head <= 0) return false;
+  return head > latestLoadedMessageSeq(items);
+}
+
 /**
  * 是否需要在发送前回读服务端最新一条消息。
  *
  * 已加载历史窗口是易失的：长时间挂起、恢复轮进行中、历史补读失败或只加载
- * 了旧页时，`items` 可能为空或停在发送者自己的上一条。只有此时才需要一次
- * 轻量回读；正文命中、选择器目标、回复状态与 Agent 身份都保持原语义。
+ * 了旧页时，`items` 可能为空或停在旧消息。只有窗口落后于 `room.head_seq`
+ * 时才回读一次；正文命中、选择器目标、回复状态与 Agent 身份保持原语义。
  *
- * `previousMemberMention` 返回空串既可能是“最后一条是自己”，也可能是窗口
- * 为空或发送者已不在成员列表。两种情况下都交给服务端确认，避免把滞后窗口
- * 当成权威答案；正文重名（空串）时不回读，保持“不猜”的规则。
+ * 新鲜窗口不探测：最后一条是自己时探测也只会得到自己，最后一条是其他成员
+ * 时窗口已能给出目标，两种情况都不需要额外请求。滞后窗口即使能给出旧成员
+ * 也必须回读，避免把旧 Agent 当成最新发送者。
  */
 export function needsLatestMentionProbe(input: AutoMentionProbeInput): boolean {
   const {
@@ -698,7 +722,7 @@ export function needsLatestMentionProbe(input: AutoMentionProbeInput): boolean {
   if (bodyHasAnyMention(body, members)) return false;
   if (bodyMemberMention(body, members, identityId) !== null) return false;
   if (resolvedSelectionCount(selections, members, body) > 0) return false;
-  return previousMemberMention(items, members, identityId) === '';
+  return historyWindowLagsHead(room, items);
 }
 
 /**
