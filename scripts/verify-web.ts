@@ -5189,7 +5189,7 @@ async function main(): Promise<void> {
           };
         })()`,
       )) as { cardWidth: number; columns: number[]; gap: string; addOutsideScroll: boolean };
-      checkEqual('成员弹窗宽度为 760px', Math.round(membersLayout.cardWidth), 760);
+      checkEqual('成员弹窗宽度为 1140px', Math.round(membersLayout.cardWidth), 1140);
       check(
         '成员弹窗双栏为 3:2',
         membersLayout.columns.length === 2 &&
