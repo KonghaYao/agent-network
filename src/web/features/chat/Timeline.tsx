@@ -61,6 +61,7 @@ interface TimelineProps {
   onOpenTask: (rootId: string, focusMessageId: string | null) => void;
   onOpenFile: (item: RoomFileItem) => void;
   onRecall: (item: HistoryMessage) => void;
+  onReedit: (item: HistoryMessage, body: string) => void;
   onSetPinned: (item: HistoryMessage, pinned: boolean) => void;
   pinnedMessageIds: ReadonlySet<string>;
   moderationBusy?: boolean;
@@ -96,6 +97,7 @@ export function Timeline({
   onOpenTask,
   onOpenFile,
   onRecall,
+  onReedit,
   onSetPinned,
   pinnedMessageIds,
   moderationBusy = false,
@@ -328,6 +330,7 @@ export function Timeline({
           onOpenTask={onOpenTask}
           onOpenFile={onOpenFile}
           onRecall={onRecall}
+          onReedit={onReedit}
           onSetPinned={onSetPinned}
           pinnedMessageIds={pinnedMessageIds}
           moderationBusy={moderationBusy}

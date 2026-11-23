@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { extractMessageFileLinks } from '../../contracts/file-links';
 import {
   createOutboxIntent,
   findReusableIntent,
@@ -18,7 +19,8 @@ import {
 } from '../lib/outbox-reconcile';
 import { currentIdentityEpoch } from '../lib/identity-epoch';
 import { callTool, type McpError } from '../lib/mcp-client';
-import type { SendResult, SendStatusItem } from '../lib/chat';
+import { messageBodyBytes, type SendResult, type SendStatusItem } from '../lib/chat';
+import { rememberRecalledDraft } from '../lib/recalled-drafts';
 import { useRecoveryState } from '../pwa/recovery';
 
 /**
@@ -30,8 +32,30 @@ import { useRecoveryState } from '../pwa/recovery';
 
 const STATUS_BATCH = 20;
 
+/**
+ * 重置/对账场景只有合成正文：含同源文件链接时不缓存，避免“重新编辑”
+ * 把附件 URL 带回输入框。直接发送仍使用用户在输入框里的纯文本。
+ */
+function cacheableRetryBody(body: string): string | null {
+  if (!body.trim()) return null;
+  const origin = typeof window === 'undefined' ? '' : window.location.origin;
+  if (origin && extractMessageFileLinks(body, origin).length > 0) return null;
+  return body;
+}
+
+function rememberCommitted(
+  actorId: string | null,
+  messageId: string | null | undefined,
+  body: string | null | undefined,
+): void {
+  if (!actorId || !messageId || !body) return;
+  rememberRecalledDraft(actorId, messageId, body);
+}
+
 interface SendInput {
   body: string;
+  /** 输入框里的纯文本（不含自动追加的正文/附件链接）；仅用于撤回后重新编辑。 */
+  draftBody: string;
   invoke: string[];
   mentions: string[];
   invokeExplicit: boolean;
@@ -158,6 +182,15 @@ export function useSendQueue({ actorId, token, roomId, onCommitted }: UseSendQue
         return;
       }
       const result = reconcileOutboxStatuses(itemsRef.current, pending, response.found);
+      // 响应丢失后确认已提交的消息也可能马上被撤回；正文只在纯文本时留存。
+      for (const intent of pending) {
+        const status = response.found.get(intent.client_message_id);
+        if (!status || status.room_id !== intent.room_id) continue;
+        if (!status.recalled && Number(status.body_bytes) !== messageBodyBytes(intent.body)) {
+          continue;
+        }
+        rememberCommitted(currentActor, status.message_id, cacheableRetryBody(intent.body));
+      }
       persist(result.items);
       if (result.found) committedRef.current('');
     } finally {
@@ -208,7 +241,7 @@ export function useSendQueue({ actorId, token, roomId, onCommitted }: UseSendQue
   );
 
   const submit = useCallback(
-    async (intent: OutboxIntent): Promise<SendOutcome> => {
+    async (intent: OutboxIntent, draftBody: string | null): Promise<SendOutcome> => {
       const accessToken = tokenRef.current;
       const currentActor = actorRef.current;
       const identityEpoch = currentIdentityEpoch();
@@ -245,6 +278,7 @@ export function useSendQueue({ actorId, token, roomId, onCommitted }: UseSendQue
           return { ok: false, error: '身份已变化，请刷新后重新核对发送结果' };
         }
         persist(markCommitted(intent, result));
+        rememberCommitted(currentActor, result.message?.message_id, draftBody);
         committedRef.current(result.message?.message_id ?? '');
         return { ok: true, error: null };
       } catch (error) {
@@ -287,13 +321,14 @@ export function useSendQueue({ actorId, token, roomId, onCommitted }: UseSendQue
           const status = response.found.get(reusable.client_message_id);
           if (status) {
             persist(applyFound(reusable, status));
+            rememberCommitted(actorRef.current, status.message_id, input.draftBody);
             committedRef.current(status.message_id ?? '');
             return { ok: true, error: null };
           }
         } else {
           return { ok: false, error: '暂时无法对账，请稍后重试' };
         }
-        return submit(reusable);
+        return submit(reusable, input.draftBody);
       }
       const intent = createOutboxIntent({
         roomId,
@@ -304,7 +339,7 @@ export function useSendQueue({ actorId, token, roomId, onCommitted }: UseSendQue
         replyTo: input.replyTo,
       });
       persist([...itemsRef.current, intent]);
-      return submit(intent);
+      return submit(intent, input.draftBody);
     },
     [applyFound, persist, queryStatus, roomId, submit],
   );
@@ -329,13 +364,14 @@ export function useSendQueue({ actorId, token, roomId, onCommitted }: UseSendQue
         const status = response.found.get(clientMessageId);
         if (status) {
           persist(applyFound(intent, status));
+          rememberCommitted(actorRef.current, status.message_id, cacheableRetryBody(intent.body));
           committedRef.current(status.message_id ?? '');
           return { ok: true, error: null };
         }
       } else {
         return { ok: false, error: '暂时无法对账，请稍后重试' };
       }
-      return submit(intent);
+      return submit(intent, cacheableRetryBody(intent.body));
     },
     [applyFound, persist, queryStatus, submit],
   );

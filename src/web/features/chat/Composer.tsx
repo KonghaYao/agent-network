@@ -51,6 +51,7 @@ import {
   type MentionQuery,
 } from '../../lib/mentions';
 import type { SendOutcome } from '../../hooks/useSendQueue';
+import { confirmDialog } from '../overlays/confirm';
 import { ComposerFileChip, type ComposerFile } from './ComposerFileChip';
 import { loadDrawboard } from './composer-drawboard';
 
@@ -89,6 +90,13 @@ export function mergeComposerDraft(current: string, request: string): string {
   return `${current.replace(/\s+$/u, '')}\n${request}`;
 }
 
+/** 撤回消息的原文恢复请求；actorId 防止切号后把旧身份正文带进新输入框。 */
+export interface ComposerRestoreDraft {
+  actorId: string;
+  messageId: string;
+  body: string;
+}
+
 interface ComposerProps {
   room: RoomView;
   members: Map<string, RoomMember>;
@@ -98,6 +106,10 @@ interface ComposerProps {
   draftRequest: ComposerDraftRequest | null;
   /** 草稿已消费；页面清空请求，避免 Composer 重挂载时再次注入。 */
   onDraftApplied: () => void;
+  /** 撤回后重新编辑：填入原文但不发送。 */
+  restoreDraft: ComposerRestoreDraft | null;
+  /** 恢复请求已处理；applied=false 表示用户取消或身份不匹配。 */
+  onRestoreApplied: (messageId: string, applied: boolean) => void;
   sending: boolean;
   onCancelReply: () => void;
   onSend: (input: ComposerSendInput) => Promise<SendOutcome>;
@@ -147,6 +159,8 @@ export function Composer({
   reply,
   draftRequest,
   onDraftApplied,
+  restoreDraft,
+  onRestoreApplied,
   sending,
   onCancelReply,
   onSend,
@@ -178,6 +192,7 @@ export function Composer({
   const autoCaretRef = useRef(false);
   const handledReplyRef = useRef<ComposerReply | null>(null);
   const handledDraftRef = useRef<ComposerDraftRequest | null>(null);
+  const handledRestoreRef = useRef<ComposerRestoreDraft | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composingRef = useRef(false);
   const compositionEndedAtRef = useRef(0);
@@ -324,6 +339,48 @@ export function Composer({
     setText(next);
     onDraftApplied();
   }, [draftRequest, onDraftApplied]);
+
+  /*
+   * 撤回后重新编辑：把本机留存的原文放回输入框，不自动发送。
+   * 同一请求对象只处理一次；已有非空内容时用现有确认弹窗询问替换，
+   * 取消则保持输入不变，也不移除缓存，用户之后还能再次进入。
+   */
+  useEffect(() => {
+    if (!restoreDraft || handledRestoreRef.current === restoreDraft) return;
+    handledRestoreRef.current = restoreDraft;
+    if (restoreDraft.actorId !== identity.actor_id) {
+      onRestoreApplied(restoreDraft.messageId, false);
+      return;
+    }
+    void (async () => {
+      const current = textareaRef.current?.value ?? textRef.current;
+      if (current.trim()) {
+        const confirmed = await confirmDialog({
+          title: '重新编辑',
+          message: '用撤回的消息替换当前输入？',
+          confirmText: '替换',
+        });
+        if (!confirmed || !mountedRef.current) {
+          if (mountedRef.current) onRestoreApplied(restoreDraft.messageId, false);
+          return;
+        }
+      }
+      if (!mountedRef.current) return;
+      setSelections([]);
+      setMention(null);
+      combobox.hide();
+      if ((textareaRef.current?.value ?? textRef.current) === restoreDraft.body) {
+        const element = textareaRef.current;
+        element?.focus();
+        const end = element?.value.length ?? 0;
+        element?.setSelectionRange(end, end);
+      } else {
+        autoCaretRef.current = true;
+        setText(restoreDraft.body);
+      }
+      onRestoreApplied(restoreDraft.messageId, true);
+    })();
+  }, [combobox, identity.actor_id, onRestoreApplied, restoreDraft]);
 
   useEffect(() => {
     saveDraft(key, text);

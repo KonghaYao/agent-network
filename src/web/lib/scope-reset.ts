@@ -1,6 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query';
 
 import { releasePreviewObjectUrls } from './preview-resources';
+import { clearRecalledDrafts } from './recalled-drafts';
 
 /**
  * 撤权/切号时的范围清理。
@@ -56,5 +57,7 @@ export function clearPrivateQueries(
 ): void {
   cancelAndRemove(queryClient, privatePredicate);
   releasePreviewObjectUrls();
+  // 撤回原文只在本标签页有效；身份边界一出现就必须丢弃，避免恢复时跨号残留。
+  clearRecalledDrafts(actorId);
   notifyScopeReset({ roomId: null, actorId });
 }

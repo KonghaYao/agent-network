@@ -202,6 +202,26 @@ async function closeMenu(page: Page): Promise<void> {
   await expect(page.locator('#message-action-menu')).toHaveCount(0);
 }
 
+/** 通过真实 Composer 发送，确保本机留存“发送成功”的原文副本。 */
+async function sendFromComposer(page: Page, body: string): Promise<string> {
+  await page.fill('#body', body);
+  await page.press('#body', 'Enter');
+  const row = page.locator('#messages [data-message-id]', { hasText: body }).last();
+  await expect(row).toBeVisible();
+  const messageId = await row.getAttribute('data-message-id');
+  if (!messageId) throw new Error('发送后缺少 message_id');
+  return messageId;
+}
+
+async function recallOwnMessage(page: Page, messageId: string): Promise<void> {
+  await openMessageMenu(page, messageId);
+  await page.locator('#message-action-recall').click();
+  await page.locator('#confirm-dialog-ok').click();
+  await expect(
+    page.locator(`li.msg-system.msg-recalled[data-message-id="${messageId}"]`),
+  ).toBeVisible();
+}
+
 test.describe.serial('群主消息管理前端', () => {
   let base = '';
 
@@ -694,6 +714,96 @@ test.describe.serial('群主消息管理前端', () => {
       await page.keyboard.press('Enter');
       await expect(page.locator('#pinned-list')).toBeVisible();
       await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    } finally {
+      await close();
+    }
+  });
+
+  test('本人撤回后可用行内按钮重新编辑，其他成员没有入口', async ({ browser }) => {
+    const room = await createModerationRoom(base);
+    const member = await openRoom(browser, base, room.tokenMember, room.roomId);
+    const owner = await openRoom(browser, base, room.tokenOwner, room.roomId);
+    try {
+      const body = `可重新编辑 ${crypto.randomUUID().replaceAll('-', '').slice(0, 8)}`;
+      const messageId = await sendFromComposer(member.page, body);
+      await recallOwnMessage(member.page, messageId);
+
+      const reedit = member.page.locator(`[data-reedit-message-id="${messageId}"]`);
+      await expect(reedit).toBeVisible();
+      await expect(reedit).toHaveText('重新编辑');
+
+      // 右键菜单提供同名入口。
+      await member.page
+        .locator(`li.msg-system.msg-recalled[data-message-id="${messageId}"]`)
+        .click({ button: 'right' });
+      const menuItem = member.page.locator('#message-action-reedit');
+      await expect(menuItem).toBeVisible();
+      await expect(menuItem).toHaveText('重新编辑');
+      await member.page.keyboard.press('Escape');
+      await expect(menuItem).toHaveCount(0);
+
+      // 同一房间的其他成员能看到墓碑，但没有本地原文入口。
+      await expect(
+        owner.page.locator(`li.msg-system.msg-recalled[data-message-id="${messageId}"]`),
+      ).toBeVisible();
+      await expect(owner.page.locator(`[data-reedit-message-id="${messageId}"]`)).toHaveCount(0);
+
+      await reedit.click();
+      await expect(member.page.locator('#body')).toHaveValue(body);
+      await expect(member.page.locator('#body')).toBeFocused();
+      const caret = await member.page.locator('#body').evaluate((element) => {
+        const area = element as HTMLTextAreaElement;
+        return {
+          start: area.selectionStart,
+          end: area.selectionEnd,
+          length: area.value.length,
+        };
+      });
+      expect(caret).toEqual({ start: body.length, end: body.length, length: body.length });
+      // 不自动发送；恢复成功后入口消失。
+      await expect(member.page.locator('#messages')).not.toContainText(body);
+      await expect(reedit).toHaveCount(0);
+    } finally {
+      await member.close();
+      await owner.close();
+    }
+  });
+
+  test('输入框非空时重新编辑先确认，取消不改输入', async ({ browser }) => {
+    const room = await createModerationRoom(base);
+    const { page, close } = await openRoom(browser, base, room.tokenMember, room.roomId);
+    try {
+      const body = `待替换原文 ${crypto.randomUUID().replaceAll('-', '').slice(0, 8)}`;
+      const messageId = await sendFromComposer(page, body);
+      await recallOwnMessage(page, messageId);
+      const reedit = page.locator(`[data-reedit-message-id="${messageId}"]`);
+      await expect(reedit).toBeVisible();
+
+      const draft = '正在写的草稿';
+      await page.fill('#body', draft);
+      await reedit.click();
+      await expect(page.locator('#confirm-dialog')).toBeVisible();
+      await expect(page.locator('#confirm-dialog-message')).toHaveText(
+        '用撤回的消息替换当前输入？',
+      );
+      await page.locator('#confirm-dialog-cancel').click();
+      await expect(page.locator('#confirm-dialog')).toHaveCount(0);
+      await expect(page.locator('#body')).toHaveValue(draft);
+      await expect(reedit).toBeVisible();
+
+      // 右键菜单走同一确认与替换逻辑。
+      await page
+        .locator(`li.msg-system.msg-recalled[data-message-id="${messageId}"]`)
+        .click({ button: 'right' });
+      await page.locator('#message-action-reedit').click();
+      await expect(page.locator('#confirm-dialog-message')).toHaveText(
+        '用撤回的消息替换当前输入？',
+      );
+      await page.locator('#confirm-dialog-ok').click();
+      await expect(page.locator('#body')).toHaveValue(body);
+      await expect(page.locator('#body')).toBeFocused();
+      await expect(reedit).toHaveCount(0);
+      await expect(page.locator('#messages')).not.toContainText(body);
     } finally {
       await close();
     }

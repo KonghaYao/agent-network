@@ -32,6 +32,12 @@ export const MODERATION_STYLE = `
     cursor: pointer; }
   .pinned-unpin:hover:not(:disabled) { background: var(--wx-hover); }
   .pinned-unpin:disabled { opacity: .55; cursor: not-allowed; }
+  /* 撤回墓碑旁的本机原文入口；只在本人且有缓存时渲染。 */
+  .msg-recalled { align-items: center; gap: 6px; flex-wrap: wrap; }
+  .msg-reedit { flex: 0 0 auto; padding: 3px 8px; border: 0; border-radius: 4px;
+    background: none; color: var(--wx-link); font-size: 11px; line-height: 18px;
+    cursor: pointer; }
+  .msg-reedit:hover, .msg-reedit:focus-visible { background: var(--wx-hover); }
   /* 暗色沿用 Lenso 语义变量；置顶区不需要单独覆盖颜色。 */
   @media (max-width: 759px) {
     .pinned-messages { padding: 0 8px 2px; }
