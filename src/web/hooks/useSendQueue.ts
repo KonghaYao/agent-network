@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { extractMessageFileLinks, MESSAGE_FILE_ID_SOURCE } from '../../contracts/file-links';
 import {
   createOutboxIntent,
   findReusableIntent,
@@ -20,7 +19,10 @@ import {
 import { currentIdentityEpoch } from '../lib/identity-epoch';
 import { callTool, type McpError } from '../lib/mcp-client';
 import { messageBodyBytes, type SendResult, type SendStatusItem } from '../lib/chat';
-import { rememberRecalledDraft } from '../lib/recalled-drafts';
+import {
+  cacheableRecalledDraftBody,
+  rememberRecalledDraft,
+} from '../lib/recalled-drafts';
 import { useRecoveryState } from '../pwa/recovery';
 
 /**
@@ -31,25 +33,6 @@ import { useRecoveryState } from '../pwa/recovery';
  */
 
 const STATUS_BATCH = 20;
-
-/**
- * 任意 origin / 相对路径的 `/f/<fileId>`。附件 `publicUrl` 由服务端按
- * `PUBLIC_ORIGIN` 生成，可能与页面 origin 不同；这里只要疑似文件链接就
- * 不缓存正文，宁可少一个“重新编辑”入口，也不把附件 URL 当纯文本恢复。
- */
-const FILE_LINK_ANY_ORIGIN = new RegExp(`/f/${MESSAGE_FILE_ID_SOURCE}(?![A-Za-z0-9_-])`, 'u');
-
-/**
- * 重置/对账场景只有合成正文：含文件链接时不缓存，避免“重新编辑”把附件
- * URL 带回输入框。直接发送仍使用用户在输入框里的纯文本。
- */
-function cacheableRetryBody(body: string): string | null {
-  if (!body.trim()) return null;
-  const origin = typeof window === 'undefined' ? '' : window.location.origin;
-  if (origin && extractMessageFileLinks(body, origin).length > 0) return null;
-  if (FILE_LINK_ANY_ORIGIN.test(body)) return null;
-  return body;
-}
 
 function rememberCommitted(
   actorId: string | null,
@@ -197,7 +180,7 @@ export function useSendQueue({ actorId, token, roomId, onCommitted }: UseSendQue
         if (!status.recalled && Number(status.body_bytes) !== messageBodyBytes(intent.body)) {
           continue;
         }
-        rememberCommitted(currentActor, status.message_id, cacheableRetryBody(intent.body));
+        rememberCommitted(currentActor, status.message_id, cacheableRecalledDraftBody(intent.body));
       }
       persist(result.items);
       if (result.found) committedRef.current('');
@@ -372,14 +355,14 @@ export function useSendQueue({ actorId, token, roomId, onCommitted }: UseSendQue
         const status = response.found.get(clientMessageId);
         if (status) {
           persist(applyFound(intent, status));
-          rememberCommitted(actorRef.current, status.message_id, cacheableRetryBody(intent.body));
+          rememberCommitted(actorRef.current, status.message_id, cacheableRecalledDraftBody(intent.body));
           committedRef.current(status.message_id ?? '');
           return { ok: true, error: null };
         }
       } else {
         return { ok: false, error: '暂时无法对账，请稍后重试' };
       }
-      return submit(intent, cacheableRetryBody(intent.body));
+      return submit(intent, cacheableRecalledDraftBody(intent.body));
     },
     [applyFound, persist, queryStatus, submit],
   );

@@ -4,12 +4,45 @@ import { LIMITS } from '../../contracts/limits';
 import { confirmDialog } from '../features/overlays/confirm';
 import type { HistoryMessage, PinnedMessage, RoomView } from '../lib/chat';
 import { callTool, type McpError } from '../lib/mcp-client';
+import { readFullMessageDetailed } from '../lib/message-body';
+import {
+  cacheableRecalledDraftBody,
+  readRecalledDraft,
+  RECALLED_DRAFT_BODY_MAX_BYTES,
+  rememberRecalledDraft,
+} from '../lib/recalled-drafts';
 import { newRequestId } from '../lib/request-id';
 import { setUpdateBusy } from '../pwa/update-busy';
 import { isUpdateWriteBlocked, useUpdateWriteBlocked } from '../pwa/update-store';
 import type { ModerationRefresh } from './useRoomChat';
 
 const UPDATE_BLOCKED_MESSAGE = '当前页面与服务器版本不兼容，请先更新后再操作。';
+
+/**
+ * 撤回前读取原文的短超时。
+ *
+ * 两分钟撤回窗口优先：读取只是“重新编辑”入口的增益，超时直接放弃缓存，
+ * 随后仍按原逻辑撤回，绝不因为读取慢而拖过窗口或报错。
+ */
+const RECALL_BODY_READ_TIMEOUT_MS = 1500;
+
+/** 读取本机没有副本的本人消息；任何失败都返回 null，不影响撤回。 */
+async function fetchRecallDraftBody(messageId: string, token: string): Promise<string | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), RECALL_BODY_READ_TIMEOUT_MS);
+  try {
+    const { text, truncated } = await readFullMessageDetailed(messageId, token, {
+      maxBytes: RECALLED_DRAFT_BODY_MAX_BYTES,
+      signal: controller.signal,
+    });
+    if (truncated) return null;
+    return cacheableRecalledDraftBody(text);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 interface UseRoomMessageModerationOptions {
   room: RoomView | null;
@@ -119,6 +152,16 @@ export function useRoomMessageModeration({
       if (busyRef.current) return;
       const key = begin('recall');
       try {
+        // 只有本人消息才抓取原文；群主撤回他人消息不得读取或缓存正文。
+        // 发送成功时已留存的副本直接复用，不再浪费一次读取。
+        if (
+          identityId &&
+          item.sender_id === identityId &&
+          readRecalledDraft(identityId, item.message_id) === null
+        ) {
+          const body = await fetchRecallDraftBody(item.message_id, token);
+          if (body) rememberRecalledDraft(identityId, item.message_id, body);
+        }
         await callTool(
           'network_message_recall',
           { request_id: newRequestId('web_recall'), message_id: item.message_id },
