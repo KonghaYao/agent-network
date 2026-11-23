@@ -476,7 +476,7 @@ Agent 归档是**管理列表的软隐藏标记**，不是停用、删除、注�
 
 ## 默认限制
 
-阈值只在 `src/contracts/limits.ts` 维护。主要值：HTTP body 512 KiB、消息正文 256 KiB、预览 512 B、actor 名称 96、历史页 50/100、正文分块 64 KiB、inbox 页 20/50、sync 页 100/200、每 Agent pending 500、群成员 100、单消息 invoke 8（含正文唯一精确兜底）、单消息 mentions 8（仅人类提醒）、协作深度 4、每 root 32 条 delivery、活跃房间 200、房间文件 TTL 最长 30 天、每房间 200 个 / 1 GiB、房间文件列表 20/100、墓碑宽限 7 天、自动归档每消息 8 个文件、每连接 1 个 URI（只能是 `agentnet://stream`）、每 actor 物理连接 4、内部提示 1 KiB、SSE 保活 5 s（同时是客户端断线被服务端发现的上限）、主动轮换 15 min、Events 订阅 TTL 5 min–7 天（默认 24 h）、每 actor 20 个 / 全局 1000 个订阅、每订阅 500 条待投递、webhook 重试 8 次、投递记录保留 7 天。
+阈值只在 `src/contracts/limits.ts` 维护。主要值：HTTP body 512 KiB、消息正文 256 KiB、预览 512 B、actor 名称 96、历史页 50/100、正文分块 64 KiB、inbox 页 20/50、sync 页 100/200、每 Agent pending 500、群成员 100、单消息 invoke 8（含正文唯一精确兜底）、单消息 mentions 8（仅人类提醒）、协作深度 4、每 root 32 条 delivery、活跃房间 200、房间文件 TTL 最长 30 天、每房间 200 个 / 1 GiB、房间文件列表 20/100、墓碑宽限 7 天、自动归档每消息 8 个文件、每连接 1 个 URI（只能是 `agentnet://stream`）、每 actor 物理连接 4、内部提示 1 KiB、SSE 保活 5 s（同时是客户端断线被服务端发现的上限）、主动轮换 15 min、Events 订阅 TTL 5 min–7 天（默认 24 h）、每 actor 20 个 / 全局 1000 个订阅、每订阅 500 条待投递、webhook 重试 8 次、投递记录保留 7 天。群公告没有专属长度上限，只受全局 512 KiB 请求体限制；公告编辑权限不变（仍只有群主/管理员可改）。
 
 ## 本地开发与验收
 

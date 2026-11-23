@@ -39,14 +39,9 @@ export const roomRenameFormSchema = z.object({
     .max(LIMITS.roomTitleMax, `群名不能超过 ${LIMITS.roomTitleMax} 个字符`),
 });
 
+/** 公告无专属长度上限；超长请求由全局 HTTP body 上限拒绝。 */
 export const announcementFormSchema = z.object({
-  announcement: z
-    .string()
-    .max(LIMITS.roomAnnouncementBytes * 2, '公告过长')
-    .refine(
-      (value) => byteLength(value) <= LIMITS.roomAnnouncementBytes,
-      `公告不能超过 ${LIMITS.roomAnnouncementBytes} 字节`,
-    ),
+  announcement: z.string(),
 });
 
 export const reportFormSchema = z.object({

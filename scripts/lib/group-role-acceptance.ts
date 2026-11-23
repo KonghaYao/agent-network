@@ -569,6 +569,41 @@ export async function runGroupRoleAcceptance(): Promise<void> {
       appointed.room.announcement_revision + 1,
     );
 
+    // 公告没有专属长度上限：远超 4 KiB 的正文仍可保存并由房间详情完整读回。
+    const longAnnouncement = `G03 长公告\n${'公告'.repeat(3_000)}`;
+    const longBytes = new TextEncoder().encode(longAnnouncement).byteLength;
+    check('长公告正文超过 4096 字节', longBytes > 4096, longBytes);
+    const longSet = await callTool<GroupRoomView>(
+      ownerConn.client,
+      'network_room_announcement_set',
+      {
+        request_id: newRequestId('g03_long_ann'),
+        room_id: roomId,
+        announcement: longAnnouncement,
+        expected_announcement_revision: announcement.room.announcement_revision,
+      },
+    );
+    checkEqual('超过 4096 字节的公告可以保存', longSet.room.announcement, longAnnouncement);
+    checkEqual(
+      '长公告字节数完整保留',
+      new TextEncoder().encode(longSet.room.announcement).byteLength,
+      longBytes,
+    );
+    const longRead = await callTool<GroupRoomView>(adminConn.client, 'network_room_get', {
+      room_id: roomId,
+    });
+    checkEqual('network_room_get 读回完整长公告', longRead.room.announcement, longAnnouncement);
+    await expectToolError(
+      '长公告保存后旧版本仍返回冲突',
+      callTool(adminConn.client, 'network_room_announcement_set', {
+        request_id: newRequestId('g03_stale_ann'),
+        room_id: roomId,
+        announcement: '覆盖旧版本',
+        expected_announcement_revision: announcement.room.announcement_revision,
+      }),
+      'VERSION_CONFLICT',
+    );
+
     const history = await callTool<RoleHistoryView>(
       adminConn.client,
       'network_room_role_history',

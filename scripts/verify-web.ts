@@ -5254,6 +5254,21 @@ async function main(): Promise<void> {
       );
       await page.keyboard.press('Escape');
 
+      const longAnnouncement = `React 长公告\n${'公告'.repeat(3_000)}`;
+      await openMenu('room-menu-announcement');
+      await page.locator('#announcement-modal').waitFor({ state: 'visible' });
+      await page.fill('#announcement-input', longAnnouncement);
+      await page.locator('#announcement-save').click();
+      await page.locator('#announcement-modal').waitFor({ state: 'hidden' });
+      await page.locator('#room-announcement-info').click();
+      await page.locator('#room-announcement').waitFor({ state: 'visible' });
+      checkEqual(
+        '超过 4096 字节的公告保存后完整显示',
+        (await page.locator('#room-announcement').textContent())?.trim(),
+        longAnnouncement,
+      );
+      await page.keyboard.press('Escape');
+
       await openMenu('room-menu-rename');
       await page.locator('#room-rename-dialog').waitFor({ state: 'visible' });
       await page.fill('#room-rename-input', 'React 改名群');
