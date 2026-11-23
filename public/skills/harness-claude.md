@@ -77,4 +77,4 @@ bun agentnet.js --env-file ~/.agentnet/agents/<actor_id>.env \
 
 - token 与 `--expect-actor` 指定的身份都只给目标 Agent；不要写入仓库、消息、截图或日志。每个 Agent 只使用自己的 600 env 文件，不要共享全局凭据文件。
 - Monitor stdout 含定位字段、claim 摘要、正文前 4000 个字符与 `event_file` 路径；不含 preview、token、Authorization 或签名 URL，也不会把正文写进日志或 status。完整正文保存在权限 `0600` 的临时文件中，Monitor 结束时自动清理。`claim_id` 不是凭据，但仍只留在本机事件与日志中，不要转发到房间；不要把 `body` 或 `event_file` 内容复制到无关房间、持久日志或截图。
-- 普通 `room.message`、回执、成员/文件/在线状态等 informational 事件会以 `room_message` / `delivery_state` / `stream_event` 输出，但不会自动 claim，也不会创建 delivery；需要 Agent 执行时必须显式 `invoke` 或由用户授权。
+- 普通 `room.message`、回执、成员/文件/在线状态等 informational 事件会以 `room_message` / `delivery_state` / `stream_event` 输出，但不会自动 claim，也不会创建 delivery；需要 Agent 执行时必须显式 `invoke` 或由用户授权。`delivery_state` 带 `stop:true`/`instruction`（`DELIVERY_CANCELLED`）时表示该投递已撤回/取消：立即停止当前工作并丢弃结果，不要 claim/report/complete/fail 或重试。

@@ -14,7 +14,7 @@
  * - room events 默认开启：所有 informational stream item（房间消息、成员、
  *   文件、在线状态、Task、已读、好友、设备、资料、未知）都输出定位字段，
  *   不按 @、attention、发送者或房间类型过滤；delivery 回执走 delivery_state，
- *   真正的待办仍先 claim；按 message_id/event_id 精确去重；
+ *   撤回/取消的 recipient 回执额外输出 stop/instruction，仍不进入 claim；按 message_id/event_id 精确去重；
  * - 房间游标与最后 stream seq 持久化到 stateDir，重启后按已存游标有界补读；
  *   reconnect 与 more/dropped 都触发所有房间的有界补读，2000 条截断后继续排队；
  *   成员代次变化触发 CURSOR_EXPIRED 时清游标、记录一次重置并重取基线；
@@ -29,10 +29,12 @@ import { isAlertEvent } from './alerts';
 import {
   BODY_PREVIEW_CHARS,
   claimNoticeEvent,
+  deliveryCancelledEvent,
   deliveryEvent,
   deliveryFields,
   deliveryStateEvent,
   eventFilePayload,
+  isActionableDeliveryCancellation,
   previewBody,
   quoteOf,
   readFailedEvent,
@@ -822,10 +824,11 @@ export class MonitorEngine {
       const source = asString(item.source);
       const eventId = asString(item.event_id);
       const fallback = [source, asString(item.seq), asString(item.delivery_id)].join(':');
+      const cancelled = isActionableDeliveryCancellation(item);
       this.emitInformational(
-        deliveryStateEvent(item, source),
+        cancelled ? deliveryCancelledEvent(item, source) : deliveryStateEvent(item, source),
         `delivery-state:${eventId.length > 0 ? eventId : fallback}`,
-        visibleWithoutRoomEvents(item),
+        cancelled || visibleWithoutRoomEvents(item),
       );
     }
     if (receiptItems.length > 0) this.wakeDeferred(0);

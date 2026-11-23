@@ -12,7 +12,8 @@
  * 投递语义：SSE 订阅 `agentnet://stream`，空闲时先 claim；工作中已有 claim
  * 时提示新消息并保留 pending，当前回合结束后依次领取处理；
  * deferred/conflict/claim_failed 分类记录；10 秒未结束的回合发送一次慢确认；
- * `delivery.reminder` 只提醒、不 claim。所有 informational stream item
+ * `delivery.reminder` 只提醒、不 claim；`delivery.cancelled` 是停止指令：
+ * 同一 activeTurn 立即 turn/steer，回合结束不 complete/fail。所有 informational stream item
  * （房间消息、成员、文件、在线状态、Task、回执等）都会记录；
  * `--no-room-events` 只关闭 informational 房间事件，投递、回执与提醒仍记录。
  * 不执行任何 `.sh`，也不依赖 Python。
@@ -22,7 +23,7 @@ import { join } from 'node:path';
 
 import { CliError, resolveConfig } from '../mcp';
 import { LIMITS } from '../../src/contracts/limits';
-import { asArray, asNumber, asRecord, asString } from '../output';
+import { asArray, asNumber, asRecord, asString, shorten } from '../output';
 import {
   attachmentOrigins,
   cleanupOldAttachments,
@@ -33,6 +34,8 @@ import {
 } from './attachments';
 import { abortableSleep, claimDelivery } from './engine';
 import {
+  deliveryCancelledInstruction,
+  isActionableDeliveryCancellation,
   quoteOf,
   visibleWithoutRoomEvents,
   type ClaimInfo,
@@ -139,6 +142,8 @@ class CodexWatcher {
   private readonly remindersSeen = new Map<string, string>();
   private readonly claimSkipped = new Map<string, number>();
   private readonly steered = new Map<string, JsonObject>();
+  /** 已收到停止指令的投递；回合结束时不得 complete/fail 或重新 claim。 */
+  private readonly cancelledDeliveries = new Set<string>();
 
   private connection: CodexConnection | null = null;
   private threadLock: WatcherLock | null = null;
@@ -335,6 +340,9 @@ class CodexWatcher {
         case 'reminder':
           await this.wakeReminder(event.item);
           break;
+        case 'cancelled':
+          await this.handleCancellation(event.item);
+          break;
         case 'info':
           this.logInfo(event.item);
           break;
@@ -428,6 +436,10 @@ class CodexWatcher {
       const item = asRecord(raw);
       const deliveryId = asString(item.delivery_id);
       const source = asString(item.source);
+      if (isActionableDeliveryCancellation(item)) {
+        this.events.push({ kind: 'cancelled', item });
+        continue;
+      }
       if (source === 'delivery.reminder' && deliveryId.length > 0) {
         this.events.push({ kind: 'reminder', item });
         continue;
@@ -505,7 +517,10 @@ class CodexWatcher {
     if (asString(item.source) === 'delivery.retried') {
       this.claimSkipped.delete(deliveryId);
       this.delivered.delete(deliveryId);
+      this.cancelledDeliveries.delete(deliveryId);
     }
+    // 已取消的投递不再进入待领队列；retried 会先清掉取消标记。
+    if (this.cancelledDeliveries.has(deliveryId)) return;
     const attemptKey = attempt ?? 0;
     if (this.claimSkipped.get(deliveryId) === attemptKey) return;
     const previous = this.delivered.get(deliveryId);
@@ -547,7 +562,19 @@ class CodexWatcher {
   private async finalizeTurn(turn: JsonObject): Promise<void> {
     const active = this.activeTurn;
     if (!active) return;
+    const cancelled = this.cancelledDeliveries.has(active.deliveryId);
     await this.cancelAck();
+    if (cancelled) {
+      // 服务端已把投递转为 cancelled；不再 complete/fail，也不重新 claim。
+      this.cancelledDeliveries.delete(active.deliveryId);
+      this.activeTurn = null;
+      this.finalMessage = null;
+      this.log(
+        `DELIVERY_CANCELLED delivery=${active.deliveryId} turn=${asString(turn.id)} ` +
+          'action=skip_finalize',
+      );
+      return;
+    }
     const finalMessage = this.finalMessage;
     try {
       if (asString(turn.status) === 'completed' && finalMessage !== null && finalMessage.length > 0) {
@@ -576,6 +603,45 @@ class CodexWatcher {
     }
     this.activeTurn = null;
     this.finalMessage = null;
+  }
+
+  /**
+   * 取消/撤回投递是停止指令，不是新任务。
+   *
+   * 先记录停止语义，再对正在执行的同一投递回合注入 turn/steer；
+   * 注入失败也保留事件与日志，由 turn/completed 的 skip_finalize 收口。
+   */
+  private async handleCancellation(item: JsonObject): Promise<void> {
+    const deliveryId = asString(item.delivery_id);
+    if (deliveryId.length === 0) return;
+    const attempt =
+      item.attempt === undefined || item.attempt === null ? '-' : String(asNumber(item.attempt, -1));
+    const instruction = deliveryCancelledInstruction(item);
+    this.outstanding.delete(deliveryId);
+    this.steered.delete(deliveryId);
+    this.notified.delete(deliveryId);
+    this.claimSkipped.delete(deliveryId);
+    this.cancelledDeliveries.add(deliveryId);
+    this.log(
+      `DELIVERY_CANCELLED delivery=${deliveryId} room=${asString(item.room_id) || '-'} ` +
+        `message=${asString(item.message_id) || '-'} attempt=${attempt} ` +
+        `reason=${shorten(asString(item.reason), 80) || '-'} stop=1 instruction=${instruction}`,
+    );
+
+    const active = this.activeTurn;
+    if (!active || active.deliveryId !== deliveryId) return;
+    await this.cancelAck();
+    try {
+      await this.requireConnection().call('turn/steer', {
+        threadId: this.threadId,
+        expectedTurnId: active.turnId,
+        input: [{ type: 'text', text: instruction }],
+      });
+      this.log(`RECALL_STOP_STEERED delivery=${deliveryId} turn=${active.turnId}`);
+    } catch (error) {
+      if (error instanceof MonitorFatalError) throw error;
+      this.log(`ERROR recall_stop_steer_failed delivery=${deliveryId} turn=${active.turnId}`);
+    }
   }
 
   private async wakeReminder(item: JsonObject): Promise<void> {

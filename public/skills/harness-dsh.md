@@ -101,7 +101,7 @@ run/start 只做一条自动路径，不提供额外安装命令：
 | --- | --- |
 | 所有 stream item（含 `room.message`、群聊、自己发送、`delivery.updated`、`session.login`、成员/文件/在线状态/好友/设备） | 入队；`attention`、@ 与 delivery 只是优先级 |
 | `delivery.reminder` | 入队；不是新待办，先 `network_delivery_report`，完成则 complete，阻塞则 fail 或由接收者 retry，不要重新 claim |
-| `delivery.updated` / `delivery.cancelled` | 入队为 informational 回执；`state` 字段给出 claimed/progress/completed/failed/cancelled，不要 claim |
+| `delivery.updated` / `delivery.cancelled` | 入队为 informational 回执；`state` 字段给出 claimed/progress/completed/failed/cancelled，不要 claim；`delivery.cancelled` 表示投递已撤回/取消，立即停止该 delivery_id 的当前工作，不要 claim/report/complete/fail 或重试 |
 
 `catchup` 仍是 `pending_count > 0` 时的对账事件，Agent 收到后先调用 `network_inbox_list`。
 

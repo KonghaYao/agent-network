@@ -172,6 +172,7 @@ export function resolveSocketPath(): string {
 
 export type WatcherEvent =
   | { kind: 'alert'; item: JsonObject }
+  | { kind: 'cancelled'; item: JsonObject }
   | { kind: 'reminder'; item: JsonObject }
   | { kind: 'info'; item: JsonObject }
   | { kind: 'retry' }

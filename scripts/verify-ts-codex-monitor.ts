@@ -401,6 +401,30 @@ function notificationItem(
   };
 }
 
+function cancellationItem(
+  deliveryId: string,
+  options: {
+    attempt?: number;
+    reason?: string;
+    attention?: 'action_required' | 'informational';
+  } = {},
+): JsonObject {
+  return {
+    source: 'delivery.cancelled',
+    kind: 'receipt',
+    attention: options.attention ?? 'action_required',
+    delivery_id: deliveryId,
+    room_id: 'rm_test',
+    message_id: `msg_${deliveryId}`,
+    attempt: options.attempt ?? 0,
+    reason: options.reason ?? 'message_recalled',
+    state: 'cancelled',
+    seq: '9',
+    event_id: `evt_${deliveryId}_cancelled`,
+    created_at: new Date().toISOString(),
+  };
+}
+
 interface CodexMockState {
   threads: string[];
   status: 'idle' | 'active';
@@ -1211,6 +1235,122 @@ async function runSteerChecks(): Promise<void> {
   }
 }
 
+async function runRecallStopChecks(): Promise<void> {
+  const fixture = await createFixture('recall-stop');
+  try {
+    await waitForLine(fixture.watcher.stdout, (line) => line.startsWith('READY actor='), 'READY');
+
+    fixture.mcp.state.pending.set('dlv_recall', makeDelivery('dlv_recall'));
+    fixture.mcp.sendItems([notificationItem('dlv_recall')]);
+    await waitForLine(
+      fixture.watcher.stdout,
+      (line) => line.startsWith('TURN_STARTED delivery=dlv_recall'),
+      'RECALL TURN_STARTED',
+    );
+
+    // 非 active 投递的取消只记录停止语义，不向当前回合 steer。
+    fixture.mcp.sendItems([cancellationItem('dlv_other')]);
+    const otherLog = await waitForLine(
+      fixture.watcher.stdout,
+      (line) =>
+        line.startsWith('DELIVERY_CANCELLED delivery=dlv_other') && line.includes('stop=1'),
+      'OTHER CANCELLED LOG',
+    );
+    check('非 active 取消也输出停止语义', otherLog.includes('instruction=DELIVERY_CANCELLED'), otherLog);
+    checkEqual('非 active 取消不 steer', fixture.codex.steerTexts.length, 0);
+
+    // activeTurn.deliveryId 匹配：立即 turn/steer。
+    fixture.mcp.sendItems([cancellationItem('dlv_recall', { attempt: 1 })]);
+    const recallLog = await waitForLine(
+      fixture.watcher.stdout,
+      (line) => line.startsWith('DELIVERY_CANCELLED delivery=dlv_recall'),
+      'RECALL CANCELLED LOG',
+    );
+    check('撤回取消日志带定位字段', recallLog.includes('message=msg_dlv_recall') &&
+      recallLog.includes('attempt=1') &&
+      recallLog.includes('reason=message_recalled'), recallLog);
+    await waitForLine(
+      fixture.watcher.stdout,
+      (line) => line.startsWith('RECALL_STOP_STEERED delivery=dlv_recall'),
+      'RECALL STOP STEERED',
+    );
+    checkEqual('撤回停止只 steer 一次', fixture.codex.steerTexts.length, 1);
+    const stopText = fixture.codex.steerTexts[0] ?? '';
+    check(
+      '停止 steer 含定位字段',
+      stopText.includes('delivery_id=dlv_recall') &&
+        stopText.includes('room_id=rm_test') &&
+        stopText.includes('message_id=msg_dlv_recall') &&
+        stopText.includes('attempt=1'),
+      stopText,
+    );
+    check(
+      '停止 steer 含停止语义',
+      stopText.includes('DELIVERY_CANCELLED') &&
+        stopText.includes('消息已撤回') &&
+        stopText.includes('立即停止') &&
+        stopText.includes('不要发送回复') &&
+        stopText.includes('不要 claim/report/complete/fail'),
+      stopText,
+    );
+
+    fixture.codex.completeTurn('被撤回的最终答复');
+    await waitForLine(
+      fixture.watcher.stdout,
+      (line) =>
+        line.startsWith('DELIVERY_CANCELLED delivery=dlv_recall') &&
+        line.includes('action=skip_finalize'),
+      'RECALL SKIP FINALIZE',
+    );
+    await Bun.sleep(300);
+    checkEqual('撤回投递不 complete', fixture.mcp.completed.length, 0);
+    checkEqual('撤回投递不 fail', fixture.mcp.failed.length, 0);
+    checkEqual('撤回投递不重复 claim', fixture.mcp.state.claimCalls.get('dlv_recall'), 1);
+    // 真实服务端在撤回时已把投递转为 cancelled；mock 需要同步释放这条 claim。
+    fixture.mcp.state.claims.delete('dlv_recall');
+
+    // turn/steer 失败时仍保留停止事件与语义，回合结束同样不 complete/fail。
+    fixture.mcp.state.pending.set('dlv_recall_fail', makeDelivery('dlv_recall_fail'));
+    fixture.mcp.sendItems([notificationItem('dlv_recall_fail')]);
+    await waitForLine(
+      fixture.watcher.stdout,
+      (line) => line.startsWith('TURN_STARTED delivery=dlv_recall_fail'),
+      'RECALL FAIL TURN_STARTED',
+    );
+    fixture.codex.state.failNextSteer = true;
+    fixture.mcp.sendItems([cancellationItem('dlv_recall_fail')]);
+    const failedStopLog = await waitForLine(
+      fixture.watcher.stdout,
+      (line) =>
+        line.startsWith('DELIVERY_CANCELLED delivery=dlv_recall_fail') && line.includes('stop=1'),
+      'RECALL FAIL CANCELLED LOG',
+    );
+    check(
+      'steer 失败仍输出停止语义',
+      failedStopLog.includes('instruction=DELIVERY_CANCELLED'),
+      failedStopLog,
+    );
+    await waitForLine(
+      fixture.watcher.stdout,
+      (line) => line.startsWith('ERROR recall_stop_steer_failed delivery=dlv_recall_fail'),
+      'RECALL FAIL STEER ERROR',
+    );
+    fixture.codex.completeTurn('steer 失败回合答复');
+    await waitForLine(
+      fixture.watcher.stdout,
+      (line) =>
+        line.startsWith('DELIVERY_CANCELLED delivery=dlv_recall_fail') &&
+        line.includes('action=skip_finalize'),
+      'RECALL FAIL SKIP FINALIZE',
+    );
+    await Bun.sleep(300);
+    checkEqual('steer 失败仍不 complete', fixture.mcp.completed.length, 0);
+    checkEqual('steer 失败仍不 fail', fixture.mcp.failed.length, 0);
+  } finally {
+    await fixture.stop();
+  }
+}
+
 async function runDeferredChecks(): Promise<void> {
   const fixture = await createFixture('deferred');
   try {
@@ -1800,6 +1940,8 @@ async function main(): Promise<void> {
   await runMemoryOffChecks();
   console.log('TS codex monitor: active steer');
   await runSteerChecks();
+  console.log('TS codex monitor: recall stop');
+  await runRecallStopChecks();
   console.log('TS codex monitor: deferred + slow ack');
   await runDeferredChecks();
   console.log('TS codex monitor: reminders');

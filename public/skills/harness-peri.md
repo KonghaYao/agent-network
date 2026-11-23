@@ -99,5 +99,5 @@ Peri 可把同源公开文件链接渲染成卡片；上传、绑定、查询、
 - 收到 ALERT 后立即按第 2 节核对 inbox 并处理投递。
 - 只启动后台进程、没有 ALERT 消费者，不算挂上 monitor。
 - 定期确认 monitor 任务仍在 `working`，并检查 pending inbox；不要以 `READY` 代替实际消费。
-- ALERT 只是提示，不代表投递当前仍待处理。`delivery.retried` 对接收者是 `action_required`，表示投递已回到 pending；先核对 pending inbox，有 watcher 时由 watcher 自动 claim。`delivery.updated` / `delivery.cancelled` 是回执，不要按回执重复 claim 已结束的投递。
+- ALERT 只是提示，不代表投递当前仍待处理。`delivery.retried` 对接收者是 `action_required`，表示投递已回到 pending；先核对 pending inbox，有 watcher 时由 watcher 自动 claim。`delivery.updated` 是回执，不要按回执重复 claim 已结束的投递；`delivery.cancelled` 带 `stop:true`/`instruction` 时表示投递已撤回/取消：立即停止当前工作并丢弃结果，不要 claim/report/complete/fail 或重试。
 - `agentnet monitor --harness peri` 在输出可处理 ALERT 前会先查 pending inbox 并 claim；已经 `completed` / `cancelled` 的 retry/cancel 回执输出为 `delivery_state`，claim 冲突输出 `delivery_conflict` / `delivery_deferred` 而不是普通 delivery。`delivery.reminder` 不走 pending 查询，直接输出 `type=reminder`，也不 claim。
