@@ -542,4 +542,85 @@ test.describe('SPA group auto mention fallback', () => {
     expect(after - before).toBe(1);
     await latestMessageId(base, humanToken, groupRoomId, marker);
   });
+
+  test('refresh in flight with a stale window probes the newest Agent', async ({ page }) => {
+    if (!agent || !newerAgent) throw new Error('fixture 未初始化');
+    // 旧 Agent 的消息先进入页面窗口；此时 room.head_seq 与窗口最大 seq 一致。
+    const oldLatest = `刷新竞态旧消息 ${Date.now()}`;
+    await callTool(base, agent.token, 'network_message_send', {
+      request_id: requestId('e2e_send'),
+      client_message_id: crypto.randomUUID(),
+      room_id: groupRoomId,
+      body: oldLatest,
+      invoke: [],
+    });
+    await page.goto(`${base}/c/${groupRoomId}`);
+    await expect(page.locator('#messages .msg').filter({ hasText: oldLatest })).toBeVisible();
+
+    // 模拟恢复轮/慢刷新：房间详情与完整历史页延迟 5s。兜底读取（limit<=5）
+    // 保持原速，验证的是“窗口不可信时仍会探测”，不是探测本身的超时路径。
+    let heldRefreshes = 0;
+    const pendingReleases = new Set<() => void>();
+    const hold = () =>
+      new Promise<void>((resolve) => {
+        const done = () => {
+          pendingReleases.delete(done);
+          resolve();
+        };
+        pendingReleases.add(done);
+        setTimeout(done, 5_000);
+      });
+    await page.route('**/mcp', async (route) => {
+      const request = route.request();
+      const name = request.headers()['mcp-name'];
+      let limit: number | null = null;
+      if (name === 'network_history_list') {
+        try {
+          const payload = request.postDataJSON() as {
+            params?: { arguments?: { limit?: unknown } };
+          };
+          const value = payload.params?.arguments?.limit;
+          limit = typeof value === 'number' ? value : null;
+        } catch {
+          limit = null;
+        }
+      }
+      const refreshRead =
+        name === 'network_room_get' || (name === 'network_history_list' && (limit ?? 50) > 5);
+      try {
+        if (refreshRead) {
+          heldRefreshes += 1;
+          await hold();
+        }
+        await route.continue();
+      } catch {
+        // 页面已关闭或客户端已取消。
+      }
+    });
+
+    const newLatest = `刷新竞态新消息 ${Date.now()}`;
+    await callTool(base, newerAgent.token, 'network_message_send', {
+      request_id: requestId('e2e_send'),
+      client_message_id: crypto.randomUUID(),
+      room_id: groupRoomId,
+      body: newLatest,
+      invoke: [],
+    });
+    try {
+      // 等到刷新请求真的在途：此时详情与历史都在重读，窗口停在旧消息。
+      await expect.poll(() => heldRefreshes).toBeGreaterThan(0);
+      await expect(page.locator('#messages .msg').filter({ hasText: newLatest })).toHaveCount(0);
+
+      const before = (await historyCalls(page)).filter((call) => call.probe).length;
+      const marker = `刷新竞态发送 ${Date.now()}`;
+      const args = await sendAndCapture(page, marker);
+      expect(args.body).toBe(`${marker}\n@${newerAgent.actor.name}`);
+      expect(String(args.body)).not.toContain(`@${agent.actor.name}`);
+      const after = (await historyCalls(page)).filter((call) => call.probe).length;
+      expect(after - before).toBe(1);
+      await latestMessageId(base, humanToken, groupRoomId, marker);
+    } finally {
+      for (const release of [...pendingReleases]) release();
+    }
+  });
 });

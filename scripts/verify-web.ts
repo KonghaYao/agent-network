@@ -4179,6 +4179,7 @@ function runAutoMentionPlanChecks(): void {
       identityKind?: 'human' | 'agent';
       room?: RoomView;
       hasReply?: boolean;
+      historyStale?: boolean;
       selections?: { actor_id: string; name: string; kind: 'human' | 'agent' }[];
     } = {},
   ) =>
@@ -4191,6 +4192,7 @@ function runAutoMentionPlanChecks(): void {
       selections: options.selections ?? [],
       items: options.items ?? [],
       hasReply: options.hasReply ?? false,
+      historyStale: options.historyStale ?? false,
     });
   check('探测：空窗口且 head 已推进时需要回读', probe({ room: roomAt('1') }));
   check(
@@ -4276,6 +4278,40 @@ function runAutoMentionPlanChecks(): void {
   check(
     '探测：空窗口附件仍先探测上一位再兜底维护员',
     probe({ room: roomAt('1'), members: attachMembers }),
+  );
+  // 恢复轮/刷新进行中：detail 与窗口可能同时停在旧值，head 与窗口一致也不能
+  // 把窗口里的“最后一条”当成权威答案。
+  check(
+    '探测：恢复/刷新中 head 与窗口一致也要回读',
+    probe({
+      room: roomAt('66'),
+      items: [planMessage(agentA.actor_id, '66')],
+      historyStale: true,
+    }),
+  );
+  check(
+    '探测：恢复/刷新中最后一条是自己也回读，交由回读结果判断',
+    probe({
+      room: roomAt('67'),
+      items: [planMessage(human.actor_id, '67')],
+      historyStale: true,
+    }),
+  );
+  check(
+    '探测：恢复/刷新中正文已有有效 @ 仍不回读',
+    !probe({ body: '请 正文命中 Agent 处理', historyStale: true }),
+  );
+  check(
+    '探测：恢复/刷新中回复状态仍不回读',
+    !probe({ hasReply: true, historyStale: true }),
+  );
+  // 回读结果（或新鲜窗口）最新一条是自己时不补 @，保持保守语义。
+  checkEqual(
+    '计划：最新一条是自己时不补 @',
+    plan('接着处理', {
+      items: [planMessage(agentA.actor_id, '68'), planMessage(human.actor_id, '69')],
+    }).body,
+    '接着处理',
   );
 }
 

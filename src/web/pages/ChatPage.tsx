@@ -451,9 +451,15 @@ export function ChatPage({ roomId }: ChatPageProps) {
         hasReply: Boolean(reply?.messageId),
       };
       let plan = buildSendPlan(planInput);
-      // 已加载窗口可能因长时间挂起/恢复轮/补读失败而滞后：只在这种情况下
-      // 回读最近一条确认上一位发送者；失败或超时沿用当前窗口直接发送。
-      if (!plan.error && token && needsLatestMentionProbe(planInput)) {
+      // 已加载窗口可能因长时间挂起/恢复轮/刷新/补读失败而滞后：这些阶段
+      // 详情与窗口可能同时停在旧值，只比较 head 与窗口看不出来。回读最近
+      // 一条确认上一位发送者；失败或超时沿用当前窗口直接发送。
+      const historyStale = chat.historyStale || recovery.phase === 'checking';
+      if (
+        !plan.error &&
+        token &&
+        needsLatestMentionProbe({ ...planInput, historyStale })
+      ) {
         const latest = await readLatestMentionItems({ token, roomId });
         if (latest) {
           const recovered = buildSendPlan({ ...planInput, items: latest });
@@ -485,7 +491,19 @@ export function ChatPage({ roomId }: ChatPageProps) {
       }
       return outcome;
     },
-    [room, identity, members, chat.items, queue, reply, refresh, token, roomId],
+    [
+      room,
+      identity,
+      members,
+      chat.items,
+      chat.historyStale,
+      recovery.phase,
+      queue,
+      reply,
+      refresh,
+      token,
+      roomId,
+    ],
   );
 
   const onRetryOutbox = useCallback(

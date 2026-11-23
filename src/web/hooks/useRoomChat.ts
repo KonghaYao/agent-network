@@ -55,6 +55,14 @@ export interface RoomChatState {
   olderEnded: boolean;
   hasOlder: boolean;
   catchUp: HistoryCatchUpView | null;
+  /**
+   * 房间详情或历史正在重读、或历史补读进行中。
+   *
+   * 这些阶段 `room.head_seq` 与已加载窗口可能同时停在旧值，仅比较两者
+   * 无法判断窗口是否可信；调用方只在自动 @ 的兜底判断里使用该信号，
+   * 不据此阻塞发送。
+   */
+  historyStale: boolean;
 }
 
 export interface HistoryCatchUpView {
@@ -884,6 +892,10 @@ export function useRoomChat(roomId: string, options: RoomChatOptions = {}) {
 
   const detail = detailQuery.data ?? null;
   const history = historyQuery.data ?? null;
+  const historyStale =
+    detailQuery.isFetching ||
+    historyQuery.isFetching ||
+    history?.catchUp?.active === true;
   const fatal =
     sessionState.status === 'logged-out' ||
     sessionState.status === 'credential-invalid' ||
@@ -919,6 +931,7 @@ export function useRoomChat(roomId: string, options: RoomChatOptions = {}) {
     olderEnded: history?.olderEnded ?? false,
     hasOlder: Boolean(history?.nextOlder),
     catchUp: history?.catchUp ?? null,
+    historyStale,
     load,
     refresh,
     refreshModeration,

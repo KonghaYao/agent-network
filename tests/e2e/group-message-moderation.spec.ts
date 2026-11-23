@@ -250,15 +250,65 @@ async function recalledDraftIds(page: Page, actorId: string): Promise<string[]> 
   }, `agent-network-recalled-drafts:v1:${actorId}`);
 }
 
+interface RecallReadTiming {
+  messageId: string;
+  /** 页面内 `performance.now()` 起点；只用于计算中止延迟。 */
+  startedAt: number;
+  abortedAt: number | null;
+  settledAt: number | null;
+}
+
 /**
  * 注入撤回边界所需的客户端条件：把目标消息的 created_at 改老，
  * 并可按需延迟 `network_message_read`。只改写历史响应，不动其他工具。
+ *
+ * 读取延迟放在路由层，页面侧的 fetch 包装只记录发起/中止时刻：这样能
+ * 断言客户端在压缩后的超时处真的中止了请求，而不是只看撤回总耗时。
  */
 async function ageMessageAndDelayRead(
   page: Page,
   options: { messageId: string; ageMs: number; readDelayMs?: number },
-): Promise<{ readCount: () => number }> {
+): Promise<{ readCount: () => number; readTimings: () => Promise<RecallReadTiming[]> }> {
   const readMessageIds: string[] = [];
+  await page.addInitScript(() => {
+    const target = window as unknown as {
+      __recallReadTimings?: RecallReadTiming[];
+      fetch: typeof fetch;
+    };
+    target.__recallReadTimings = [];
+    const original = target.fetch.bind(window);
+    target.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      let name: string | null = null;
+      let messageId = '';
+      try {
+        const body = typeof init?.body === 'string' ? JSON.parse(init.body) : null;
+        name = body?.params?.name ?? null;
+        messageId = body?.params?.arguments?.message_id ?? '';
+      } catch {
+        // 非 JSON 请求原样放行。
+      }
+      if (name !== 'network_message_read') return original(input, init);
+      const timing: RecallReadTiming = {
+        messageId: typeof messageId === 'string' ? messageId : '',
+        startedAt: performance.now(),
+        abortedAt: null,
+        settledAt: null,
+      };
+      target.__recallReadTimings?.push(timing);
+      init?.signal?.addEventListener(
+        'abort',
+        () => {
+          timing.abortedAt = performance.now();
+        },
+        { once: true },
+      );
+      try {
+        return await original(input, init);
+      } finally {
+        timing.settledAt = performance.now();
+      }
+    }) as typeof fetch;
+  });
   await page.route('**/mcp', async (route) => {
     const request = route.request();
     const name = request.headers()['mcp-name'];
@@ -296,7 +346,15 @@ async function ageMessageAndDelayRead(
     }
     await route.fulfill({ response, json: payload });
   });
-  return { readCount: () => readMessageIds.length };
+  return {
+    readCount: () => readMessageIds.length,
+    readTimings: () =>
+      page.evaluate(
+        () =>
+          (window as unknown as { __recallReadTimings?: RecallReadTiming[] })
+            .__recallReadTimings ?? [],
+      ),
+  };
 }
 
 /** 打开房间后重载一次，让注入的历史响应和读取延迟先生效。 */
@@ -307,7 +365,12 @@ async function openAgedRoom(
   roomId: string,
   messageId: string,
   options: { ageMs: number; readDelayMs?: number },
-): Promise<{ page: Page; close: () => Promise<void>; readCount: () => number }> {
+): Promise<{
+  page: Page;
+  close: () => Promise<void>;
+  readCount: () => number;
+  readTimings: () => Promise<RecallReadTiming[]>;
+}> {
   const opened = await openRoom(browser, base, token, roomId);
   const probe = await ageMessageAndDelayRead(opened.page, { messageId, ...options });
   await opened.page.reload();
@@ -1065,7 +1128,19 @@ test.describe.serial('群主消息管理前端', () => {
     try {
       const elapsed = await recallWithin(opened.page, messageId, 2_500);
       expect(opened.readCount()).toBe(1);
-      // 读取在 1s 超时后放弃，撤回没有被 3s 的读取延迟拖住。
+      // 剩余 3s - 2s 安全余量 = 1s：读取必须在压缩后的 1s 内被客户端中止
+      // （历史响应到点击之间会消耗几十到几百毫秒，实际值通常更小）。
+      // 旧的固定 1.5s 超时同样能在 2.5s 内撤回，所以只断言总耗时锁不住
+      // 压缩逻辑；这里直接看读取发起→中止的间隔。
+      const timings = await opened.readTimings();
+      const timing = timings.find((entry) => entry.messageId === messageId);
+      expect(timing).toBeTruthy();
+      // 必须真的被客户端中止，而不是 3s 路由延迟自然结束。
+      expect(timing?.abortedAt).not.toBeNull();
+      const abortDelay = (timing?.abortedAt ?? 0) - (timing?.startedAt ?? 0);
+      expect(abortDelay).toBeGreaterThan(0);
+      expect(abortDelay).toBeLessThan(1_400);
+      expect(timing?.settledAt).not.toBeNull();
       expect(elapsed).toBeLessThan(2_500);
       expect(await recalledDraftIds(opened.page, room.actorMember)).toEqual([]);
     } finally {

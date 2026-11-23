@@ -668,6 +668,14 @@ export interface AutoMentionProbeInput {
   selections: MentionSelection[];
   items?: HistoryItem[];
   hasReply?: boolean;
+  /**
+   * 窗口是否处在恢复轮/查询刷新/历史补读中。
+   *
+   * 这些阶段房间详情与已加载窗口可能同时停在旧值：`head_seq` 与窗口最大
+   * `created_seq` 看起来一致，实际都还没追上服务端。调用方把该信号传进来，
+   * 发送前的回读就不再只依赖两者之差。
+   */
+  historyStale?: boolean;
 }
 
 /** 已加载消息窗口的最大 created_seq；presence 没有消息序号，不参与。 */
@@ -697,13 +705,20 @@ export function historyWindowLagsHead(room: RoomView | null, items: HistoryItem[
 /**
  * 是否需要在发送前回读服务端最新一条消息。
  *
- * 已加载历史窗口是易失的：长时间挂起、恢复轮进行中、历史补读失败或只加载
- * 了旧页时，`items` 可能为空或停在旧消息。只有窗口落后于 `room.head_seq`
- * 时才回读一次；正文命中、选择器目标、回复状态与 Agent 身份保持原语义。
+ * 已加载历史窗口是易失的：长时间挂起、恢复轮/刷新进行中、历史补读失败或只加载
+ * 了旧页时，`items` 可能为空或停在旧消息。出现下面任一信号时回读一次：
+ *
+ * - 窗口落后于 `room.head_seq`；
+ * - 调用方标记 `historyStale`（恢复轮/查询刷新/补读进行中）。
+ *
+ * 第二种信号专门覆盖「head 与窗口同时滞后」：两者都停在旧消息时差值看不出来，
+ * 但窗口里的最后一条并不是房间真正的最后一条。正文命中、选择器目标、回复状态
+ * 与 Agent 身份保持原语义。
  *
  * 新鲜窗口不探测：最后一条是自己时探测也只会得到自己，最后一条是其他成员
  * 时窗口已能给出目标，两种情况都不需要额外请求。滞后窗口即使能给出旧成员
- * 也必须回读，避免把旧 Agent 当成最新发送者。
+ * 也必须回读，避免把旧 Agent 当成最新发送者；回读结果仍按原规则判断，
+ * 最新一条是发送者自己时不补 @。
  */
 export function needsLatestMentionProbe(input: AutoMentionProbeInput): boolean {
   const {
@@ -715,6 +730,7 @@ export function needsLatestMentionProbe(input: AutoMentionProbeInput): boolean {
     selections,
     items = [],
     hasReply = false,
+    historyStale = false,
   } = input;
   if (!room || room.kind !== 'group') return false;
   if (identityKind !== 'human') return false;
@@ -722,7 +738,8 @@ export function needsLatestMentionProbe(input: AutoMentionProbeInput): boolean {
   if (bodyHasAnyMention(body, members)) return false;
   if (bodyMemberMention(body, members, identityId) !== null) return false;
   if (resolvedSelectionCount(selections, members, body) > 0) return false;
-  return historyWindowLagsHead(room, items);
+  if (historyWindowLagsHead(room, items)) return true;
+  return historyStale === true;
 }
 
 /**

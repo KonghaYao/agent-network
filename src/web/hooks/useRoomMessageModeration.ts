@@ -26,14 +26,6 @@ const UPDATE_BLOCKED_MESSAGE = '当前页面与服务器版本不兼容，请先
  */
 const RECALL_BODY_READ_TIMEOUT_MS = 1500;
 
-/**
- * 两分钟窗口的安全余量：读取必须为后续撤回请求留出时间。
- *
- * 普通成员在剩余窗口不足该值时跳过读取；读取超时也不会超过
- * `remaining - 安全余量`，避免一次可选读取把撤回拖过服务端窗口。
- */
-const RECALL_WINDOW_SAFETY_MARGIN_MS = 2000;
-
 /** 普通成员的剩余撤回窗口；时间缺失时按已进入安全余量处理。 */
 function recallWindowRemainingMs(item: HistoryMessage, now = Date.now()): number {
   const createdAt = Number(item.created_at);
@@ -54,8 +46,11 @@ export function recallDraftReadTimeoutMs(
 ): number | null {
   if (canModerate) return RECALL_BODY_READ_TIMEOUT_MS;
   const remaining = recallWindowRemainingMs(item, now);
-  if (remaining <= RECALL_WINDOW_SAFETY_MARGIN_MS) return null;
-  return Math.min(RECALL_BODY_READ_TIMEOUT_MS, remaining - RECALL_WINDOW_SAFETY_MARGIN_MS);
+  if (remaining <= LIMITS.webRecallWindowSafetyMarginMs) return null;
+  return Math.min(
+    RECALL_BODY_READ_TIMEOUT_MS,
+    remaining - LIMITS.webRecallWindowSafetyMarginMs,
+  );
 }
 
 /** 读取本机没有副本的本人消息；任何失败都返回 null，不影响撤回。 */
@@ -204,7 +199,7 @@ export function useRoomMessageModeration({
             if (
               body &&
               (canModerate ||
-                recallWindowRemainingMs(item) > RECALL_WINDOW_SAFETY_MARGIN_MS)
+                recallWindowRemainingMs(item) > LIMITS.webRecallWindowSafetyMarginMs)
             ) {
               rememberRecalledDraft(identityId, item.message_id, body);
             }

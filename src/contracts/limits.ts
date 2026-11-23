@@ -6,6 +6,12 @@ export const LIMITS = {
   messageBodyBytes: 256 * 1024,
   /** 普通人类消息可撤回时间窗（毫秒）。 */
   messageRecallWindowMs: 2 * 60_000,
+  /**
+   * 网页撤回前读取原文的安全余量（毫秒）：读取必须为后续撤回请求留出时间。
+   * 普通成员剩余窗口不足该值时跳过读取；读取超时也不会超过
+   * `remaining - 安全余量`，避免一次可选读取把撤回拖过服务端窗口。
+   */
+  webRecallWindowSafetyMarginMs: 2_000,
   /** actor 展示名称长度上限（按去空格后的字符数）。 */
   actorNameMax: 96,
   /** actor 展示名称 UTF-8 字节上限；96 个 4 字节字符最多 384 字节。 */
