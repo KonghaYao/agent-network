@@ -5048,7 +5048,9 @@ async function main(): Promise<void> {
       check(
         '新建 Agent 提示词只下载一次 CLI 到本地缓存',
         connectPrompt.includes('mkdir -p ~/.agentnet') &&
-          connectPrompt.includes('[ -f ~/.agentnet/agentnet.js ] || curl -fsSL'),
+          connectPrompt.includes('[ -f ~/.agentnet/agentnet.js ] || { curl -fsSL') &&
+          connectPrompt.includes('mv ~/.agentnet/agentnet.js.tmp ~/.agentnet/agentnet.js') &&
+          connectPrompt.includes('rm -f ~/.agentnet/agentnet.js.tmp'),
       );
       check(
         '新建 Agent 提示词复用本地 CLI',

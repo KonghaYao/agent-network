@@ -6,7 +6,7 @@
  * 构建产物与可重复构建。
  */
 
-import { chmodSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -15,6 +15,8 @@ import { check, checkEqual, checksPassed } from './lib/harness';
 
 const ROOT = resolve(import.meta.dir, '..');
 const CLI = resolve(ROOT, 'client/cli.ts');
+// Bun 会把 argv[1] 解析成真实路径（例如 macOS 上 /tmp -> /private/tmp）。
+const CLI_REAL = realpathSync(CLI);
 const BUNDLE = resolve(ROOT, 'public/skills/agentnet.js');
 const PROTOCOL_VERSION = '2026-07-28';
 const CLIENT_NAME = 'agentnet-cli';
@@ -897,6 +899,15 @@ async function main(): Promise<void> {
           guide.stdout.includes('CREDENTIAL_INVALID'),
         guide.stdout,
       );
+      // other 指南只用 `agentnet ...`，没有 `bun agentnet.js` 可替换；其余宿主必须落到实际路径。
+      check(
+        `skills --harness ${harness} 使用实际 CLI 路径`,
+        (harness === 'other' ||
+          guide.stdout.includes(`bun ${CLI_REAL}`) ||
+          guide.stdout.includes(`bun ${CLI}`)) &&
+          !guide.stdout.includes('bun agentnet.js '),
+        guide.stdout,
+      );
       if (harness === 'dsh') {
         check(
           'DSH 指南只要求直接启动并自动检测插件',
@@ -965,6 +976,18 @@ async function main(): Promise<void> {
           text?: string;
         };
         return payload.harness === 'codex' && (payload.text ?? '').includes('HARNESS codex');
+      })(),
+      skillsHarnessJson.stdout,
+    );
+    check(
+      'skills --harness --json 也使用实际 CLI 路径',
+      (() => {
+        const payload = JSON.parse(skillsHarnessJson.stdout) as { text?: string };
+        const text = payload.text ?? '';
+        return (
+          (text.includes(`bun ${CLI_REAL}`) || text.includes(`bun ${CLI}`)) &&
+          !text.includes('bun agentnet.js ')
+        );
       })(),
       skillsHarnessJson.stdout,
     );

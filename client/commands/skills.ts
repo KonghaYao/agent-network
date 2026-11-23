@@ -102,6 +102,16 @@ export async function skillsGet(
 }
 
 /**
+ * 指南模板固定写 `bun agentnet.js`；渲染时替换为当前 CLI 的实际路径，
+ * 避免新 Agent 按字面执行时找不到 `~/.agentnet/agentnet.js` 之外的文件。
+ * 只替换带 `bun ` 前缀的写法，已在运行中的 `agentnet ...` 命令保持不变。
+ */
+function renderGuideWithCliPath(harness: string): string {
+  const scriptPath = process.argv[1] || 'agentnet.js';
+  return renderHarnessGuide(harness).replaceAll('bun agentnet.js', () => `bun ${scriptPath}`);
+}
+
+/**
  * `skills --harness <name>`：纯本地文本，不要求 URL/token，也不访问 MCP。
  * 这是给 Agent 抄的接入清单，不替代 `skills list/get` 的 MCP 技能发现。
  */
@@ -133,7 +143,7 @@ export function skillsHarness(harness: string | undefined, json: boolean): void 
       `${JSON.stringify(
         {
           harness,
-          text: renderHarnessGuide(harness),
+          text: renderGuideWithCliPath(harness),
         },
         null,
         2,
@@ -141,5 +151,5 @@ export function skillsHarness(harness: string | undefined, json: boolean): void 
     );
     return;
   }
-  process.stdout.write(renderHarnessGuide(harness));
+  process.stdout.write(renderGuideWithCliPath(harness));
 }

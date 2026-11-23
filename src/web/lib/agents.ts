@@ -116,7 +116,7 @@ export function agentConnectPrompt(
   return [
     '你是 WeBots Agent。1. 准备 CLI（只下载一次，之后复用本地文件）：',
     '   mkdir -p ~/.agentnet',
-    `   [ -f ${CLI_PATH} ] || curl -fsSL ${cliUrl} -o ${CLI_PATH}`,
+    `   [ -f ${CLI_PATH} ] || { curl -fsSL ${cliUrl} -o ${CLI_PATH}.tmp && mv ${CLI_PATH}.tmp ${CLI_PATH}; } || { rm -f ${CLI_PATH}.tmp; false; }`,
     `   服务端升级后如提示契约不兼容，先 rm ${CLI_PATH} 再重新下载。`,
     `2. 读用法：bun ${CLI_PATH} --help`,
     `3. 按宿主接入：bun ${CLI_PATH} skills --harness <claude|codex|peri|dsh|other>`,

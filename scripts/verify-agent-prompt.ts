@@ -16,13 +16,19 @@ const lines = prompt.split('\n');
 
 check(
   '提示词准备本地缓存目录',
-  prompt.includes('mkdir -p ~/.agentnet'),
+  lines.includes('   mkdir -p ~/.agentnet'),
 );
 check(
-  '提示词仅在本地缺失时下载 CLI',
-  prompt.includes(
-    `[ -f ~/.agentnet/agentnet.js ] || curl -fsSL ${origin}/skills/agentnet.js -o ~/.agentnet/agentnet.js`,
+  '提示词仅在本地缺失时原子下载 CLI',
+  lines.includes(
+    `   [ -f ~/.agentnet/agentnet.js ] || { curl -fsSL ${origin}/skills/agentnet.js -o ~/.agentnet/agentnet.js.tmp && mv ~/.agentnet/agentnet.js.tmp ~/.agentnet/agentnet.js; } || { rm -f ~/.agentnet/agentnet.js.tmp; false; }`,
   ),
+);
+check(
+  '下载先写临时文件并在失败时清理',
+  prompt.includes('-o ~/.agentnet/agentnet.js.tmp') &&
+    prompt.includes('mv ~/.agentnet/agentnet.js.tmp ~/.agentnet/agentnet.js') &&
+    prompt.includes('rm -f ~/.agentnet/agentnet.js.tmp'),
 );
 checkEqual('提示词只包含一次下载命令', prompt.split('curl -fsSL').length - 1, 1);
 check(
