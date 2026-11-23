@@ -86,14 +86,7 @@ function roomHeadSubscriptionsExpression(): string {
 }
 
 const DEPRECATED_PROMPT_SCRIPTS = ['agentnet.sh', 'agent_tasks.sh', '-watch.sh'];
-const PROMPT_SHORT_CLI = [
-  '/skills/agentnet.js',
-  'bun agentnet.js --help',
-  'bun agentnet.js skills --harness',
-  'bun agentnet.js monitor --harness',
-];
 const REMOVED_PROMPT_TEXT = ['群聊 @ 规则', 'share_url', 'AGENTNET_MCP_URL', '身份名称：'];
-const DEPRECATED_PROMPT_STEPS = ['curl -fsSL', 'bun agentnet.js login', ' register --name', ' issue'];
 
 interface RawContactRequestView {
   status: string;
@@ -5051,6 +5044,18 @@ async function main(): Promise<void> {
       await page.locator('#new-agent-create').click();
       await page.locator('#new-agent-result').waitFor({ state: 'visible', timeout: 20_000 });
       check('新建 Agent 展示一次性结果', await page.locator('#new-agent-url').isVisible());
+      const connectPrompt = await page.locator('#new-agent-prompt').inputValue();
+      check(
+        '新建 Agent 提示词只下载一次 CLI 到本地缓存',
+        connectPrompt.includes('mkdir -p ~/.agentnet') &&
+          connectPrompt.includes('[ -f ~/.agentnet/agentnet.js ] || curl -fsSL'),
+      );
+      check(
+        '新建 Agent 提示词复用本地 CLI',
+        connectPrompt.includes('bun ~/.agentnet/agentnet.js --help') &&
+          connectPrompt.includes('契约不兼容') &&
+          !connectPrompt.includes('bun agentnet.js '),
+      );
       await page.locator('#new-agent-close').click();
 
       await page.locator('#logout').click();

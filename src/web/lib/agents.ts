@@ -103,15 +103,23 @@ export function addLocalAgent(ownerActorId: string | null, entry: LocalAgentEntr
   }
 }
 
-/** 与 legacy 新建 Agent 弹窗相同的 CLI 提示词。 */
-export function agentConnectPrompt(token: string, actorId: string): string {
-  const serverUrl = location.origin;
+const CLI_PATH = '~/.agentnet/agentnet.js';
+
+/** 与 legacy 新建 Agent 弹窗相同的 CLI 提示词；CLI 只下载一次，后续复用本地文件。 */
+export function agentConnectPrompt(
+  token: string,
+  actorId: string,
+  serverUrl: string = location.origin,
+): string {
   const cliUrl = `${serverUrl}/skills/agentnet.js`;
   const envPath = `~/.agentnet/agents/${actorId}.env`;
   return [
-    '你是 WeBots Agent。1. 下载 CLI：' + cliUrl,
-    '2. 读用法：bun agentnet.js --help',
-    '3. 按宿主接入：bun agentnet.js skills --harness <claude|codex|peri|dsh|other>',
+    '你是 WeBots Agent。1. 准备 CLI（只下载一次，之后复用本地文件）：',
+    '   mkdir -p ~/.agentnet',
+    `   [ -f ${CLI_PATH} ] || curl -fsSL ${cliUrl} -o ${CLI_PATH}`,
+    `   服务端升级后如提示契约不兼容，先 rm ${CLI_PATH} 再重新下载。`,
+    `2. 读用法：bun ${CLI_PATH} --help`,
+    `3. 按宿主接入：bun ${CLI_PATH} skills --harness <claude|codex|peri|dsh|other>`,
     'DSH 直接启动 monitor；run/start 会自动检测 DSH 版本和插件，缺失时添加自带插件，无需额外安装命令。首次自动添加后按输出重启 profile。',
     '4. 连接信息：AGENTNET_URL="' + serverUrl + '"，token="' + token +
       '"，actor_id="' + actorId + '"',
@@ -125,10 +133,10 @@ export function agentConnectPrompt(token: string, actorId: string): string {
       serverUrl + "' '" + token + "' '" + actorId + "' > " + envPath,
     '   chmod 600 ' + envPath,
     '5. 登录后立即启动监听（每条命令都显式带 --env-file 与 --expect-actor）：',
-    '   bun agentnet.js --env-file ' + envPath + ' --expect-actor ' + actorId + ' login',
-    '   bun agentnet.js --env-file ' + envPath + ' --expect-actor ' + actorId +
+    `   bun ${CLI_PATH} --env-file ` + envPath + ' --expect-actor ' + actorId + ' login',
+    `   bun ${CLI_PATH} --env-file ` + envPath + ' --expect-actor ' + actorId +
       ' monitor --harness <claude|codex|peri|dsh|other>',
-    '   或一步登录并监听：bun agentnet.js --env-file ' + envPath + ' --expect-actor ' +
+    `   或一步登录并监听：bun ${CLI_PATH} --env-file ` + envPath + ' --expect-actor ' +
       actorId + ' up --harness <claude|codex|peri|dsh|other>',
     '凭据只给目标 Agent，勿发群、日志或截图。处理投递时用 delivery 里的 room_id；主动发消息再加 --room。',
   ].join('\n');
