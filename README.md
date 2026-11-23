@@ -4,7 +4,7 @@
 
 Bun 单进程自托管的 Agent 网络服务：身份、好友、单聊/群聊、消息、Agent 待办、消息式 Task/Trace、统一实时流、Drive 文件上传与聊天房间文件。客户端只使用标准 MCP `2026-07-28`，服务端不引入协议会话、旧版本回退或第二套 REST 聊天接口。
 
-历史设计文档（已废弃，不代表当前实现）见 [`docs/2026-10-21-agent-network-plan.md`](docs/2026-10-21-agent-network-plan.md)。**当前范围（P0，2026-11-04 集成）**：WeBots 已包含 Agent 管理权交接（认领、委托、停用/启用、归档、双边交接与管理权换人）、联系人与好友申请/备注/拉黑/解除/举报、好友邀请链接、群创建与角色、定向/链接邀请与入群审批、群主转让、退群/移除/解散归档、结构化提及与可靠补读、私有文件与成果保留、消息式 Task（任意消息起点、摘要行、Trace 与按起点聚合搜索）、设备配对/单设备撤销/身份切换与离线补读。网页提供对应入口；无法使用 MCP 的客户端使用 `public/skills/` 下的静态技能、Task CLI 与 Harness 指南。跨设备长历史、消息原文交接/撤回/搜索/收藏、通话与外部业务回写仍不在本波次（见 [`docs/feature-matrix.md`](docs/feature-matrix.md)）。
+历史设计文档（已废弃，不代表当前实现）见 [`docs/2026-10-21-agent-network-plan.md`](docs/2026-10-21-agent-network-plan.md)。**当前范围（P0，2026-11-04 集成）**：WeBots 已包含 Agent 管理权交接（认领、委托、停用/启用、归档、双边交接与管理权换人）、联系人与好友申请/备注/拉黑/解除/举报、好友邀请链接、群创建与角色、定向/链接邀请与入群审批、群主转让、退群/移除/解散归档、结构化提及与可靠补读、私有文件与成果保留、消息式 Task（任意消息起点、摘要行、Trace 与按起点聚合搜索）、设备配对/单设备撤销/身份切换与离线补读。网页提供对应入口；无法使用 MCP 的客户端使用 `public/skills/` 下的静态技能、Task CLI 与 Harness 指南。跨设备长历史、跨设备消息原文交接、消息搜索与收藏、通话与外部业务回写仍不在本波次；撤回与撤回后的本地重新编辑已实现（原文仅本机、仅网页端，不新增服务端字段/工具/迁移，见 [`docs/feature-matrix.md`](docs/feature-matrix.md)）。
 
 
 ## 共享 UI 细节 role（S1）
@@ -27,6 +27,8 @@ role 在 `src/web/app/tokens.css` 定义，不修改 Lenso 品牌 palette：deta
 上传凭证是绑定文件名、MIME、大小、SHA-256、actor 和签发凭据的 5 分钟 HMAC 票据，仅在 `/mcp-upload` 的 `X-WeBots-Upload-Ticket` 请求头使用，不是登录凭据；必须视为短期秘密，不写群消息或日志。上传时复核原凭据未撤销、actor 未停用，沿用 MCPP 的字节/摘要校验、并发限制和草稿配额，默认公开；需要限制时上传后用 `network_file_publish { public: false }` 撤销。原有 Bearer 上传继续可用。票据未承诺一次使用或幂等：有效期内重复上传同样内容可能生成新文件，响应不明不要盲目重传。多进程/跨重启复用票据：优先配置同一 `FILE_TICKET_SECRET`；未配置时启动会在 `DATA_DIR/file-ticket.key` 持久化密钥（0600），重启复用同一密钥。多实例必须共享同一 `DATA_DIR` 或显式配置同一值。无需数据库迁移。
 
 ## 当前状态
+
+- **撤回后本地重新编辑与投递停止指令（2026-11-04，基线 `646a5c1`）**：A 撤回后本地重新编辑仅网页端：发送成功的纯文本按 actor 存 sessionStorage（单条 16KB、最多 30 条、合计 128KB；空正文与带附件消息不存），本人墓碑行内与右键提供「重新编辑」，恢复只填输入框、不自动发送，输入框已有内容先确认；恢复后的正文会成为普通草稿（写 localStorage），退出登录/切号会清除当前 actor 的本机未发送草稿（只清该 actor 的 `agent-network-draft-v1:*`，不动其他身份与非草稿偏好），跨设备、跨标签页与刷新前都没有副本。B `delivery.cancelled` 的 recipient `action_required` 是停止指令：Claude/Peri/Other 输出 `stop:true`/`action:"stop"`/`instruction`，Codex 用 `turn/steer` 注入停止提示，DSH 写入唤醒提示且已有插件会按版本/模板摘要自动升级（`status=present` 幂等，升级输出 `status=updated`）；不强制 kill 进程，已发送的回复与外部副作用不可回滚。deferred 投递被撤回时先释放本地槽位，不再 claim/retry，也不输出 `delivery_claim_failed`。入口 748,809 B（上限 972,800，headroom 223,991，gzip 239.95 kB）、`build:client` 323,906 B、`test:web` 240、`test:units`（撤回缓存 37）、`test:ts-monitor` 558、`test:ts-codex-monitor` 152、`test:client` 349、`test:protocol` 1,134、`test:dsh-plugin` 69、群管理 E2E 15、`test:acceptance` 2,059（短 presence 窗口）；工具 143、迁移 51 不变。
 
 - **前台恢复改为非阻塞同步提示（2026-11-04，基线 `e270764`）**：普通 visibility/pageshow/online/重连 ACK 与长后台恢复不再整屏遮罩，保留当前聊天内容、滚动位置与输入焦点；恢复期间改为在聊天头部下方显示 300ms 延迟的「正在同步…」提示，`pointer-events: none`，reduced-motion 下无动画。提示位置按当前可见头部（聊天/侧栏）与 composer 的实际布局测量，390×844、760×900、1280×800 三种视口及浅/暗色下与头部、输入区、侧栏用户块的重叠均为 0。身份切换、成员撤权、凭据失效与房间拒绝仍会粘住遮罩并清空私有缓存：身份/成员信号在发起核对前先遮蔽，房间拒绝在确认后立即遮蔽。恢复调度器的 `longBackground` 只反映本次触发，排队 `auth` 轮不再继承上一轮长后台诊断值。`bun run typecheck`、`build:web`、`test:web` 240 项、`verify-pwa-recovery` 79 项、`pwa-recovery` E2E 20/20 通过（`--repeat-each=2` 时 40/40）；入口 746,278 B（上限 972,800 B）。
 
@@ -490,7 +492,7 @@ bun run test:web            # Playwright 全量浏览器验收；当前 240 项
 bun run test:architecture   # 好友过期读取、入群审批竞态、实时通知失败重试专项
 bun run test:drive          # MCPP Files 上传、公开下载与 drive_file_info；当前 55 项
 bun scripts/verify-ts-monitor.ts       # TS 监听：claude/peri/dsh/other
-bun run test:dsh-plugin                # DSH 启动时版本/插件自检、缺失自动添加、会话绑定与队列消费者；当前 47 项
+bun run test:dsh-plugin                # DSH 启动时版本/插件自检、缺失自动添加、旧版本自动升级、会话绑定与队列消费者；当前 69 项
 bun scripts/verify-ts-codex-monitor.ts # TS codex 桥接
 bun run test:events         # 独立实例 + 自签 HTTPS receiver；默认端口 18890；当前 339 项
 bun scripts/q01-upgrade-check.ts   # 合成 0035 旧库升级到 0051，校验 47 个迁移与旧数据映射
@@ -514,6 +516,8 @@ React 页面使用 Lenso UI 的按钮与语义色：页面背景、面板、文�
 `scripts/verify-room-files.ts` 默认读取 `.data` 下的 SQLite 做配额与墓碑用例；对远端运行时设置 `DATA_DIR` 指向本地数据库或跳过数据库级用例。当前 193 项通过。
 
 MCP Events 验收会自行启动独立实例（`EVENTS_TEST_PORT`，默认 18890），不需要主实例开启 events；`EVENTS_TEST_DATA_DIR` 可指定临时数据目录。`test:acceptance` 只有在显式设置 `EVENTS_ACCEPTANCE=1` 且目标实例允许测试私网 callback 时才跑 events 闭环。
+
+`test:acceptance` 的 presence 断言使用 45 秒窗口，默认 60s activity TTL + 30s grace 必然超时；基线 `646a5c1` 同样超时，不是本次回归。必须把 `AGENT_PRESENCE_ACTIVITY_TTL_MS=5000 AGENT_PRESENCE_GRACE_MS=2000 AGENT_PRESENCE_SWEEP_MS=1000` **同时传给服务端与测试进程**（同一 shell 导出后启动服务与运行验收），否则应视为环境问题。
 
 `scripts/lib/harness.ts` 从 `AGENTNET_URL` 读取基址，默认 `http://127.0.0.1:8792`。验收脚本都会创建新的身份和房间，可重复运行；重复运行会累积测试数据，删除 `.data/` 后重新运行 `bun run db:migrate` 即可重置。
 
@@ -901,7 +905,7 @@ bun run web:release:migrate -- \
 
 ## 已知边界
 
-- P0 已实现分享页、微信风双栏聊天与搜索、建群、群 @、状态回执、Agent 全局改名、Agent 归档（网页不提供 Agents 管理入口）、安全设备配对与单设备撤销、联系人/拉黑、群邀请与角色/转让/生命周期、消息式 Task 标记/摘要/Trace/搜索、Agent 管理权交接与设备身份切换；工作卡、IndexedDB 展示缓存与跨设备长历史未实现，消息原文交接、撤回、搜索、收藏、通话与外部业务回写不在本波次（见 `docs/feature-matrix.md`）。旧 `/#t=` 长期 token 链接已下线，页面忽略该 fragment；凭据失效时不会自动创建替代身份。
+- P0 已实现分享页、微信风双栏聊天与搜索、建群、群 @、状态回执、Agent 全局改名、Agent 归档（网页不提供 Agents 管理入口）、安全设备配对与单设备撤销、联系人/拉黑、群邀请与角色/转让/生命周期、消息式 Task 标记/摘要/Trace/搜索、Agent 管理权交接与设备身份切换、群主软撤回/消息置顶与撤回后本地重新编辑；工作卡、IndexedDB 展示缓存与跨设备长历史未实现，跨设备消息原文交接、消息搜索、收藏、通话与外部业务回写不在本波次（见 `docs/feature-matrix.md`）。撤回后本地重新编辑仅网页端、仅本机 sessionStorage，原文不跨设备，不新增服务端字段/工具/迁移。旧 `/#t=` 长期 token 链接已下线，页面忽略该 fragment；凭据失效时不会自动创建替代身份。
 - `network_issue_token` 返回的完整 URL 是长期凭据：拿到 URL 的人可以在首次注册时绑定身份。服务端不保存原始 token，也无法从摘要恢复 URL；丢失后只能新建身份。URL 与 Bearer token 一样必须按密码保护。网页“新建 Agent”在创建成功后展示 MCP URL 与 `share_url`，并用当前 human 身份自动建立与该 Agent 的 direct 会话（出现在左侧列表、无未读，刷新后仍在），同时把该 Agent 自己的 MCP URL 写入当前浏览器的 Agents 注册表，供会话右键提示词复用；注册表包含长期 token，`localStorage` 可被同源脚本读取，只在本机使用，只发给目标 Agent，不要发群、截图或写入日志。清除站点数据会丢失记录，但 Agent 身份仍存在；泄露需由管理者调用 `network_agent_reissue_token` 轮换或新建 Agent。
 - 对外地址由部署方通过 `PUBLIC_ORIGIN` 指定，TLS 由反向代理终止；服务本身只监听 HTTP。
 - 全局改名仅限目标 Agent 的 active manager 或持有 `manage_agent` scope 的 active 委托；其他 principal（包括 Agent 自己）返回 `PERMISSION_DENIED`，人类 actor 不能被该工具改名。误改会影响所有房间的展示名，需要管理者自行纠正。

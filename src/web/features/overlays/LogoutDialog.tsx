@@ -2,7 +2,8 @@ import { Button } from '../../app/lenso-controls';
 import * as AlertDialogPrimitive from './AlertDialog';
 
 import { clearQueryCache } from '../../app/query';
-import { resetWebSession } from '../../lib/identity';
+import { cachedWebSession, resetWebSession } from '../../lib/identity';
+import { clearActorDrafts } from '../../lib/drafts';
 import { writeAuthSignal } from '../../pwa/recovery';
 
 const TOKEN_KEY = 'agent-network-token';
@@ -12,7 +13,8 @@ const LOGGED_OUT_KEY = 'agent-network-logged-out';
  * 退出登录：只改本机状态，不撤销服务端凭据。
  *
  * 与 legacy 一致：写入非敏感退出标记、移除浏览器 token、清理当前
- * sessionStorage 的页面缓存，然后整页回到 `/`；不调用任何工具。
+ * sessionStorage 的页面缓存与本机未发送草稿，然后整页回到 `/`；不调用
+ * 任何工具。草稿按 actor 精确清理，不影响同浏览器其他身份。
  */
 export function LogoutDialog({
   open,
@@ -22,6 +24,8 @@ export function LogoutDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const logout = () => {
+    // 退出后重新登录/切号都不应自动回填上一次未发送的正文。
+    clearActorDrafts(cachedWebSession()?.identity.actor_id ?? null);
     // 同源其他标签页接收身份失效信号；本标签按原流程整页回首页。
     writeAuthSignal('logout');
     try {
@@ -57,7 +61,7 @@ export function LogoutDialog({
           </AlertDialogPrimitive.Title>
           <AlertDialogPrimitive.Description asChild>
             <p id="logout-message" className="confirm-message">
-              退出只清除本机登录状态，不会撤销服务端凭据。其他设备上的同一身份仍可继续使用。
+              退出只清除本机登录状态与本机未发送草稿，不会撤销服务端凭据。其他设备上的同一身份仍可继续使用。
             </p>
           </AlertDialogPrimitive.Description>
           <div className="row modal-actions">

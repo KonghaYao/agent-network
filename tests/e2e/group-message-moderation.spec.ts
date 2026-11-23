@@ -808,4 +808,34 @@ test.describe.serial('群主消息管理前端', () => {
       await close();
     }
   });
+
+  test('重新编辑的正文退出登录后清除本机草稿，重新进入不回填', async ({ browser }) => {
+    const room = await createModerationRoom(base);
+    const { page, close } = await openRoom(browser, base, room.tokenMember, room.roomId);
+    try {
+      const body = `待退出草稿 ${crypto.randomUUID().replaceAll('-', '').slice(0, 8)}`;
+      const messageId = await sendFromComposer(page, body);
+      await recallOwnMessage(page, messageId);
+      await page.locator(`[data-reedit-message-id="${messageId}"]`).click();
+      await expect(page.locator('#body')).toHaveValue(body);
+
+      // 恢复后的正文成为普通草稿，按 actor + room 写入 localStorage。
+      const draftKey = `agent-network-draft-v1:${room.actorMember}:${room.roomId}`;
+      await expect.poll(() => page.evaluate((key) => localStorage.getItem(key), draftKey)).toBe(body);
+
+      await page.locator('#logout').click();
+      await expect(page.locator('#logout-modal')).toBeVisible();
+      await expect(page.locator('#logout-message')).toContainText('本机未发送草稿');
+      await page.locator('#logout-confirm').click();
+      await page.waitForURL(`${base}/`);
+      await expect.poll(() => page.evaluate((key) => localStorage.getItem(key), draftKey)).toBeNull();
+
+      // 初始化脚本会重新写入 token；重新进入房间时不能再回填已清除的草稿。
+      await page.goto(`${base}/c/${room.roomId}`);
+      await expect(page.locator('#composer')).toBeVisible();
+      await expect(page.locator('#body')).toHaveValue('');
+    } finally {
+      await close();
+    }
+  });
 });

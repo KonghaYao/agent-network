@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { cliBuildConfig } from '../src/bun/cli-bundle';
-import { isSupportedDshVersion } from '../client/monitor/dsh-install';
+import { isSupportedDshVersion, shouldUpgradeDshPlugin } from '../client/monitor/dsh-install';
 import { check, checkEqual, checksPassed, sleep, waitUntil } from './lib/harness';
 
 const root = resolve(import.meta.dir, '..');
@@ -96,6 +96,19 @@ process.exit(2);
   check('semver 接受 0.2.2-rc.1', isSupportedDshVersion('0.2.2-rc.1'));
   check('semver 拒绝 0.3.0', !isSupportedDshVersion('0.3.0'));
   check('semver 拒绝 0.1.5-rc.2', !isSupportedDshVersion('0.1.5-rc.2'));
+  check('旧安装记录需要升级', shouldUpgradeDshPlugin(null, '1.0.1', 'digest'));
+  check(
+    '同版本同摘要不需要升级',
+    !shouldUpgradeDshPlugin({ version: '1.0.1', digest: 'digest' }, '1.0.1', 'digest'),
+  );
+  check(
+    '模板摘要变化需要升级',
+    shouldUpgradeDshPlugin({ version: '1.0.1', digest: 'old' }, '1.0.1', 'digest'),
+  );
+  check(
+    '版本变化需要升级',
+    shouldUpgradeDshPlugin({ version: '1.0.0', digest: 'digest' }, '1.0.1', 'digest'),
+  );
   const removedInstallCommand = await cli(['install']);
   check('不再暴露单独 install 子命令', removedInstallCommand.code !== 0 && !existsSync(calls));
   const missing = await cli(startArgs, { DSH_PROFILE: undefined, DSH_SESSION_ID: undefined });
@@ -149,6 +162,50 @@ process.exit(2);
   const repaired = await cli(startArgs);
   check('插件记录缺失时启动路径自动补装', repaired.stderr.includes('DSH_PLUGIN status=installed'), repaired);
   checkEqual('缺失后只增加一次安装', addCalls(await dshCalls()).length, 2);
+
+  // 已安装的旧版本/旧模板：启动时自动升级，之后同摘要保持 present 幂等。
+  const installRecordPath = join(dshHome, 'profiles/web/webots-monitor-install.json');
+  const currentRecord = JSON.parse(await readFile(installRecordPath, 'utf8')) as {
+    version: string;
+    digest: string;
+  };
+  checkEqual('安装记录版本', currentRecord.version, '1.0.1');
+  check('安装记录含模板摘要', typeof currentRecord.digest === 'string' && currentRecord.digest.length > 0);
+  check('启动诊断输出版本号', repaired.stderr.includes('plugin_version=1.0.1'), repaired);
+  const addsBeforeUpgrade = addCalls(await dshCalls()).length;
+  await writeFile(
+    installRecordPath,
+    `${JSON.stringify({ version: '1.0.0', digest: 'legacy-template' }, null, 2)}\n`,
+  );
+  const upgraded = await cli(startArgs);
+  check('旧版本启动自动升级', upgraded.stderr.includes('DSH_PLUGIN status=updated'), upgraded);
+  checkEqual('自动升级只执行一次官方 add', addCalls(await dshCalls()).length, addsBeforeUpgrade + 1);
+  const upgradedRecord = JSON.parse(await readFile(installRecordPath, 'utf8')) as {
+    version: string;
+    digest: string;
+  };
+  checkEqual('升级后记录新版本', upgradedRecord.version, '1.0.1');
+  checkEqual('升级后记录新模板摘要', upgradedRecord.digest, currentRecord.digest);
+  const stable = await cli(startArgs);
+  check('升级后同版本报告 present', stable.stderr.includes('DSH_PLUGIN status=present'), stable);
+  checkEqual('同摘要重复启动不重写', addCalls(await dshCalls()).length, addsBeforeUpgrade + 1);
+
+  // 升级失败：可读诊断，旧安装保留，记录不推进到新版本。
+  await writeFile(
+    installRecordPath,
+    `${JSON.stringify({ version: '1.0.0', digest: 'legacy-template' }, null, 2)}\n`,
+  );
+  const upgradeFailure = await cli(startArgs, { DSH_TEST_INSTALL_FAIL: '1' });
+  check('自动升级失败返回非零', upgradeFailure.code !== 0);
+  check(
+    '升级失败给出可读诊断并保留旧安装',
+    upgradeFailure.stderr.includes('自动升级失败') && upgradeFailure.stderr.includes('保留原安装'),
+    upgradeFailure,
+  );
+  const recordAfterFailure = JSON.parse(await readFile(installRecordPath, 'utf8')) as {
+    version: string;
+  };
+  checkEqual('升级失败不推进安装记录', recordAfterFailure.version, '1.0.0');
 
   const conflict = await cli(startArgs, { DSH_SESSION_ID: 'another-session' });
   check('拒绝把同一队列交给另一会话', conflict.code !== 0);

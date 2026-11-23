@@ -4340,6 +4340,103 @@ async function runMonitorRetryChecks(): Promise<void> {
     deferredMock.stop();
   }
 
+  // 2b) deferred 投递被撤回：停止指令释放槽位，后续不得再 claim/retry。
+  const recallMock = createMock();
+  const recallWatcher = startWatcher(recallMock.base, {
+    AGENTNET_MONITOR_RETRY_BASE_MS: '250',
+  });
+  try {
+    await waitForLine(recallWatcher.stderr, (line) => line.includes('READY'), 'recall READY');
+    recallMock.state.claims.set('dlv_recall_hold', claimedDelivery('dlv_recall_hold'));
+    recallMock.state.pending.set('dlv_recall_a', delivery('dlv_recall_a'));
+    recallMock.state.pending.set('dlv_recall_b', delivery('dlv_recall_b'));
+    sendItems(recallMock, [
+      notificationItem('dlv_recall_a', 'delivery.created', 'evt_recall_a_created'),
+      notificationItem('dlv_recall_b', 'delivery.created', 'evt_recall_b_created'),
+    ]);
+    await waitForEvent(recallWatcher.stdout, 'delivery_deferred', 'dlv_recall_a');
+    await waitForEvent(recallWatcher.stdout, 'delivery_deferred', 'dlv_recall_b');
+    const recallClaimsBefore = {
+      a: recallMock.state.claimCalls.get('dlv_recall_a') ?? 0,
+      b: recallMock.state.claimCalls.get('dlv_recall_b') ?? 0,
+    };
+
+    // A 模拟 message_recalled；B 不带 reason，仍属于 actionable 停止指令。
+    sendItems(recallMock, [
+      streamItem('delivery.cancelled', {
+        kind: 'receipt',
+        attention: 'action_required',
+        delivery_id: 'dlv_recall_a',
+        room_id: 'rm_test',
+        message_id: 'msg_dlv_recall_a',
+        reason: 'message_recalled',
+        state: 'cancelled',
+        attempt: 1,
+        seq: '50',
+        event_id: 'evt_recall_a_cancelled',
+      }),
+      streamItem('delivery.cancelled', {
+        kind: 'receipt',
+        attention: 'action_required',
+        delivery_id: 'dlv_recall_b',
+        room_id: 'rm_test',
+        message_id: 'msg_dlv_recall_b',
+        state: 'cancelled',
+        attempt: 1,
+        seq: '51',
+        event_id: 'evt_recall_b_cancelled',
+      }),
+    ]);
+    const recallStopA = await waitForDeliveryState(recallWatcher.stdout, 'dlv_recall_a', 'cancelled');
+    const recallStopB = await waitForDeliveryState(recallWatcher.stdout, 'dlv_recall_b', 'cancelled');
+    checkEqual('撤回后仍输出停止事件 stop', recallStopA.stop, true);
+    checkEqual('撤回后仍输出停止事件 action', recallStopA.action, 'stop');
+    checkEqual('撤回取消 reason', recallStopA.reason, 'message_recalled');
+    checkEqual('无 reason 取消也输出 stop', recallStopB.stop, true);
+
+    // 服务端 claim 槽位释放后，被撤回的 deferred 不能借唤醒再次 claim。
+    recallMock.state.claims.clear();
+    await Bun.sleep(900);
+    checkEqual(
+      '撤回后 deferred 不再 claim（message_recalled）',
+      recallMock.state.claimCalls.get('dlv_recall_a'),
+      recallClaimsBefore.a,
+    );
+    checkEqual(
+      '撤回后 deferred 不再 claim（无 reason）',
+      recallMock.state.claimCalls.get('dlv_recall_b'),
+      recallClaimsBefore.b,
+    );
+    checkEqual(
+      '撤回后不产生 delivery_claim_failed',
+      eventCount(recallWatcher.stdout, 'delivery_claim_failed', 'dlv_recall_a') +
+        eventCount(recallWatcher.stdout, 'delivery_claim_failed', 'dlv_recall_b'),
+      0,
+    );
+    checkEqual(
+      '撤回后不产生 delivery',
+      eventCount(recallWatcher.stdout, 'delivery', 'dlv_recall_a') +
+        eventCount(recallWatcher.stdout, 'delivery', 'dlv_recall_b'),
+      0,
+    );
+    checkEqual(
+      '撤回后停止事件只输出一次',
+      eventCount(recallWatcher.stdout, 'delivery_state', 'dlv_recall_a'),
+      1,
+    );
+
+    // 槽位释放后其他待领投递仍能被唤醒并领取。
+    recallMock.state.pending.set('dlv_recall_after', delivery('dlv_recall_after'));
+    sendItems(recallMock, [
+      notificationItem('dlv_recall_after', 'delivery.created', 'evt_recall_after'),
+    ]);
+    const afterRecall = await waitForEvent(recallWatcher.stdout, 'delivery', 'dlv_recall_after');
+    checkEqual('撤回释放后其他投递仍可领取', afterRecall.claim_state, 'claimed');
+  } finally {
+    await recallWatcher.kill();
+    recallMock.stop();
+  }
+
   // 3) peri --json：inbox 失败仍输出结构化 error，恢复后正常 delivery。
   const jsonMock = createMock({ inboxFailures: 1 });
   jsonMock.state.pending.set('dlv_json_retry', delivery('dlv_json_retry'));

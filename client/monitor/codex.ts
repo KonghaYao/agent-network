@@ -90,6 +90,8 @@ const RETRY_DELAY_MS = 500;
 const CLIENT_NAME = 'codex-watch';
 const CLIENT_VERSION = '1.0.0';
 const ACK_BODY = '收到，我正在处理，稍后回复结果。';
+/** 取消记忆上限：没有 active turn 的取消也要有界，避免长进程无限增长。 */
+const CANCELLED_DELIVERIES_MAX = 1_024;
 const CONNECTION_HINT =
   'app_server_disconnected; restart watcher to reconcile pending inbox and claimed deliveries';
 
@@ -605,6 +607,16 @@ class CodexWatcher {
     this.finalMessage = null;
   }
 
+  /** 记录停止指令；有界裁剪，`delivery.retried` 与回合收口时移除。 */
+  private noteCancelledDelivery(deliveryId: string): void {
+    this.cancelledDeliveries.add(deliveryId);
+    while (this.cancelledDeliveries.size > CANCELLED_DELIVERIES_MAX) {
+      const oldest = this.cancelledDeliveries.values().next().value;
+      if (oldest === undefined) break;
+      this.cancelledDeliveries.delete(oldest);
+    }
+  }
+
   /**
    * 取消/撤回投递是停止指令，不是新任务。
    *
@@ -621,7 +633,7 @@ class CodexWatcher {
     this.steered.delete(deliveryId);
     this.notified.delete(deliveryId);
     this.claimSkipped.delete(deliveryId);
-    this.cancelledDeliveries.add(deliveryId);
+    this.noteCancelledDelivery(deliveryId);
     this.log(
       `DELIVERY_CANCELLED delivery=${deliveryId} room=${asString(item.room_id) || '-'} ` +
         `message=${asString(item.message_id) || '-'} attempt=${attempt} ` +

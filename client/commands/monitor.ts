@@ -510,8 +510,13 @@ export async function monitor(
       context.baseUrl !== null
     ) {
       const detected = await ensureDshMonitorPlugin();
+      const pluginStatus = detected.updated
+        ? 'updated'
+        : detected.installed
+          ? 'installed'
+          : 'present';
       process.stderr.write(
-        `DSH_PLUGIN status=${detected.installed ? 'installed' : 'present'} ` +
+        `DSH_PLUGIN status=${pluginStatus} plugin_version=${detected.version} ` +
           `dsh_version=${detected.dshVersion}\n`,
       );
     }

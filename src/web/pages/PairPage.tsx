@@ -6,6 +6,7 @@ import { PairScanner } from '../features/pairing/PairScanner';
 import { callTool, type McpError } from '../lib/mcp-client';
 import { resolvePairingAttempt, type PairingAttempt } from '../lib/pairing-attempt';
 import { isPairingChallenge, parsePairingQr } from '../lib/pairing-qr';
+import { clearActorDrafts } from '../lib/drafts';
 import { clearRecalledDrafts } from '../lib/recalled-drafts';
 import { pairingUpdateBusy, setUpdateBusy } from '../pwa/update-busy';
 import {
@@ -417,8 +418,9 @@ export function PairPage() {
       return false;
     }
     sessionRemove(PAIR_TOKEN_PREFIX + attempt.challenge);
-    // 配对成功即切换到新身份；旧身份的撤回原文副本不能带入下一次会话。
+    // 配对成功即切换到新身份；旧身份的撤回原文与本机未发送草稿不能带入下一次会话。
     clearRecalledDrafts();
+    clearActorDrafts(currentIdentity.current?.actor_id ?? null);
     try {
       window.history.replaceState(null, '', window.location.pathname + window.location.search);
     } catch {

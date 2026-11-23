@@ -2,7 +2,7 @@
  * 撤回后重新编辑的本地原文缓存单测。
  *
  * 纯内存 Storage，不启动浏览器；覆盖有界淘汰、actor 隔离、空正文、
- * 恢复后移除与身份清理。真实 sessionStorage 与发送/撤回链路由
+ * 恢复后移除与身份清理（含退出登录时普通草稿按 actor 精确清理）。真实 sessionStorage 与发送/撤回链路由
  * `tests/e2e/group-message-moderation.spec.ts` 驱动。
  *
  * 运行：`bun scripts/verify-recalled-drafts.ts`
@@ -19,6 +19,7 @@ import {
   rememberRecalledDraft,
   type RecalledDraftStorage,
 } from '../src/web/lib/recalled-drafts';
+import { clearActorDrafts, draftKey } from '../src/web/lib/drafts';
 import { check, checkEqual, checksPassed } from './lib/harness';
 
 class MemoryStorage implements RecalledDraftStorage {
@@ -170,6 +171,38 @@ function fresh(): MemoryStorage {
     '清空不影响其他 sessionStorage key',
     storage.getItem('agent-network-draft-v1:alice:room') !== null,
   );
+}
+
+// ---- 普通草稿：退出/切号只清当前 actor ----
+{
+  const storage = fresh();
+  storage.setItem(draftKey('alice', 'rm_1'), 'alice 房间 1 草稿');
+  storage.setItem(draftKey('alice', 'rm_2'), 'alice 房间 2 草稿');
+  storage.setItem(draftKey('bob', 'rm_1'), 'bob 房间 1 草稿');
+  storage.setItem('agent-network-token', 'token');
+  storage.setItem('agent-network-logged-out', '1');
+  clearActorDrafts('alice', storage);
+  checkEqual(
+    '退出清空当前 actor 第一个房间草稿',
+    storage.getItem(draftKey('alice', 'rm_1')),
+    null,
+  );
+  checkEqual(
+    '退出清空当前 actor 第二个房间草稿',
+    storage.getItem(draftKey('alice', 'rm_2')),
+    null,
+  );
+  checkEqual(
+    '重新登录不会回填旧 actor 草稿',
+    storage.getItem(draftKey('alice', 'rm_1')),
+    null,
+  );
+  checkEqual('其他 actor 草稿不受影响', storage.getItem(draftKey('bob', 'rm_1')), 'bob 房间 1 草稿');
+  checkEqual('非草稿偏好不受影响', storage.getItem('agent-network-token'), 'token');
+  checkEqual('退出标记不受影响', storage.getItem('agent-network-logged-out'), '1');
+
+  clearActorDrafts(null, storage);
+  checkEqual('actor 未知时不误删任何草稿', storage.getItem(draftKey('bob', 'rm_1')), 'bob 房间 1 草稿');
 }
 
 // ---- 写失败静默降级 ----

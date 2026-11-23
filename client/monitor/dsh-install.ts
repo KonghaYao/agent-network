@@ -12,8 +12,10 @@ import { acquireLock } from './locks';
 import pluginSource from './dsh-plugin.mjs.txt' with { type: 'text' };
 
 export const DSH_MONITOR_PACKAGE = '@peri-code/dsh-webots-monitor';
-export const DSH_MONITOR_PLUGIN_VERSION = '1.0.0';
+export const DSH_MONITOR_PLUGIN_VERSION = '1.0.1';
 export const DSH_SUPPORTED_RANGE = '>=0.2.1-rc.5 <0.3.0';
+/** 安装记录：版本或模板摘要变化时自动升级，同版本重复启动不重写。 */
+const INSTALL_RECORD_FILE = 'webots-monitor-install.json';
 
 const COMMAND_TIMEOUT_MS = 10_000;
 const COMMAND_OUTPUT_MAX = 16 * 1024;
@@ -52,7 +54,24 @@ interface BindingPlan {
 
 export interface DshPluginEnsureResult {
   installed: boolean;
+  /** 已有安装因版本/模板摘要变化被原地更新。 */
+  updated: boolean;
+  version: string;
   dshVersion: string;
+}
+
+interface InstallRecord {
+  version: string;
+  digest: string;
+}
+
+/** 旧版本或模板变化才需要重跑官方 add；同摘要保持 present 幂等。 */
+export function shouldUpgradeDshPlugin(
+  record: InstallRecord | null,
+  version: string = DSH_MONITOR_PLUGIN_VERSION,
+  digest: string,
+): boolean {
+  return record === null || record.version !== version || record.digest !== digest;
 }
 
 async function canonicalPath(path: string): Promise<string> {
@@ -385,6 +404,54 @@ async function commitBinding(value: Target, plan: BindingPlan): Promise<void> {
   await writeAtomicFile(value.bindingsFile, `${JSON.stringify(plan.bindings, null, 2)}\n`);
 }
 
+function installRecordPath(profileDir: string): string {
+  return join(profileDir, INSTALL_RECORD_FILE);
+}
+
+function parseInstallRecord(text: string | null): InstallRecord | null {
+  if (text === null) return null;
+  try {
+    const parsed = JSON.parse(text) as Partial<InstallRecord> | null;
+    if (
+      !parsed ||
+      typeof parsed.version !== 'string' ||
+      typeof parsed.digest !== 'string'
+    ) {
+      return null;
+    }
+    return { version: parsed.version, digest: parsed.digest };
+  } catch {
+    return null;
+  }
+}
+
+/** 记录缺失/损坏按旧安装处理：升级一次，不误判为当前版本。 */
+async function readInstallRecord(profileDir: string): Promise<InstallRecord | null> {
+  try {
+    return parseInstallRecord(await readOptional(installRecordPath(profileDir)));
+  } catch {
+    return null;
+  }
+}
+
+async function writeInstallRecord(
+  profileDir: string,
+  value: Artifacts,
+): Promise<void> {
+  await writeAtomicFile(
+    installRecordPath(profileDir),
+    `${JSON.stringify(
+      {
+        version: DSH_MONITOR_PLUGIN_VERSION,
+        digest: value.digest,
+        package_dir: value.packageDir,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
 export async function ensureDshMonitorPlugin(): Promise<DshPluginEnsureResult> {
   const value = await target();
   const dshVersion = await detectDshVersion();
@@ -397,14 +464,41 @@ export async function ensureDshMonitorPlugin(): Promise<DshPluginEnsureResult> {
   }
   try {
     const binding = await planBinding(value);
+    const packageFiles = artifacts(value);
     const present = await pluginExists(value.profile);
+    let installed = false;
+    let updated = false;
     if (!present) {
-      const packageFiles = artifacts(value);
       await preparePackage(packageFiles);
       await addPlugin(value.profile, packageFiles.packageDir);
+      await writeInstallRecord(value.profileDir, packageFiles);
+      installed = true;
+    } else {
+      const record = await readInstallRecord(value.profileDir);
+      if (shouldUpgradeDshPlugin(record, DSH_MONITOR_PLUGIN_VERSION, packageFiles.digest)) {
+        await preparePackage(packageFiles);
+        try {
+          await addPlugin(value.profile, packageFiles.packageDir);
+        } catch (error) {
+          // 旧安装保持可用；给出可读诊断，而不是静默继续使用过期插件模板。
+          throw new CliError(
+            `DSH monitor 插件自动升级失败；已保留原安装（${record?.version ?? 'unknown'} → ` +
+              `${DSH_MONITOR_PLUGIN_VERSION}）。${
+                error instanceof CliError ? error.message : String(error)
+              }`,
+          );
+        }
+        await writeInstallRecord(value.profileDir, packageFiles);
+        updated = true;
+      }
     }
     await commitBinding(value, binding);
-    return { installed: !present, dshVersion };
+    return {
+      installed,
+      updated,
+      version: DSH_MONITOR_PLUGIN_VERSION,
+      dshVersion,
+    };
   } finally {
     await release();
   }

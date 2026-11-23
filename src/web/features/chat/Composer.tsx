@@ -54,8 +54,8 @@ import type { SendOutcome } from '../../hooks/useSendQueue';
 import { confirmDialog } from '../overlays/confirm';
 import { ComposerFileChip, type ComposerFile } from './ComposerFileChip';
 import { loadDrawboard } from './composer-drawboard';
+import { draftKey } from '../../lib/drafts';
 
-const DRAFT_PREFIX = 'agent-network-draft-v1:';
 const MAX_TEXTAREA_HEIGHT = 96;
 
 export interface ComposerSendInput {
@@ -120,10 +120,6 @@ interface ComposerProps {
    * 卸载时注销；拖拽事件由 ChatPage 的 `#chat-body` 统一接收，避免双处理。
    */
   registerFileDrop: (handler: ((files: File[]) => void) | null) => void;
-}
-
-function draftKey(actorId: string, roomId: string): string {
-  return `${DRAFT_PREFIX}${actorId}:${roomId}`;
 }
 
 function readDraft(key: string): string {

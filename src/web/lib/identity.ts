@@ -9,6 +9,7 @@ import {
   type McpError,
 } from './mcp-client';
 import { clearRecalledDrafts } from './recalled-drafts';
+import { clearActorDrafts } from './drafts';
 
 /**
  * 浏览器身份引导。
@@ -252,8 +253,9 @@ export async function revalidateWebSession(): Promise<WebSession> {
       previous &&
       (previous.token !== stored || previous.identity.actor_id !== identity.actor_id)
     ) {
-      // 切号/换 token 后旧身份的撤回原文不得留给新身份。
+      // 切号/换 token 后旧身份的撤回原文与本机未发送草稿不得留给新身份。
       clearRecalledDrafts();
+      clearActorDrafts(previous.identity.actor_id);
       bumpIdentityEpoch();
     }
     return cached;
@@ -276,10 +278,13 @@ export function cachedWebSession(): WebSession | null {
 
 /** 身份/token 变化后清空缓存；SPA Home 目前不主动切换身份。 */
 export function resetWebSession(): void {
+  // 退出/撤权前记住当前 actor：清掉其本机未发送草稿，但保留其他身份。
+  const actorId = cached?.identity.actor_id ?? null;
   cached = null;
   pending = null;
   freshPending = null;
-  // 退出/撤权后旧身份的晚到响应与本地原文副本都必须全部作废。
+  // 退出/撤权后旧身份的晚到响应、本地原文副本与本机草稿都必须全部作废。
   clearRecalledDrafts();
+  clearActorDrafts(actorId);
   bumpIdentityEpoch();
 }

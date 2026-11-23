@@ -97,6 +97,8 @@ const INFORMATIONAL_DEDUPE_TTL_MS = 5 * 60_000;
 const INFORMATIONAL_SEEN_MAX = 4_096;
 /** 单次截断后最多连续续读的轮数；超过后等待下一次 reconnect/more/dropped。 */
 const ROOM_BACKFILL_MAX_ROUNDS = 10;
+/** 已取消投递的记忆上限；超出时丢最旧，避免长时间运行后无限增长。 */
+const CANCELLED_DELIVERIES_MAX = 1_024;
 
 /** `network_history_list` 的单次结果；游标失效需要按业务 code 区分。 */
 type RoomHistoryFetch =
@@ -421,6 +423,11 @@ export class MonitorEngine {
   private readonly emittedClaims = new Set<string>();
   /** deferred 提示去重：同一状态只输出一次，holder/attempt 变化再输出。 */
   private readonly deferredNoticeKeys = new Map<string, string>();
+  /**
+   * recipient 收到的“停止”取消。撤回/取消后即使 pending 快照或延迟重试
+   * 再次看到同一投递，也不能重新 claim；`delivery.retried` 时清除。
+   */
+  private readonly cancelledDeliveries = new Set<string>();
 
   constructor(options: MonitorEngineOptions) {
     this.rpc = options.rpc;
@@ -764,7 +771,10 @@ export class MonitorEngine {
         const fallback = [source, asString(item.seq), id].join(':');
 
         // 收到 retry 回执时立即把待领队列里的同一条投递放回队首。
-        if (source === 'delivery.retried') this.releaseDeferred(id);
+        if (source === 'delivery.retried') {
+          this.cancelledDeliveries.delete(id);
+          this.releaseDeferred(id);
+        }
 
         if (this.claiming.has(id)) continue;
         const queued = this.deferred.get(id);
@@ -825,6 +835,15 @@ export class MonitorEngine {
       const eventId = asString(item.event_id);
       const fallback = [source, asString(item.seq), asString(item.delivery_id)].join(':');
       const cancelled = isActionableDeliveryCancellation(item);
+      if (cancelled) {
+        // 撤回/取消是停止指令：先释放本地待领槽位并记住取消，再输出停止事件；
+        // 随后的 wakeDeferred 只唤醒其他仍然有效的投递，不能重试被取消的这条。
+        const deliveryId = asString(item.delivery_id);
+        if (deliveryId.length > 0) {
+          this.noteCancelledDelivery(deliveryId);
+          this.releaseDeferred(deliveryId);
+        }
+      }
       this.emitInformational(
         cancelled ? deliveryCancelledEvent(item, source) : deliveryStateEvent(item, source),
         `delivery-state:${eventId.length > 0 ? eventId : fallback}`,
@@ -1312,6 +1331,8 @@ export class MonitorEngine {
 
   private async emitFound(item: JsonObject, source: string): Promise<EmitResult> {
     const fields = deliveryFields(item);
+    // 已收到 recipient 的停止取消：不再 claim，也不重复输出投递。
+    if (this.cancelledDeliveries.has(fields.deliveryId)) return 'emitted';
     if (this.readBody && !SAFE_ID.test(fields.deliveryId)) {
       this.control(
         'error',
@@ -1599,6 +1620,16 @@ export class MonitorEngine {
     this.scheduleDeferred();
   }
 
+  /** 记住被取消的投递；有界保留，`delivery.retried` 时移除。 */
+  private noteCancelledDelivery(deliveryId: string): void {
+    if (!this.cancelledDeliveries.has(deliveryId)) this.cancelledDeliveries.add(deliveryId);
+    while (this.cancelledDeliveries.size > CANCELLED_DELIVERIES_MAX) {
+      const oldest = this.cancelledDeliveries.values().next().value;
+      if (oldest === undefined) break;
+      this.cancelledDeliveries.delete(oldest);
+    }
+  }
+
   /** 收到 claim 完成/失败/重试回执后，立即唤醒待领队列。 */
   private wakeDeferred(delayMs: number): void {
     if (this.deferred.size === 0) return;
@@ -1633,6 +1664,12 @@ export class MonitorEngine {
       const now = Date.now();
       for (const [deliveryId, entry] of [...this.deferred.entries()]) {
         if (this.signal.aborted) break;
+        if (this.cancelledDeliveries.has(deliveryId)) {
+          // 已撤回/取消：释放槽位，不 claim、不输出 claim_failed。
+          this.deferred.delete(deliveryId);
+          this.deferredNoticeKeys.delete(deliveryId);
+          continue;
+        }
         if (entry.nextAt > now || this.claiming.has(deliveryId)) continue;
 
         this.claiming.add(deliveryId);
@@ -1673,6 +1710,8 @@ export class MonitorEngine {
         if (claim.ok) {
           this.deferred.delete(deliveryId);
           this.deferredNoticeKeys.delete(deliveryId);
+          // claim 在途期间收到取消：丢弃结果，不再输出可处理投递。
+          if (this.cancelledDeliveries.has(deliveryId)) continue;
           const result = await this.emitClaimed(entry.item, entry.fields, claim.claim, entry.source);
           if (result === 'emitted') {
             await this.state.markSeen(`pending:${deliveryId}:${entry.fields.attempt}`);
