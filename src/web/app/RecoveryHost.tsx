@@ -75,7 +75,9 @@ const RECOVERY_TRANSITION_STYLE = {
 /**
  * 身份边界遮罩：只有 `masked` 才渲染，并且退出时保留一个短淡出窗口。
  *
- * 进入顺序必须是「遮罩可见 → #root inert/aria-hidden」，退出则先恢复
+ * 进入顺序是「先隐藏并隔离 #root，再绘制遮罩」：`useLayoutEffect` 在
+ * 浏览器绘制前设置 #root 的 `inert`/`aria-hidden` 与可见性，遮罩随后
+ * 出现，因此不存在“遮罩已显示但底层仍可见/可交互”的帧。退出则先恢复
  * #root 交互，再让遮罩淡出；一旦确认身份变化或撤权，旧私有缓存已在
  * `RecoveryHost` 的 effect 中先行清空，不留“先显示后校验”的窗口。
  */
@@ -172,11 +174,17 @@ type HintStage = 'hidden' | 'visible' | 'leaving';
 /**
  * 普通恢复轮的非阻塞提示：不改变布局、不加 inert，也不触碰 #root。
  * 只在应用页且已有浏览器身份时显示；分享/加入/配对页不挂载该组件。
+ *
+ * 位置由实际布局测量：贴住当前可见头部（聊天头部或侧栏头部）的下沿，
+ * 再以 composer 顶部为上界。移动端聊天头部会因标题与操作按钮换行而变高，
+ * 写死视口常量会在 390px 遮挡群名，因此这里读取布局而不是猜高度。
  */
 function RecoverySyncHint({ enabled }: { enabled: boolean }) {
   const state = useRecoveryState();
   const active = enabled && state.phase === 'checking' && !state.masked && state.online;
   const [stage, setStage] = useState<HintStage>('hidden');
+  const hintRef = useRef<HTMLDivElement | null>(null);
+  const [anchorTop, setAnchorTop] = useState<number | null>(null);
 
   useEffect(() => {
     if (active) {
@@ -199,13 +207,60 @@ function RecoverySyncHint({ enabled }: { enabled: boolean }) {
     return undefined;
   }, [active, stage]);
 
+  useLayoutEffect(() => {
+    if (stage !== 'visible') return;
+    const update = () => {
+      const hint = hintRef.current;
+      if (!hint) return;
+      const hintHeight = hint.getBoundingClientRect().height;
+      const visibleHead = (selector: string) =>
+        Array.from(document.querySelectorAll<HTMLElement>(selector)).find(
+          (element) => element.getBoundingClientRect().height > 0,
+        );
+      // 房间页优先贴聊天头部；首页没有可见聊天头部时才用侧栏头部。
+      const head = visibleHead('.chat-head') ?? visibleHead('.sidebar-head');
+      if (!head) {
+        // 头部尚未或不再渲染：退回样式表的安全区顶部。
+        setAnchorTop(null);
+        return;
+      }
+      const composer = Array.from(
+        document.querySelectorAll<HTMLElement>('.composer'),
+      ).find((element) => element.getBoundingClientRect().height > 0);
+      const lowerBound = composer
+        ? composer.getBoundingClientRect().top
+        : window.innerHeight;
+      const top = Math.max(
+        8,
+        Math.min(
+          head.getBoundingClientRect().bottom + 8,
+          lowerBound - hintHeight - 8,
+        ),
+      );
+      setAnchorTop(Math.round(top));
+    };
+    update();
+    window.addEventListener('resize', update);
+    window.addEventListener('orientationchange', update);
+    window.visualViewport?.addEventListener('resize', update);
+    return () => {
+      window.removeEventListener('resize', update);
+      window.removeEventListener('orientationchange', update);
+      window.visualViewport?.removeEventListener('resize', update);
+    };
+  }, [stage]);
+
   if (typeof document === 'undefined' || stage === 'hidden') return null;
   return createPortal(
     <div
       id="recovery-sync-hint"
       className="recovery-sync-hint"
       data-state={stage}
-      style={RECOVERY_TRANSITION_STYLE}
+      ref={hintRef}
+      style={{
+        ...RECOVERY_TRANSITION_STYLE,
+        ...(anchorTop === null ? null : { top: `${anchorTop}px` }),
+      }}
       role="status"
       aria-live="polite"
     >

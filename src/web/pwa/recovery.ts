@@ -182,8 +182,10 @@ export function triggerRecovery(
       longBackground: pendingLongBackground || options.longBackground === true,
     });
   }
+  // pendingLongBackground 只用于排队期间的 snapshot 展示；本轮是否长后台
+  // 必须只由本次触发的 options 决定，避免排队后的 auth/online 轮继承旧标记。
   scheduler.trigger(reason, {
-    longBackground: pendingLongBackground || options.longBackground === true,
+    longBackground: options.longBackground === true,
     mask: pendingMask,
   });
 }

@@ -1392,7 +1392,9 @@ body[data-recovery-masked='1'] #root {
   }
 }
 
-/* 普通恢复轮的非阻塞提示：不占布局、不拦截指针、不触碰 #root。 */
+/* 普通恢复轮的非阻塞提示：不占布局、不拦截指针、不触碰 #root。
+ * 这里的 top 只是尚未测到头部时的回退；RecoveryHost 会按当前可见头部的
+ * 下沿设置内联 top，避免移动端头部换行（390px 下约 93px）时遮住群名。 */
 .recovery-sync-hint {
   position: fixed;
   top: calc(8px + env(safe-area-inset-top, 0px));
