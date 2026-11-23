@@ -293,12 +293,6 @@ export async function roomAnnouncementSet(
   const access = await requireGroupAccess(db, input.room_id, caller, 'manage_announcement');
   assertRoomWritable(access.room);
   const bytes = new TextEncoder().encode(input.announcement).byteLength;
-  if (bytes > LIMITS.roomAnnouncementBytes) {
-    throw new BusinessError('INVALID_ARGUMENT', '群公告超过长度上限', {
-      bytes,
-      max: LIMITS.roomAnnouncementBytes,
-    });
-  }
   const payloadHash = await sha256Hex(stableStringify(input));
   const replay = await resolveReplay(db, caller, input.request_id, payloadHash);
   if (

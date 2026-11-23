@@ -4,7 +4,6 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 
-import { LIMITS } from '../../../contracts/limits';
 import {
   announcementFormSchema,
   type AnnouncementForm,
@@ -93,7 +92,6 @@ export function AnnouncementDialog({
           <TextArea
             id="announcement-input"
             rows={6}
-            maxLength={LIMITS.roomAnnouncementBytes * 2}
             placeholder="留空表示清除公告"
             aria-describedby={errors.announcement ? 'announcement-error' : undefined}
             aria-invalid={errors.announcement ? true : undefined}

@@ -478,7 +478,7 @@ export const roomPolicySetSchema = z
 export const roomAnnouncementSetSchema = z.object({
   request_id: requestId,
   room_id: id(),
-  announcement: z.string().max(LIMITS.roomAnnouncementBytes),
+  announcement: z.string(),
   expected_announcement_revision: z.number().int().positive(),
 });
 

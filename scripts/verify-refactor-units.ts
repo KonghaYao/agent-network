@@ -985,8 +985,8 @@ function componentModelChecks(): void {
     !groupCreateFormSchema.safeParse({ title: '群', members: [] }).success,
   );
   check(
-    '公告表单按 UTF-8 字节限制',
-    !announcementFormSchema.safeParse({ announcement: '好'.repeat(LIMITS.roomAnnouncementBytes) }).success,
+    '公告表单不设专属长度上限',
+    announcementFormSchema.safeParse({ announcement: '好'.repeat(5_000) }).success,
   );
 }
 
