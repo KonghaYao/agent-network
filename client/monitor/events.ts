@@ -333,6 +333,7 @@ export function streamItemEvent(item: JsonObject, source: string, type = 'stream
     event_id: asText(pick(item.event_id, '')),
     seq: asText(pick(item.seq, pick(item.created_seq, ''))),
     state: nullableText(item.state),
+    reason: nullableText(item.reason),
     attempt: item.attempt === undefined || item.attempt === null ? null : asNumber(item.attempt, 0),
     subject_id: nullableText(item.subject_id),
     changed_by: nullableText(item.changed_by),
@@ -344,6 +345,56 @@ export function streamItemEvent(item: JsonObject, source: string, type = 'stream
 
 export function deliveryStateEvent(item: JsonObject, source: string): JsonObject {
   return streamItemEvent(item, source, 'delivery_state');
+}
+
+/**
+ * recipient 的 `delivery.cancelled` 是停止指令，不是新待办。
+ *
+ * 服务端给 recipient 的 inbox 取消事件固定为 `action_required`；房间内
+ * 其他成员看到的是 informational 回执，不能据此停止自己的工作。
+ */
+export function isActionableDeliveryCancellation(item: JsonObject): boolean {
+  return asString(item.source) === 'delivery.cancelled' && item.attention === 'action_required';
+}
+
+/** 撤回产生的取消在服务端 metadata 中记为 `reason=message_recalled`。 */
+export function isRecallCancellation(item: JsonObject): boolean {
+  return isActionableDeliveryCancellation(item) && asString(item.reason) === 'message_recalled';
+}
+
+/**
+ * 取消投递的宿主可执行文案。字段只来自事件定位信息，不含正文。
+ * reason 缺失时按一般取消处理，仍要求停止；不伪造“已终止本地进程”。
+ */
+export function deliveryCancelledInstruction(item: JsonObject): string {
+  const deliveryId = asText(pick(item.delivery_id, '')) || '-';
+  const roomId = asText(pick(item.room_id, '')) || '-';
+  const messageId = asText(pick(item.message_id, '')) || '-';
+  const attempt =
+    item.attempt === undefined || item.attempt === null
+      ? '-'
+      : String(asNumber(item.attempt, 0));
+  const recalled = isRecallCancellation(item);
+  return (
+    `DELIVERY_CANCELLED delivery_id=${deliveryId} room_id=${roomId} ` +
+    `message_id=${messageId} attempt=${attempt}：` +
+    `${recalled ? '消息已撤回，' : ''}服务端已取消该投递。立即停止该投递的当前工作并丢弃结果；` +
+    '不要发送回复，不要 claim/report/complete/fail，也不要自动重试。' +
+    '已发出的回复或外部副作用无法回滚，如已发生请如实说明。'
+  );
+}
+
+/** 取消回执：保留 delivery_state 兼容性，额外携带 stop/instruction。 */
+export function deliveryCancelledEvent(item: JsonObject, source: string): JsonObject {
+  return {
+    ...streamItemEvent(item, source, 'delivery_state'),
+    attention: 'action_required',
+    state: 'cancelled',
+    reason: nullableText(item.reason),
+    stop: true,
+    action: 'stop',
+    instruction: deliveryCancelledInstruction(item),
+  };
 }
 
 /**

@@ -44,6 +44,7 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
     ],
     pitfalls: [
       'delivery_conflict 表示别人已领取，跳过；delivery_deferred 表示自己已有 claimed：立即按事件 message_id 读正文并回复，不要等 claim 或长任务结束，再在阶段边界 complete/fail 释放当前 claim；watcher 会自动退避重试。',
+      'delivery_state 带 stop=true/instruction（DELIVERY_CANCELLED）表示该投递已被撤回/取消：立即停止当前工作并丢弃结果，不要 claim/report/complete/fail 或重试；已发出的回复无法回滚。',
       'Monitor 正常运行时不要重启；断线由脚本退避重连。',
     ],
   },
@@ -66,6 +67,7 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
     pitfalls: [
       '`--check` 会连接 MCP 并调用 network_me，但不连接 app-server；真正接通仍以 CODEX_READY 与 READY 为准。只检查静态配置用 `--check-config`。',
       '工作中收到新消息会先用 turn/steer 提示并保持 pending，当前投递完成后自动领取处理。',
+      '收到 DELIVERY_CANCELLED（投递撤回/取消）时桥接器立即用 turn/steer 注入停止指令；该回合结束不 complete/fail，也不要重新 claim，已发出的回复无法回滚。',
       '不要只看“已送达”；以 QUEUED_STEERED / STEERED / TURN_STARTED 日志判断处理阶段。',
     ],
   },
@@ -94,6 +96,7 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
       '用 Peri 的 monitor_start 承载 `agentnet monitor --harness peri --json`；单次最长 24 小时，启动先输出 DEADLINE，剩余 10 分钟输出一次 EXPIRING，到期输出 EXPIRED 并退出。',
       '脚本先 server/discover、订阅 agentnet://stream、login，再输出 READY；订阅到达的所有 item 都输出，@/delivery 只是优先级。',
       'ALERT 稳定包含 type/room_id/seq；delivery/reminder/stream_event/delivery_state 另含 delivery_id（room_message 不输出），只含定位字段与 claim 信息，不含正文；用 `agentnet read --message <id>` 读正文。',
+      'delivery_state 带 stop=true/instruction（DELIVERY_CANCELLED）表示该投递已撤回/取消：立即停止当前工作并丢弃结果，不要 claim/report/complete/fail 或重试。',
       'type=delivery 默认只带 `memory_pack_id`/`memory_items`/`memory_reason` pointer，不含记忆正文；需要正文时由 Agent 显式调用 `network_memory_context_pack`，避免 watch.log 落盘。',
     ],
     pitfalls: [
@@ -117,6 +120,7 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
       'DSH 没有内置 monitor；TS 守护把全部 stream item 的定位/变更字段写入 `$WEBBOTS_HOME/wake.queue`，不再区分直聊/群聊。',
       '插件只唤醒绑定的会话；忙时保留队列，空闲后通过 agent.followup 提交。`agentnet monitor --harness dsh status` 的 consumer.state=attached 才说明消费者已连接。',
       '`agentnet monitor --harness dsh` 不自动 claim：收到 delivery_id 后先 `agentnet claim <id>`，再读正文、回复、complete/fail。',
+      '`delivery.cancelled` 且 state=cancelled 表示投递已撤回/取消：立即停止该 delivery_id 的当前工作，不要 claim/report/complete/fail 或重试；唤醒提示会说明停止语义。',
       '`wake.queue` 保持既有定位字段，不写入记忆正文；Agent 被唤醒后自行调用一次 `network_memory_context_pack { room_id, message_id? }`（没有可用记忆时返回空包，不阻塞处理）。',
     ],
     pitfalls: [
@@ -141,6 +145,7 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
       '用后台任务运行 `agentnet monitor --harness peri` 写 `watch.log`，并让 `agentnet monitor --harness other` 的哨兵读取新 ALERT。',
       '后台任务结束就是唤醒信号；每次处理完必须重新挂哨兵，不要用 READY 代替实际消费。',
       '`type=delivery` 已在输出前自动 claim；其他 ALERT（room_message/stream_event/delivery_state）只提示。被唤醒后先 `agentnet inbox` 对账，再 read/reply/complete/fail。',
+      '`delivery_state` 带 stop=true/instruction 表示投递已撤回/取消：立即停止当前工作并丢弃结果，不要 claim/report/complete/fail 或重试。',
     ],
     pitfalls: [
       '只启动 peri 监听而不挂哨兵：投递会停在 claimed，直到提醒或被 retry；delivery_deferred 也要立即按 message_id 读正文并回复，不要等 claim。',

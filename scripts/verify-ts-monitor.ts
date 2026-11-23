@@ -1991,6 +1991,66 @@ async function runRoomEventChecks(): Promise<void> {
     checkEqual('cancelled 回执 source', cancelledReceipt.source, 'delivery.cancelled');
     checkEqual('回执不触发 claim', mock.state.claimCalls.size, receiptClaimBefore);
 
+    // 撤回/取消投递是停止指令：带 stop/instruction，不进入 claim；
+    // 房间内其他成员的 informational 取消回执不带 stop。
+    const recallClaimBefore = mock.state.claimCalls.size;
+    sendItems(mock, [
+      streamItem('delivery.cancelled', {
+        kind: 'receipt',
+        attention: 'action_required',
+        delivery_id: 'dlv_recall_stop',
+        room_id: 'rm_allowed',
+        message_id: 'msg_recall_stop',
+        reason: 'message_recalled',
+        state: 'cancelled',
+        attempt: 2,
+        seq: '43',
+        event_id: 'evt_recall_stop',
+      }),
+      streamItem('delivery.cancelled', {
+        kind: 'receipt',
+        delivery_id: 'dlv_room_receipt_cancel',
+        room_id: 'rm_allowed',
+        message_id: 'msg_room_receipt_cancel',
+        state: 'cancelled',
+        seq: '44',
+        event_id: 'evt_room_receipt_cancel',
+      }),
+    ]);
+    const recallStop = await waitForDeliveryState(
+      watcher.stdout,
+      'dlv_recall_stop',
+      'cancelled',
+    );
+    const roomCancelReceipt = await waitForDeliveryState(
+      watcher.stdout,
+      'dlv_room_receipt_cancel',
+      'cancelled',
+    );
+    checkEqual('撤回取消 stop', recallStop.stop, true);
+    checkEqual('撤回取消 action', recallStop.action, 'stop');
+    checkEqual('撤回取消 reason', recallStop.reason, 'message_recalled');
+    checkEqual('撤回取消 attempt', recallStop.attempt, 2);
+    check(
+      '撤回取消 instruction 含定位与停止语义',
+      typeof recallStop.instruction === 'string' &&
+        recallStop.instruction.includes('DELIVERY_CANCELLED') &&
+        recallStop.instruction.includes('delivery_id=dlv_recall_stop') &&
+        recallStop.instruction.includes('message_id=msg_recall_stop') &&
+        recallStop.instruction.includes('room_id=rm_allowed') &&
+        recallStop.instruction.includes('attempt=2') &&
+        recallStop.instruction.includes('消息已撤回') &&
+        recallStop.instruction.includes('立即停止') &&
+        recallStop.instruction.includes('不要 claim/report/complete/fail'),
+      recallStop.instruction,
+    );
+    check(
+      '房间内其他成员的取消回执不产生 stop',
+      roomCancelReceipt.stop === undefined && roomCancelReceipt.instruction === undefined,
+      roomCancelReceipt,
+    );
+    checkEqual('撤回取消不触发 claim', mock.state.claimCalls.size, recallClaimBefore);
+
     // 同帧 delivery + room.message：delivery 优先，不重复输出 room_message。
     mock.state.pending.set('dlv_room_same', delivery('dlv_room_same', 'msg_room_same'));
     sendItems(mock, [
