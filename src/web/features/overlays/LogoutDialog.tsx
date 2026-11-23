@@ -61,7 +61,7 @@ export function LogoutDialog({
           </AlertDialogPrimitive.Title>
           <AlertDialogPrimitive.Description asChild>
             <p id="logout-message" className="confirm-message">
-              退出只清除本机登录状态与本机未发送草稿，不会撤销服务端凭据。其他设备上的同一身份仍可继续使用。
+              退出只清除本机登录状态、页面会话数据与本机未发送草稿，当前 token 仍然有效且其他设备不受影响。
             </p>
           </AlertDialogPrimitive.Description>
           <div className="row modal-actions">

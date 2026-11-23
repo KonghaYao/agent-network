@@ -1683,6 +1683,13 @@ export class MonitorEngine {
           this.claiming.delete(deliveryId);
         }
 
+        // claim 在途期间收到取消：丢弃结果，不输出 claim 失败/延迟提示，不重试。
+        if (this.cancelledDeliveries.has(deliveryId)) {
+          this.deferred.delete(deliveryId);
+          this.deferredNoticeKeys.delete(deliveryId);
+          continue;
+        }
+
         if (claim === null) {
           entry.failures += 1;
           entry.nextAt = Date.now() + claimRetryDelay(entry.failures);
@@ -1710,8 +1717,6 @@ export class MonitorEngine {
         if (claim.ok) {
           this.deferred.delete(deliveryId);
           this.deferredNoticeKeys.delete(deliveryId);
-          // claim 在途期间收到取消：丢弃结果，不再输出可处理投递。
-          if (this.cancelledDeliveries.has(deliveryId)) continue;
           const result = await this.emitClaimed(entry.item, entry.fields, claim.claim, entry.source);
           if (result === 'emitted') {
             await this.state.markSeen(`pending:${deliveryId}:${entry.fields.attempt}`);

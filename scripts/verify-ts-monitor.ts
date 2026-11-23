@@ -43,7 +43,7 @@ import {
   extractAttachmentCandidates,
   startAttachmentCleanup,
 } from '../client/monitor/attachments';
-import { retryDelayMs } from '../client/monitor/engine';
+import { MonitorEngine, retryDelayMs } from '../client/monitor/engine';
 import { LIMITS } from '../src/contracts/limits';
 
 const ROOT = resolve(import.meta.dir, '..');
@@ -4249,6 +4249,195 @@ async function runOtherChecks(): Promise<void> {
 }
 
 /**
+ * deferred 投递的 claim 在途时收到取消：无论回包是 transport 失败、
+ * deferred 冲突还是终态失败，都必须丢弃结果，不输出任何 claim 失败/延迟提示。
+ */
+async function checkDeferredClaimCancelledInFlight(
+  label: string,
+  failureMode: 'null' | 'deferred' | 'conflict' | 'failed',
+): Promise<void> {
+  type Mode = typeof failureMode | 'ok';
+  const stdout: string[] = [];
+  const seen = new Set<string>();
+  const terminalCalls: string[] = [];
+  let mode: Mode = 'deferred';
+  let claimCalls = 0;
+  let gate: Promise<void> | null = null;
+  let releaseGate: (() => void) | null = null;
+  let enteredClaim = false;
+
+  const rpc = {
+    endpoint: 'http://127.0.0.1:9/mcp',
+    async callTool(name: string, args: JsonObject) {
+      if (name === 'network_inbox_list') {
+        const wanted = String(args.state ?? 'active');
+        return {
+          ok: true,
+          data:
+            wanted === 'claimed'
+              ? {
+                  items: [{ delivery_id: 'dlv_holder', attempt: 1, claim_id: 'clm_holder' }],
+                  has_more: false,
+                  next_cursor: null,
+                  claimed_delivery_id: 'dlv_holder',
+                }
+              : {
+                  items: [{ delivery_id: 'dlv_race', attempt: 0 }],
+                  has_more: false,
+                  next_cursor: null,
+                },
+        };
+      }
+      if (name === 'network_delivery_claim') {
+        claimCalls += 1;
+        if (gate !== null) {
+          const wait = gate;
+          gate = null;
+          enteredClaim = true;
+          await wait;
+        }
+        if (mode === 'null') throw new Error('transport reset');
+        if (mode === 'deferred') {
+          return { ok: false, code: 'CLAIM_CONFLICT', message: '当前已有领取中的工作' };
+        }
+        if (mode === 'conflict') {
+          return { ok: false, code: 'CLAIM_CONFLICT', message: '该工作已被领取或状态已变化' };
+        }
+        if (mode === 'failed') {
+          return { ok: false, code: 'CONFLICT', message: '源消息已撤回，不能继续执行或重新入队' };
+        }
+        return {
+          ok: true,
+          data: {
+            delivery_id: 'dlv_race',
+            attempt: 1,
+            claim_id: 'clm_race',
+            claimed_at: new Date().toISOString(),
+          },
+        };
+      }
+      if (name === 'network_delivery_complete' || name === 'network_delivery_fail') {
+        terminalCalls.push(name);
+        return { ok: true, data: {} };
+      }
+      throw new Error(`unexpected tool ${name}`);
+    },
+  };
+
+  const engine = new MonitorEngine({
+    rpc: rpc as never,
+    state: {
+      hasSeen: (key: string) => seen.has(key),
+      markSeen: async (key: string) => {
+        seen.add(key);
+      },
+      setLastSeq: async () => {},
+      roomCursors: () => [],
+    } as never,
+    signal: new AbortController().signal,
+    stdout: (line) => stdout.push(line),
+    diagnostics: () => {},
+    readBody: false,
+    format: {
+      deliveryWithoutBody: (_item, fields, claim, source) => ({
+        type: 'delivery',
+        delivery_id: fields.deliveryId,
+        claim_id: claim.claimId,
+        source,
+      }),
+    },
+  });
+
+  const item = (source: string, eventId: string, extra: JsonObject = {}): JsonObject => ({
+    source,
+    attention: 'action_required',
+    delivery_id: 'dlv_race',
+    room_id: 'rm_test',
+    message_id: 'msg_dlv_race',
+    attempt: 0,
+    seq: '1',
+    event_id: eventId,
+    ...extra,
+  });
+  const frame = (items: JsonObject[], seq: string): JsonObject => ({
+    params: { _meta: { 'io.agent-network/event': { seq, items } } },
+  });
+
+  await (engine as any).handleFrame(frame([item('delivery.created', 'evt_race_created')], '1'));
+  checkEqual(`${label}：初始进入 deferred`, (engine as any).deferred.size, 1);
+
+  mode = failureMode;
+  gate = new Promise<void>((resolve) => {
+    releaseGate = resolve;
+  });
+  (engine as any).wakeDeferred(0);
+  const deadline = Date.now() + 2_000;
+  while (!enteredClaim) {
+    if (Date.now() > deadline) throw new Error(`${label}：claim 未进入在途`);
+    await Bun.sleep(10);
+  }
+
+  stdout.length = 0;
+  await (engine as any).handleFrame(
+    frame(
+      [
+        item('delivery.cancelled', 'evt_race_cancelled', {
+          kind: 'receipt',
+          state: 'cancelled',
+          reason: 'message_recalled',
+          attempt: 1,
+        }),
+      ],
+      '2',
+    ),
+  );
+  releaseGate!();
+  await Bun.sleep(100);
+
+  const events = stdout.map((line) => JSON.parse(line) as JsonObject);
+  const count = (type: string): number => events.filter((event) => event.type === type).length;
+  check(
+    `${label}：输出停止事件`,
+    events.some(
+      (event) =>
+        event.type === 'delivery_state' &&
+        event.delivery_id === 'dlv_race' &&
+        event.stop === true,
+    ),
+    events,
+  );
+  checkEqual(`${label}：不输出 delivery_claim_failed`, count('delivery_claim_failed'), 0);
+  checkEqual(`${label}：不输出 delivery_deferred`, count('delivery_deferred'), 0);
+  checkEqual(`${label}：不输出 delivery_conflict`, count('delivery_conflict'), 0);
+  checkEqual(`${label}：不输出 delivery`, count('delivery'), 0);
+  checkEqual(`${label}：deferred 槽位清空`, (engine as any).deferred.size, 0);
+  checkEqual(`${label}：deferred 提示键清空`, (engine as any).deferredNoticeKeys.size, 0);
+  checkEqual(`${label}：不 complete/fail`, terminalCalls.length, 0);
+  checkEqual(`${label}：取消后不再重试`, claimCalls, 2);
+
+  // delivery.retried 会解除取消记忆；取消之后的重新入队仍必须能正常领取。
+  if (failureMode === 'null') {
+    mode = 'ok';
+    stdout.length = 0;
+    await (engine as any).handleFrame(
+      frame([item('delivery.retried', 'evt_race_retried', { state: 'pending', attempt: 1 })], '3'),
+    );
+    const retried = stdout.map((line) => JSON.parse(line) as JsonObject);
+    checkEqual(
+      `${label}：delivery.retried 后重新领取`,
+      retried.filter((event) => event.type === 'delivery').length,
+      1,
+    );
+    checkEqual(
+      `${label}：重新领取不输出 claim_failed`,
+      retried.filter((event) => event.type === 'delivery_claim_failed').length,
+      0,
+    );
+    checkEqual(`${label}：重新领取共 claim 三次`, claimCalls, 3);
+  }
+}
+
+/**
  * 漏消息回归：inbox 查询失败重试、deferred 槽位释放后重领、
  * 重复通知去重与可见事件字段。
  */
@@ -4436,6 +4625,12 @@ async function runMonitorRetryChecks(): Promise<void> {
     await recallWatcher.kill();
     recallMock.stop();
   }
+
+  // 2c) deferred claim 在途时被撤回：三种失败分类都不得输出 claim 失败/延迟提示。
+  await checkDeferredClaimCancelledInFlight('在途取消（claim 抛错）', 'null');
+  await checkDeferredClaimCancelledInFlight('在途取消（claim deferred）', 'deferred');
+  await checkDeferredClaimCancelledInFlight('在途取消（终态冲突）', 'conflict');
+  await checkDeferredClaimCancelledInFlight('在途取消（终态失败）', 'failed');
 
   // 3) peri --json：inbox 失败仍输出结构化 error，恢复后正常 delivery。
   const jsonMock = createMock({ inboxFailures: 1 });
