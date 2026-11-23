@@ -443,8 +443,16 @@ export const LIMITS = {
   webRecoveryDebounceMs: 300,
   /** 上一轮恢复结束后，短时间内再次触发只并入下一轮，不重复鉴权（毫秒）。 */
   webRecoveryQuietMs: 1_500,
-  /** 后台停留超过该时长后，回前台先遮住私有视图再重新鉴权（毫秒）。 */
+  /**
+   * 后台停留超过该时长后，回前台做一轮完整核对（毫秒）。
+   * 普通长后台只显示非阻塞提示，不遮住当前身份的缓存内容；只有身份/成员/
+   * 凭据边界信号才进入遮罩。
+   */
   webRecoveryLongBackgroundMs: 5 * 60_000,
+  /** 恢复轮进行中，非阻塞「正在同步」提示延迟出现（毫秒），避免快速轮次闪烁。 */
+  webRecoveryHintDelayMs: 300,
+  /** 恢复遮罩与同步提示的淡入淡出时长（毫秒）；reduced-motion 下不播放。 */
+  webRecoveryTransitionMs: 160,
   /** 一次恢复批次最多顺序补读的历史页数；达到后让出主线程继续下一批。 */
   historyCatchUpBatchPages: 20,
   /** 单轮补洞的页数硬上限，防止异常游标无限循环；超过按权限/游标失效重建。 */

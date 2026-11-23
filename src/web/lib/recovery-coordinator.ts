@@ -18,8 +18,13 @@ export type RecoveryReason =
 export interface RecoveryRound {
   id: number;
   reasons: RecoveryReason[];
-  /** 后台超过阈值或身份/成员信号：先遮住私有视图。 */
+  /**
+   * 身份/成员/凭据信号：先遮住私有视图再核对。
+   * 普通长后台不是身份边界，不得置为 true。
+   */
   masked: boolean;
+  /** 后台超过阈值：需要完整核对，但仍可继续显示同一身份的缓存内容。 */
+  longBackground: boolean;
 }
 
 export interface RecoveryTriggerOptions {
@@ -47,6 +52,7 @@ export class RecoveryScheduler {
   private readonly clearTimer: NonNullable<RecoverySchedulerOptions['clearTimer']>;
   private reasons = new Set<RecoveryReason>();
   private mask = false;
+  private longBackground = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
   private lastRoundEndAt = 0;
@@ -73,7 +79,9 @@ export class RecoveryScheduler {
   trigger(reason: RecoveryReason, options: RecoveryTriggerOptions = {}): boolean {
     if (this.closed) return false;
     this.reasons.add(reason);
-    if (options.longBackground === true || options.mask === true) this.mask = true;
+    // 长后台只要求完整核对；遮罩必须由明确的身份/授权信号触发。
+    if (options.mask === true) this.mask = true;
+    if (options.longBackground === true) this.longBackground = true;
     if (this.running || this.timer !== null) return false;
     const sinceLastRound = this.now() - this.lastRoundEndAt;
     const wait = Math.max(this.debounceMs, this.quietMs - sinceLastRound);
@@ -94,11 +102,13 @@ export class RecoveryScheduler {
     if (this.closed || this.running || this.reasons.size === 0) return;
     const reasons = [...this.reasons];
     const masked = this.mask;
+    const longBackground = this.longBackground;
     this.reasons.clear();
     this.mask = false;
+    this.longBackground = false;
     this.running = true;
     this.roundCount += 1;
-    const round: RecoveryRound = { id: this.roundCount, reasons, masked };
+    const round: RecoveryRound = { id: this.roundCount, reasons, masked, longBackground };
     try {
       await this.run(round);
     } finally {

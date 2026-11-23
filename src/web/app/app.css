@@ -1356,7 +1356,7 @@ body .memory-drawer {
   outline-offset: 2px;
 }
 
-/* 前台恢复：遮罩期间旧私有视图不可见，骨架只展示验证状态。 */
+/* 前台恢复：只有身份/授权边界遮罩才隐藏旧私有视图；遮罩淡入不硬切。 */
 body[data-recovery-masked='1'] #root {
   visibility: hidden;
 }
@@ -1370,6 +1370,83 @@ body[data-recovery-masked='1'] #root {
   padding: 24px;
   background: var(--wx-bg, #ededed);
   color: var(--wx-text, #1a1a1a);
+  opacity: 1;
+}
+
+.recovery-mask[data-state='open'] {
+  animation: recovery-mask-in var(--recovery-transition, 160ms) ease-out;
+}
+
+.recovery-mask[data-state='closing'] {
+  opacity: 0;
+  transition: opacity var(--recovery-transition, 160ms) ease;
+}
+
+@keyframes recovery-mask-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+/* 普通恢复轮的非阻塞提示：不占布局、不拦截指针、不触碰 #root。 */
+.recovery-sync-hint {
+  position: fixed;
+  top: calc(8px + env(safe-area-inset-top, 0px));
+  left: 50%;
+  z-index: 8500;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: var(--wx-toast-bg, rgb(28 28 30 / 92%));
+  color: #fff;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 16%);
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, -6px);
+}
+
+.recovery-sync-hint[data-state='visible'] {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  animation: recovery-hint-in var(--recovery-transition, 160ms) ease-out;
+}
+
+.recovery-sync-hint[data-state='leaving'] {
+  opacity: 0;
+  transform: translate(-50%, -4px);
+  transition:
+    opacity var(--recovery-transition, 160ms) ease,
+    transform var(--recovery-transition, 160ms) ease;
+}
+
+@keyframes recovery-hint-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .recovery-mask[data-state='open'],
+  .recovery-sync-hint[data-state='visible'] {
+    animation: none;
+  }
+
+  .recovery-mask[data-state='closing'],
+  .recovery-sync-hint[data-state='leaving'] {
+    transition: none;
+  }
 }
 
 .recovery-mask-card {

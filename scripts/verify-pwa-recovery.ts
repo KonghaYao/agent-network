@@ -30,7 +30,10 @@ import {
   currentIdentityEpoch,
   observeIdentity,
 } from '../src/web/lib/identity-epoch';
-import { RecoveryScheduler, type RecoveryReason } from '../src/web/lib/recovery-coordinator';
+import {
+  RecoveryScheduler,
+  type RecoveryRound,
+} from '../src/web/lib/recovery-coordinator';
 import {
   getRecoverySnapshot,
   reportIdentitySignal,
@@ -124,10 +127,10 @@ function fakeTimers() {
 }
 
 async function verifyScheduler(): Promise<void> {
-  const rounds: RecoveryReason[][] = [];
+  const rounds: RecoveryRound[] = [];
   const clock = fakeTimers();
   const scheduler = new RecoveryScheduler((round) => {
-    rounds.push(round.reasons);
+    rounds.push(round);
   }, {
     debounceMs: 300,
     quietMs: 1_500,
@@ -142,13 +145,30 @@ async function verifyScheduler(): Promise<void> {
   checkEqual('300ms 前不执行', rounds.length, 0);
   await clock.advance(1);
   checkEqual('三种触发只跑一轮', rounds.length, 1);
-  checkEqual('合并后的原因数', rounds[0]?.length, 3);
+  checkEqual('合并后的原因数', rounds[0]?.reasons.length, 3);
+  check('普通触发不请求遮罩', !rounds[0]?.masked);
+  check('普通触发不是长后台', !rounds[0]?.longBackground);
   checkEqual('轮次计数', scheduler.rounds, 1);
   await clock.advance(1_500);
   check('静默窗口结束后可再次触发', scheduler.trigger('online'));
   await clock.advance(300);
   checkEqual('静默窗口后的新触发执行第二轮', rounds.length, 2);
-  checkEqual('第二轮原因数', rounds[1]?.length, 1);
+  checkEqual('第二轮原因数', rounds[1]?.reasons.length, 1);
+  await clock.advance(1_500);
+  check(
+    '长后台触发',
+    scheduler.trigger('visibility', { longBackground: true }),
+  );
+  await clock.advance(300);
+  checkEqual('长后台执行第三轮', rounds.length, 3);
+  check('长后台不请求遮罩', !rounds[2]?.masked);
+  check('长后台标记完整核对', rounds[2]?.longBackground);
+  await clock.advance(1_500);
+  check('身份信号触发', scheduler.trigger('auth', { mask: true }));
+  await clock.advance(300);
+  checkEqual('身份信号执行第四轮', rounds.length, 4);
+  check('身份信号请求遮罩', rounds[3]?.masked);
+  check('身份信号不冒充长后台', !rounds[3]?.longBackground);
   scheduler.close();
 }
 

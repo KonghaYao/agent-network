@@ -116,7 +116,7 @@ const scheduler = new RecoveryScheduler(
       phase: 'checking',
       masked: round.masked || stickyMask,
       sticky: stickyMask,
-      longBackground: round.masked,
+      longBackground: round.longBackground,
       rounds: round.id,
       lastReasons: round.reasons,
       completedAt: snapshot.completedAt,
@@ -150,19 +150,31 @@ const scheduler = new RecoveryScheduler(
   },
 );
 
+/**
+ * 触发一轮前台恢复。
+ *
+ * 安全取舍：普通回到前台（visibility / pageshow / online / stream-ack）以及
+ * 长后台恢复都继续显示同一身份的内存/缓存内容，只做后台核对，避免恢复期间
+ * 聊天闪空。旧内容可能短暂过期，但仍属于当前已授权身份。
+ *
+ * 只有身份切换、撤权、凭据失效等边界信号才置 `mask`：遮罩必须在发起任何
+ * 网络核对之前同步出现，随后 `RecoveryHost` 才清私有缓存并重新鉴权，绝不
+ * 允许「先显示新身份内容、后校验权限」的顺序。
+ */
 export function triggerRecovery(
   reason: RecoveryReason,
   options: RecoveryTriggerOptions = {},
 ): void {
-  // 身份切换/撤权/退出：遮罩一旦出现就必须粘住，直到新凭据被确认。
-  if (reason === 'auth') {
+  // 身份切换/撤权/退出：遮罩一旦出现就必须粘住，直到新凭据/成员边界被确认。
+  if (reason === 'auth' || reason === 'membership') {
     stickyMask = true;
     pendingMask = true;
-    // 身份边界事件：从此刻起旧身份的在途响应不能写回新缓存。
+    // 身份/成员边界事件：从此刻起旧身份/旧成员代次的在途响应不能写回新缓存。
     bumpIdentityEpoch();
   }
   if (options.longBackground === true) pendingLongBackground = true;
-  if (options.mask === true || options.longBackground === true) pendingMask = true;
+  // 长后台不是身份边界，不置 pendingMask；只用来标记本轮需要完整核对。
+  if (options.mask === true) pendingMask = true;
   if (pendingMask) {
     emit({
       masked: true,
@@ -172,7 +184,7 @@ export function triggerRecovery(
   }
   scheduler.trigger(reason, {
     longBackground: pendingLongBackground || options.longBackground === true,
-    mask: pendingMask || options.mask === true,
+    mask: pendingMask,
   });
 }
 
@@ -338,10 +350,12 @@ export function installRecoveryTriggers(): () => void {
     hiddenAt = null;
     if (!currentOnline()) {
       markOffline();
-      triggerRecovery('visibility', { longBackground, mask: longBackground });
+      // 离线只标离线；长后台仍不遮罩，联网后由恢复轮继续核对。
+      triggerRecovery('visibility', { longBackground });
       return;
     }
-    triggerRecovery('visibility', { longBackground, mask: longBackground });
+    // 长后台只要求完整核对并显示非阻塞提示，不清空、不遮蔽当前聊天。
+    triggerRecovery('visibility', { longBackground });
   };
   const onOnline = () => {
     emit({ online: true, phase: snapshot.phase === 'offline' ? 'ready' : snapshot.phase });
@@ -362,7 +376,8 @@ export function installRecoveryTriggers(): () => void {
     const backgroundMs = hiddenAt === null ? 0 : Date.now() - hiddenAt;
     hiddenAt = null;
     const longBackground = backgroundMs >= LIMITS.webRecoveryLongBackgroundMs;
-    triggerRecovery('pageshow', { longBackground, mask: longBackground });
+    // bfcache 长后台同样只核对，不遮罩同一身份的既有聊天。
+    triggerRecovery('pageshow', { longBackground });
   };
   const onStorage = (event: StorageEvent) => {
     authStorageSignal(event);

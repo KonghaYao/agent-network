@@ -2068,3 +2068,360 @@ test('同 actor 双标签并发发送不互相覆盖意图', async ({ context })
     requestIdReused: new Set(attempts.map((request) => request.requestId)).size === 1,
   }));
 });
+
+test('长后台恢复不遮罩，聊天与滚动位置保留，提示延迟出现', async ({ page }) => {
+  const base = await baseUrl();
+  const fixture = await createComponentRoom(base);
+  for (let index = 0; index < 24; index += 1) {
+    await callTool(base, fixture.tokenA, 'network_message_send', {
+      request_id: requestId('e2e_scroll'),
+      client_message_id: requestId('e2e_scroll_cm'),
+      room_id: fixture.roomId,
+      body: `滚动探针 ${index}`,
+      invoke: [],
+    });
+  }
+  await installEntryProbe(page);
+  await login(page, base, fixture.tokenA);
+  await openRoom(page, base, fixture.tokenA, fixture.roomId, fixture.roomTitle);
+  await expect(page.locator('#messages')).toContainText('滚动探针 23');
+
+  const before = await page.evaluate(() => {
+    const element = document.getElementById('messages') as HTMLOListElement;
+    element.scrollTop = Math.floor((element.scrollHeight - element.clientHeight) / 2);
+    return {
+      top: element.scrollTop,
+      text: element.textContent ?? '',
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+    };
+  });
+  expect(before.scrollHeight).toBeGreaterThan(before.clientHeight + 200);
+  expect(before.top).toBeGreaterThan(0);
+  // 让 onScroll 提交 pinned=false，恢复期间才不会被自动滚回底部。
+  await page.waitForTimeout(150);
+
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let gatedCalls = 0;
+  await page.route('**/mcp', async (route) => {
+    let body: RpcBody;
+    try {
+      body = JSON.parse(route.request().postData() ?? '{}') as RpcBody;
+    } catch {
+      await route.continue();
+      return;
+    }
+    if (body.params?.name === 'network_me') {
+      gatedCalls += 1;
+      await gate;
+    }
+    await route.continue();
+  });
+
+  await page.evaluate(() => {
+    const probe: { at: number | null } = { at: null };
+    (window as unknown as { __hintProbe?: typeof probe }).__hintProbe = probe;
+    new MutationObserver(() => {
+      if (probe.at === null && document.getElementById('recovery-sync-hint')) {
+        probe.at = performance.now();
+      }
+    }).observe(document.body, { childList: true, subtree: true });
+  });
+  const triggeredAt = await page.evaluate(() => {
+    // 只推进 Date.now，保留真实定时器：模拟页面隐藏 ≥5 分钟后回到前台。
+    const realNow = Date.now.bind(Date);
+    let offset = 0;
+    (window as unknown as { __advanceRecoveryClock?: (ms: number) => void })
+      .__advanceRecoveryClock = (ms: number) => {
+        offset += ms;
+      };
+    Date.now = () => realNow() + offset;
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'hidden',
+    });
+    document.dispatchEvent(new Event('visibilitychange'));
+    (
+      window as unknown as { __advanceRecoveryClock?: (ms: number) => void }
+    ).__advanceRecoveryClock?.(5 * 60_000 + 1_000);
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'visible',
+    });
+    document.dispatchEvent(new Event('visibilitychange'));
+    return performance.now();
+  });
+
+  // 触发后先不显示提示；恢复轮开始后仍需等待约 300ms。
+  await expect(page.locator('#recovery-sync-hint')).toHaveCount(0);
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __agentNetworkRecovery?: { snapshot: () => { phase: string } };
+              }
+            ).__agentNetworkRecovery?.snapshot().phase ?? '',
+        ),
+      { timeout: 5_000 },
+    )
+    .toBe('checking');
+  await expect(page.locator('#recovery-mask')).toHaveCount(0);
+  await expect(page.locator('#root')).not.toHaveAttribute('inert', '');
+  await expect(page.locator('#root')).not.toHaveAttribute('aria-hidden', '');
+  await expect(page.locator('#messages')).toBeVisible();
+  await expect(page.locator('#messages')).toContainText('滚动探针 23');
+
+  await expect(page.locator('#recovery-sync-hint')).toBeVisible({ timeout: 5_000 });
+  const hintAt = await page.evaluate(
+    () => (window as unknown as { __hintProbe: { at: number | null } }).__hintProbe.at,
+  );
+  expect(hintAt).not.toBeNull();
+  // 合并窗口 300ms + 提示延迟 300ms：不能早于约 450ms 出现。
+  expect((hintAt ?? 0) - triggeredAt).toBeGreaterThanOrEqual(450);
+  expect(gatedCalls).toBeGreaterThan(0);
+
+  release();
+  await expect(page.locator('#recovery-sync-hint')).toHaveCount(0, { timeout: 10_000 });
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __agentNetworkRecovery?: { snapshot: () => { phase: string } };
+              }
+            ).__agentNetworkRecovery?.snapshot().phase ?? '',
+        ),
+      { timeout: 15_000 },
+    )
+    .toBe('ready');
+
+  const after = await page.evaluate(() => {
+    const element = document.getElementById('messages') as HTMLOListElement;
+    return { top: element.scrollTop, text: element.textContent ?? '' };
+  });
+  expect(Math.abs(after.top - before.top)).toBeLessThanOrEqual(24);
+  expect(after.text).toContain('滚动探针 23');
+  await expect(page.locator('#recovery-mask')).toHaveCount(0);
+  const probe = await readEntryProbe(page);
+  expectNoMaskActivity(probe, 'long-background');
+  await expectComposerUsable(page);
+
+  console.log(JSON.stringify({
+    probe: 'long-background-no-mask',
+    hintDelayMs: Math.round((hintAt ?? 0) - triggeredAt),
+    gatedMeCalls: gatedCalls,
+    scrollBefore: before.top,
+    scrollAfter: after.top,
+    masks: probe.masks.length,
+    maskFrames: probe.maskFrames,
+    inputEditable: true,
+  }));
+});
+
+test('CREDENTIAL_INVALID 仍进入 blocked 遮罩并清掉旧正文', async ({ page }) => {
+  const base = await baseUrl();
+  const fixture = await createComponentRoom(base);
+  await login(page, base, fixture.tokenA);
+  await openRoom(page, base, fixture.tokenA, fixture.roomId, fixture.roomTitle);
+  await expect(page.locator('#messages')).toContainText('组件验收初始消息');
+
+  let failIdentity = false;
+  await page.route('**/mcp', async (route) => {
+    let body: RpcBody;
+    try {
+      body = JSON.parse(route.request().postData() ?? '{}') as RpcBody;
+    } catch {
+      await route.continue();
+      return;
+    }
+    if (failIdentity && body.params?.name === 'network_me') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: rpcError(body.id, 'probe credential invalid', 'CREDENTIAL_INVALID'),
+      });
+      return;
+    }
+    await route.continue();
+  });
+
+  failIdentity = true;
+  await page.evaluate(() => {
+    (
+      window as unknown as {
+        __agentNetworkRecovery?: {
+          trigger: (reason: string, options?: { longBackground?: boolean }) => void;
+        };
+      }
+    ).__agentNetworkRecovery?.trigger('visibility', { longBackground: true });
+  });
+
+  await expect(page.locator('#recovery-mask')).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('#recovery-mask-text')).toContainText('probe credential invalid');
+  await expect(page.locator('#root')).toHaveAttribute('inert', '');
+  await expect(page.locator('#root')).toHaveAttribute('aria-hidden', 'true');
+  await expect(page.getByText('组件验收初始消息')).toHaveCount(0);
+  const snapshot = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          __agentNetworkRecovery?: {
+            snapshot: () => { phase: string; masked: boolean; sticky: boolean };
+          };
+        }
+      ).__agentNetworkRecovery?.snapshot() ?? null,
+  );
+  expect(snapshot).toMatchObject({ phase: 'blocked', masked: true, sticky: true });
+  console.log(JSON.stringify({
+    probe: 'credential-invalid-blocked',
+    phase: snapshot?.phase,
+    masked: snapshot?.masked,
+    sticky: snapshot?.sticky,
+    oldBodyCount: await page.getByText('组件验收初始消息').count(),
+  }));
+});
+
+test('切号 storage 信号在核对完成前立即遮罩，旧正文先隐藏', async ({ page }) => {
+  const base = await baseUrl();
+  const fixture = await createComponentRoom(base);
+  await login(page, base, fixture.tokenA);
+  await openRoom(page, base, fixture.tokenA, fixture.roomId, fixture.roomTitle);
+  await expect(page.locator('#messages')).toContainText('组件验收初始消息');
+
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let gatedCalls = 0;
+  await page.route('**/mcp', async (route) => {
+    let body: RpcBody;
+    try {
+      body = JSON.parse(route.request().postData() ?? '{}') as RpcBody;
+    } catch {
+      await route.continue();
+      return;
+    }
+    if (body.params?.name === 'network_me') {
+      gatedCalls += 1;
+      await gate;
+    }
+    await route.continue();
+  });
+
+  // 真正的跨标签页写入：另一个同源页面修改 token，本页只收到 storage 事件。
+  const other = await page.context().newPage();
+  await other.goto(`${base}/f/e2e-missing-${crypto.randomUUID()}`);
+  await other.evaluate((token) => {
+    localStorage.setItem('agent-network-token', token);
+  }, fixture.tokenB);
+  await other.close();
+
+  // network_me 被挂起时遮罩仍必须立即出现：顺序是先隐藏旧身份内容，再核对。
+  await expect(page.locator('#recovery-mask')).toBeVisible({ timeout: 5_000 });
+  await expect(page.locator('#root')).toHaveAttribute('inert', '');
+  await expect(page.locator('#root')).toHaveAttribute('aria-hidden', 'true');
+  await expect(page.getByText('组件验收初始消息')).toHaveCount(0);
+  // storage 信号同步置遮罩，此时合并窗口尚未结束，network_me 还没发出。
+  expect(gatedCalls).toBe(0);
+
+  release();
+  await expect(page.locator('#recovery-mask')).toHaveCount(0, { timeout: 20_000 });
+  await expect(page.locator('#account-name')).toHaveText(fixture.nameB, { timeout: 20_000 });
+  await expect(page.locator('#messages')).toContainText('组件验收初始消息', { timeout: 20_000 });
+  await expect(page.locator('#root')).not.toHaveAttribute('inert', '');
+  console.log(JSON.stringify({
+    probe: 'identity-switch-immediate-mask',
+    gatedMeCalls: gatedCalls,
+    oldBodyHiddenBeforeRelease: true,
+    newIdentityVisibleAfterRelease: true,
+  }));
+});
+
+test('prefers-reduced-motion 下恢复提示与遮罩不使用动画', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const base = await baseUrl();
+  const fixture = await createComponentRoom(base);
+  await login(page, base, fixture.tokenA);
+  await openRoom(page, base, fixture.tokenA, fixture.roomId, fixture.roomTitle);
+  await expect(page.locator('#messages')).toContainText('组件验收初始消息');
+
+  let releaseGate: (() => void) | null = null;
+  let gate: Promise<void> | null = null;
+  const hold = () => {
+    gate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+  };
+  const release = () => {
+    releaseGate?.();
+    releaseGate = null;
+    gate = null;
+  };
+  await page.route('**/mcp', async (route) => {
+    let body: RpcBody;
+    try {
+      body = JSON.parse(route.request().postData() ?? '{}') as RpcBody;
+    } catch {
+      await route.continue();
+      return;
+    }
+    if (body.params?.name === 'network_me' && gate) await gate;
+    await route.continue();
+  });
+
+  hold();
+  await page.evaluate(() => {
+    (
+      window as unknown as {
+        __agentNetworkRecovery?: {
+          trigger: (reason: string, options?: { longBackground?: boolean; mask?: boolean }) => void;
+        };
+      }
+    ).__agentNetworkRecovery?.trigger('visibility', { longBackground: true });
+  });
+  await expect(page.locator('#recovery-sync-hint')).toBeVisible({ timeout: 5_000 });
+  const hintMotion = await page.evaluate(() => {
+    const element = document.getElementById('recovery-sync-hint') as HTMLElement;
+    const style = getComputedStyle(element);
+    return { animationName: style.animationName, transitionDuration: style.transitionDuration };
+  });
+  expect(hintMotion.animationName).toBe('none');
+  expect(hintMotion.transitionDuration).toBe('0s');
+  release();
+  await expect(page.locator('#recovery-sync-hint')).toHaveCount(0, { timeout: 10_000 });
+
+  await page.waitForTimeout(1_700);
+  hold();
+  await page.evaluate(() => {
+    (
+      window as unknown as {
+        __agentNetworkRecovery?: { trigger: (reason: string, options?: { mask?: boolean }) => void };
+      }
+    ).__agentNetworkRecovery?.trigger('auth', { mask: true });
+  });
+  await expect(page.locator('#recovery-mask')).toBeVisible({ timeout: 5_000 });
+  const maskMotion = await page.evaluate(() => {
+    const element = document.getElementById('recovery-mask') as HTMLElement;
+    const style = getComputedStyle(element);
+    return { animationName: style.animationName, transitionDuration: style.transitionDuration };
+  });
+  expect(maskMotion.animationName).toBe('none');
+  expect(maskMotion.transitionDuration).toBe('0s');
+  release();
+  await expect(page.locator('#recovery-mask')).toHaveCount(0, { timeout: 20_000 });
+  console.log(JSON.stringify({
+    probe: 'reduced-motion',
+    hintAnimation: hintMotion.animationName,
+    hintTransition: hintMotion.transitionDuration,
+    maskAnimation: maskMotion.animationName,
+    maskTransition: maskMotion.transitionDuration,
+  }));
+});

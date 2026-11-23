@@ -1,10 +1,10 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 
+import { LIMITS } from '../../contracts/limits';
 import { callTool, readBrowserToken, type McpError } from '../lib/mcp-client';
 import type { RoomDetail } from '../lib/chat';
-import { bumpIdentityEpoch } from '../lib/identity-epoch';
 import { queryKeys } from '../lib/query-keys';
 import type { WebSession } from '../lib/identity';
 import { revalidateWebSession, resetWebSession, cachedWebSession } from '../lib/identity';
@@ -22,7 +22,9 @@ import {
   setRecoveryRunner,
   triggerRecovery,
   useRecoveryState,
+  type RecoverySnapshot,
 } from '../pwa/recovery';
+import { useWebSession } from '../hooks/useWebSession';
 
 /**
  * 前台恢复的唯一执行者：先核对身份，再核对当前房间访问边界，最后复用
@@ -65,13 +67,31 @@ function blockedSession(queryClient: ReturnType<typeof useQueryClient>): void {
   queryClient.setQueryData(queryKeys.session(), null);
 }
 
-function RecoveryOverlay() {
-  const state = useRecoveryState();
+/** 遮罩/提示共用过渡时长；CSS 通过自定义属性读取，避免散落魔法数。 */
+const RECOVERY_TRANSITION_STYLE = {
+  '--recovery-transition': `${LIMITS.webRecoveryTransitionMs}ms`,
+} as CSSProperties;
 
-  useEffect(() => {
+/**
+ * 身份边界遮罩：只有 `masked` 才渲染，并且退出时保留一个短淡出窗口。
+ *
+ * 进入顺序必须是「遮罩可见 → #root inert/aria-hidden」，退出则先恢复
+ * #root 交互，再让遮罩淡出；一旦确认身份变化或撤权，旧私有缓存已在
+ * `RecoveryHost` 的 effect 中先行清空，不留“先显示后校验”的窗口。
+ */
+function RecoveryMask({ masked }: { masked: boolean }) {
+  const state = useRecoveryState();
+  const [mounted, setMounted] = useState(masked);
+  /** 淡出期间冻结最后一帧遮罩文案，避免退出瞬间切换成通用提示。 */
+  const lastMasked = useRef<RecoverySnapshot>(state);
+  useLayoutEffect(() => {
+    if (masked) lastMasked.current = state;
+  }, [masked, state]);
+
+  useLayoutEffect(() => {
     const body = document.body;
     const root = document.getElementById('root');
-    if (state.masked) {
+    if (masked) {
       body.dataset.recoveryMasked = '1';
       root?.setAttribute('inert', '');
       root?.setAttribute('aria-hidden', 'true');
@@ -85,51 +105,118 @@ function RecoveryOverlay() {
       root?.removeAttribute('inert');
       root?.removeAttribute('aria-hidden');
     };
-  }, [state.masked]);
+  }, [masked]);
 
-  if (typeof document === 'undefined') return null;
+  useEffect(() => {
+    if (masked) {
+      setMounted(true);
+      return;
+    }
+    if (!mounted) return;
+    const timer = setTimeout(() => setMounted(false), LIMITS.webRecoveryTransitionMs);
+    return () => clearTimeout(timer);
+  }, [masked, mounted]);
 
-  const blocked = state.phase === 'blocked';
-  const reconnect = state.masked && !blocked && state.phase === 'offline';
-  const mask = state.masked
-    ? createPortal(
-        <div id="recovery-mask" className="recovery-mask" role="status" aria-live="polite">
-          <div className="recovery-mask-card">
-            <div className="chat-skeleton" aria-hidden="true">
-              {[0, 1, 2].map((row) => (
-                <div className={`skeleton-row${row === 1 ? ' mine' : ''}`} key={row}>
-                  <span className="skeleton-avatar" />
-                  <span className="skeleton-bubble" />
-                </div>
-              ))}
+  if (typeof document === 'undefined' || !mounted) return null;
+  const content = masked ? state : lastMasked.current;
+  const blocked = content.phase === 'blocked';
+  const reconnect = content.masked && !blocked && content.phase === 'offline';
+  return createPortal(
+    <div
+      id="recovery-mask"
+      className="recovery-mask"
+      data-state={masked ? 'open' : 'closing'}
+      style={RECOVERY_TRANSITION_STYLE}
+      role="status"
+      aria-live="polite"
+    >
+      <div className="recovery-mask-card">
+        <div className="chat-skeleton" aria-hidden="true">
+          {[0, 1, 2].map((row) => (
+            <div className={`skeleton-row${row === 1 ? ' mine' : ''}`} key={row}>
+              <span className="skeleton-avatar" />
+              <span className="skeleton-bubble" />
             </div>
-            <h2>{blocked ? '会话权限已变化' : reconnect ? '需要联网确认身份' : '正在重新验证'}</h2>
-            <p id="recovery-mask-text">
-              {blocked
-                ? state.blockedReason || AUTH_INVALID_REASON
-                : reconnect
-                  ? state.blockedReason ||
-                    '网络不可用，已暂停显示旧身份的私有内容。恢复网络后重试。'
-                  : '正在核对身份与会话访问边界，完成后恢复当前窗口。'}
-            </p>
-            {blocked ? (
-              <a id="recovery-mask-home" href="/" onClick={() => undefined}>
-                返回会话列表
-              </a>
-            ) : reconnect ? (
-              <button
-                type="button"
-                id="recovery-retry"
-                onClick={() => triggerRecovery('auth', { mask: true })}
-              >
-                重试
-              </button>
-            ) : null}
-          </div>
-        </div>,
-        document.body,
-      )
-    : null;
+          ))}
+        </div>
+        <h2>{blocked ? '会话权限已变化' : reconnect ? '需要联网确认身份' : '正在重新验证'}</h2>
+        <p id="recovery-mask-text">
+          {blocked
+            ? content.blockedReason || AUTH_INVALID_REASON
+            : reconnect
+              ? content.blockedReason ||
+                '网络不可用，已暂停显示旧身份的私有内容。恢复网络后重试。'
+              : '正在核对身份与会话访问边界，完成后恢复当前窗口。'}
+        </p>
+        {blocked ? (
+          <a id="recovery-mask-home" href="/" onClick={() => undefined}>
+            返回会话列表
+          </a>
+        ) : reconnect ? (
+          <button
+            type="button"
+            id="recovery-retry"
+            onClick={() => triggerRecovery('auth', { mask: true })}
+          >
+            重试
+          </button>
+        ) : null}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+type HintStage = 'hidden' | 'visible' | 'leaving';
+
+/**
+ * 普通恢复轮的非阻塞提示：不改变布局、不加 inert，也不触碰 #root。
+ * 只在应用页且已有浏览器身份时显示；分享/加入/配对页不挂载该组件。
+ */
+function RecoverySyncHint({ enabled }: { enabled: boolean }) {
+  const state = useRecoveryState();
+  const active = enabled && state.phase === 'checking' && !state.masked && state.online;
+  const [stage, setStage] = useState<HintStage>('hidden');
+
+  useEffect(() => {
+    if (active) {
+      if (stage === 'visible') return;
+      const delay =
+        stage === 'leaving'
+          ? LIMITS.webRecoveryTransitionMs
+          : LIMITS.webRecoveryHintDelayMs;
+      const timer = setTimeout(() => setStage('visible'), delay);
+      return () => clearTimeout(timer);
+    }
+    if (stage === 'visible') {
+      const timer = setTimeout(() => setStage('leaving'), 0);
+      return () => clearTimeout(timer);
+    }
+    if (stage === 'leaving') {
+      const timer = setTimeout(() => setStage('hidden'), LIMITS.webRecoveryTransitionMs);
+      return () => clearTimeout(timer);
+    }
+    return undefined;
+  }, [active, stage]);
+
+  if (typeof document === 'undefined' || stage === 'hidden') return null;
+  return createPortal(
+    <div
+      id="recovery-sync-hint"
+      className="recovery-sync-hint"
+      data-state={stage}
+      style={RECOVERY_TRANSITION_STYLE}
+      role="status"
+      aria-live="polite"
+    >
+      正在同步…
+    </div>,
+    document.body,
+  );
+}
+
+function RecoveryOverlay() {
+  const state = useRecoveryState();
 
   const offline = !state.masked && (!state.online || state.phase === 'offline');
   const banner = offline
@@ -154,7 +241,7 @@ function RecoveryOverlay() {
 
   return (
     <>
-      {mask}
+      <RecoveryMask masked={state.masked} />
       {banner}
     </>
   );
@@ -163,6 +250,8 @@ function RecoveryOverlay() {
 export function RecoveryHost({ routeName, roomId }: RecoveryHostProps) {
   const queryClient = useQueryClient();
   const recovery = useRecoveryState();
+  // 只有持有浏览器身份的会话才显示非阻塞同步提示；配对/分享页不挂载本组件。
+  const { session } = useWebSession();
   const routeRef = useRef({ routeName, roomId });
   routeRef.current = { routeName, roomId };
 
@@ -220,8 +309,8 @@ export function RecoveryHost({ routeName, roomId }: RecoveryHostProps) {
             previous.identity.actor_id !== session.identity.actor_id),
       );
       if (sessionChanged) {
-        // 恢复轮确认 token/actor 已变化：旧身份在途写入全部作废。
-        bumpIdentityEpoch();
+        // 恢复轮确认 token/actor 已变化：先粘住遮罩作废旧身份写入，再清缓存。
+        reportIdentitySignal();
         clearPrivateQueries(queryClient, previous?.identity.actor_id ?? null);
       }
       queryClient.setQueryData(queryKeys.session(), session);
@@ -352,5 +441,10 @@ export function RecoveryHost({ routeName, roomId }: RecoveryHostProps) {
     };
   }, [queryClient]);
 
-  return <RecoveryOverlay />;
+  return (
+    <>
+      <RecoveryOverlay />
+      <RecoverySyncHint enabled={Boolean(session)} />
+    </>
+  );
 }
