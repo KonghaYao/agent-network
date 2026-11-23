@@ -19,6 +19,7 @@ import { copyText, extractFileCards } from '../../lib/files';
 import type { RoomFileItem } from '../../lib/files-ui';
 import { readFullMessage } from '../../lib/message-body';
 import { useActorAvatarRecord } from '../../lib/actor-avatars';
+import { useRecalledDraft } from '../../hooks/useRecalledDraft';
 import { useUpdateWriteBlocked } from '../../pwa/update-store';
 import { openAgentMemory, type AgentMemoryTarget } from '../memory/memory-store';
 import { ActorAvatar } from '../avatar/ActorAvatar';
@@ -53,6 +54,8 @@ interface ChatMessageProps {
   onOpenTask: (rootId: string, focusMessageId: string | null) => void;
   onOpenFile: (item: RoomFileItem) => void;
   onRecall: (item: HistoryMessage) => void;
+  /** 把自己撤回、且本机有原文副本的消息放回输入框。 */
+  onReedit: (item: HistoryMessage, body: string) => void;
   onSetPinned: (item: HistoryMessage, pinned: boolean) => void;
   pinnedMessageIds: ReadonlySet<string>;
   moderationBusy?: boolean;
@@ -439,6 +442,7 @@ export const ChatMessage = memo(function ChatMessage({
   onOpenTask,
   onOpenFile,
   onRecall,
+  onReedit,
   onSetPinned,
   pinnedMessageIds,
   moderationBusy = false,
@@ -543,11 +547,46 @@ export const ChatMessage = memo(function ChatMessage({
     };
   }, [autoEligible, item.message_id]);
 
+  const recalledDraft = useRecalledDraft(
+    item.body_bytes === 0 && mine ? identityId : null,
+    item.message_id,
+  );
+  const reeditBody = mine && !room.read_only ? recalledDraft : null;
+
   if (item.body_bytes === 0) {
-    return (
+    const tombstone = (
       <li className="msg-system msg-recalled" data-message-id={item.message_id}>
         <span>此消息已撤回</span>
+        {reeditBody ? (
+          <Button
+            type="button"
+            variant="borderless"
+            className="msg-reedit"
+            data-reedit-message-id={item.message_id}
+            onClick={() => onReedit(item, reeditBody)}
+          >
+            重新编辑
+          </Button>
+        ) : null}
       </li>
+    );
+    if (!reeditBody) return tombstone;
+    // 右键菜单只在本人且有本地原文时出现；与行内按钮共用同一动作。
+    return (
+      <ContextMenu
+        trigger={tombstone}
+        id="recalled-message-context-menu"
+        className="room-menu spa-menu message-action-menu"
+        label="已撤回消息操作"
+      >
+        <ContextMenuItem
+          id="message-action-reedit"
+          className="room-menu-item"
+          onSelect={() => onReedit(item, reeditBody)}
+        >
+          重新编辑
+        </ContextMenuItem>
+      </ContextMenu>
     );
   }
 

@@ -8,6 +8,7 @@ import {
   writeBrowserToken,
   type McpError,
 } from './mcp-client';
+import { clearRecalledDrafts } from './recalled-drafts';
 
 /**
  * 浏览器身份引导。
@@ -197,6 +198,8 @@ export function createFreshIdentity(): Promise<WebSession> {
     }
     clearLoggedOutState();
     cached = { identity, token };
+    // 新身份不继承任何旧身份的撤回原文副本。
+    clearRecalledDrafts();
     // 新身份与旧身份之间没有可比对的会话，直接推进代次丢弃旧在途响应。
     bumpIdentityEpoch();
     return cached;
@@ -249,6 +252,8 @@ export async function revalidateWebSession(): Promise<WebSession> {
       previous &&
       (previous.token !== stored || previous.identity.actor_id !== identity.actor_id)
     ) {
+      // 切号/换 token 后旧身份的撤回原文不得留给新身份。
+      clearRecalledDrafts();
       bumpIdentityEpoch();
     }
     return cached;
@@ -274,6 +279,7 @@ export function resetWebSession(): void {
   cached = null;
   pending = null;
   freshPending = null;
-  // 退出/撤权后旧身份的晚到响应必须全部作废。
+  // 退出/撤权后旧身份的晚到响应与本地原文副本都必须全部作废。
+  clearRecalledDrafts();
   bumpIdentityEpoch();
 }

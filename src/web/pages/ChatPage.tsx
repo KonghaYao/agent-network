@@ -17,7 +17,7 @@ import { Link } from '../app/router';
 import type { ActorStreamEvent } from '../app/mcp/useActorStream';
 import { ChatDialogsMount } from '../features/chat/ChatDialogsMount';
 import { ChatHeader } from '../features/chat/ChatHeader';
-import { Composer, type ComposerReply, type ComposerSendInput } from '../features/chat/Composer';
+import { Composer, type ComposerReply, type ComposerRestoreDraft, type ComposerSendInput } from '../features/chat/Composer';
 import { PinnedMessagesBar } from '../features/chat/PinnedMessagesBar';
 import { Timeline } from '../features/chat/Timeline';
 import { AppSidebar } from '../features/layout/AppSidebar';
@@ -50,6 +50,7 @@ import { groupColorFor } from '../lib/group-colors';
 import { filePreviewKind, type RoomFileItem } from '../lib/files-ui';
 import { callTool } from '../lib/mcp-client';
 import { queryKeys } from '../lib/query-keys';
+import { forgetRecalledDraft } from '../lib/recalled-drafts';
 import { SCOPE_RESET_EVENT, type ScopeResetDetail } from '../lib/scope-reset';
 import { outboxUpdateBusy, setUpdateBusy } from '../pwa/update-busy';
 import { useRecoveryState } from '../pwa/recovery';
@@ -129,6 +130,8 @@ export function ChatPage({ roomId }: ChatPageProps) {
   const restoring = recovery.masked || chat.catchUp?.active === true;
   const [status, setStatus] = useState('');
   const [reply, setReply] = useState<ComposerReply | null>(null);
+  /** 撤回消息恢复请求：只允许当前 actor 的原文进入当前输入框。 */
+  const [restoreDraft, setRestoreDraft] = useState<ComposerRestoreDraft | null>(null);
   const [forcePinToken, setForcePinToken] = useState(0);
   const [overlay, setOverlay] = useState<RoomOverlay | null>(null);
   const [filesDesktopOpen, setFilesDesktopOpen] = useState(() =>
@@ -241,6 +244,27 @@ export function ChatPage({ roomId }: ChatPageProps) {
   const { scrollResetToken, searchNavRef, moderation } = moderationEvents;
   const onRecall = moderation.recall;
   const onSetPinned = moderation.setPinned;
+  const onReedit = useCallback(
+    (item: HistoryMessage, body: string) => {
+      const actorId = identity?.actor_id;
+      // 入口只在本人、墓碑且有本地副本时渲染；这里再校验一次身份，防止晚到点击。
+      if (!actorId || item.sender_id !== actorId || !body) return;
+      setRestoreDraft({ actorId, messageId: item.message_id, body });
+    },
+    [identity?.actor_id],
+  );
+  const onRestoreApplied = useCallback(
+    (messageId: string, applied: boolean) => {
+      const actorId = identity?.actor_id;
+      if (applied && actorId) forgetRecalledDraft(actorId, messageId);
+      setRestoreDraft(null);
+    },
+    [identity?.actor_id],
+  );
+  // 切号/恢复确认身份变化后，未消费的恢复请求不能带进新身份。
+  useEffect(() => {
+    setRestoreDraft(null);
+  }, [identity?.actor_id]);
   chatEventRef.current = moderationEvents.onChatEvent;
 
   const refresh = chat.refresh;
@@ -430,6 +454,8 @@ export function ChatPage({ roomId }: ChatPageProps) {
       }
       const outcome = await queue.send({
         body: plan.body,
+        // 撤回后重新编辑只恢复输入框里的纯文本；附件与自动追加的目标不进入缓存。
+        draftBody: input.urls.length > 0 ? '' : input.text.trim(),
         invoke: plan.invoke,
         mentions: plan.mentions,
         // 人类无存活选择器目标时省略 invoke，恢复服务端按正文唯一成员解析；
@@ -846,6 +872,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                     onOpenTask={openTrace}
                     onOpenFile={openFilePreview}
                     onRecall={(item) => void onRecall(item)}
+                    onReedit={onReedit}
                     onSetPinned={(item, pinned) => void onSetPinned(item, pinned)}
                     pinnedMessageIds={moderation.pinnedMessageIds}
                     moderationBusy={moderation.busy}
@@ -913,6 +940,8 @@ export function ChatPage({ roomId }: ChatPageProps) {
                       reply={reply}
                       draftRequest={draftRequest}
                       onDraftApplied={clearDraftRequest}
+                      restoreDraft={restoreDraft}
+                      onRestoreApplied={onRestoreApplied}
                       sending={false}
                       onCancelReply={() => setReply(null)}
                       onSend={onSend}
