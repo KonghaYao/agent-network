@@ -1,14 +1,18 @@
 /**
  * 已撤回消息的本地原文副本。
  *
- * 服务端撤回会清空 `body` 并写墓碑，原文只剩发送成功时本机留存的副本。
- * 因此这里只保存“本标签页通过网页发送成功的纯文本正文”，按 actor 分 key
- * 写入 sessionStorage：
+ * 撤回后服务端会清空 `body` 并写墓碑，原文只能来自本机留存：
+ * - 发送成功时按 actor 保存输入框里的纯文本；
+ * - 本人撤回前若本机没有副本，会临时读取服务端正文并保存（覆盖更新前、
+ *   其他标签页发送的消息），读取失败或超时不影响撤回本身。
+ * 副本按 actor 分 key 写入 sessionStorage：
  * - 不落 localStorage，刷新/关闭标签页后不保证保留；
  * - 单条 16KB、最多 30 条、总计 128KB，超限先丢最旧；
  * - 存储不可用（隐私模式/配额不足）时静默降级，绝不影响发送或撤回；
  * - 读取时校验信封里的 actor_id，与当前 actor 不一致直接丢弃。
  */
+
+import { extractMessageFileLinks, MESSAGE_FILE_ID_SOURCE } from '../../contracts/file-links';
 
 const PREFIX = 'agent-network-recalled-drafts:v1:';
 
@@ -44,8 +48,27 @@ interface Envelope {
 
 const textEncoder = new TextEncoder();
 
+/** 任意 origin / 相对路径的 `/f/<fileId>`；附件链接不进入撤回副本。 */
+const FILE_LINK_ANY_ORIGIN = new RegExp(`/f/${MESSAGE_FILE_ID_SOURCE}(?![A-Za-z0-9_-])`, 'u');
+
 function byteLength(text: string): number {
   return textEncoder.encode(text).length;
+}
+
+/**
+ * 判断一段正文能否作为撤回副本。
+ *
+ * 空正文、含附件链接（重新编辑不恢复附件）或超过单条上限时返回 null；
+ * 发送留存与撤回前读取共用同一规则，避免两条路径对附件处理不一致。
+ */
+export function cacheableRecalledDraftBody(
+  body: string,
+  origin: string | null = typeof window === 'undefined' ? null : window.location.origin,
+): string | null {
+  if (!body.trim()) return null;
+  if (origin && extractMessageFileLinks(body, origin).length > 0) return null;
+  if (FILE_LINK_ANY_ORIGIN.test(body)) return null;
+  return byteLength(body) <= RECALLED_DRAFT_BODY_MAX_BYTES ? body : null;
 }
 
 function defaultStorage(): RecalledDraftStorage | null {

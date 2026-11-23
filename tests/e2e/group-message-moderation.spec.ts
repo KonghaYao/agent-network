@@ -222,6 +222,22 @@ async function recallOwnMessage(page: Page, messageId: string): Promise<void> {
   ).toBeVisible();
 }
 
+/** 读取当前 actor 的撤回副本 message_id；key 规则与 `recalledDraftStorageKey` 一致。 */
+async function recalledDraftIds(page: Page, actorId: string): Promise<string[]> {
+  return page.evaluate((key) => {
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw) as { items?: { message_id?: unknown }[] };
+      return (parsed.items ?? [])
+        .map((item) => item.message_id)
+        .filter((id): id is string => typeof id === 'string');
+    } catch {
+      return [];
+    }
+  }, `agent-network-recalled-drafts:v1:${actorId}`);
+}
+
 test.describe.serial('群主消息管理前端', () => {
   let base = '';
 
@@ -834,6 +850,109 @@ test.describe.serial('群主消息管理前端', () => {
       await page.goto(`${base}/c/${room.roomId}`);
       await expect(page.locator('#composer')).toBeVisible();
       await expect(page.locator('#body')).toHaveValue('');
+    } finally {
+      await close();
+    }
+  });
+
+  test('更新前发送的旧消息撤回后也能重新编辑', async ({ browser }) => {
+    const room = await createModerationRoom(base);
+    const body = `更新前旧消息 ${crypto.randomUUID().replaceAll('-', '').slice(0, 8)}`;
+    // 直接经 API 发送：本机没有“发送成功时留存”的副本，等价于更新前或其他设备发送。
+    const messageId = await sendMessage(base, room.tokenMember, room.roomId, body);
+    const { page, close } = await openRoom(browser, base, room.tokenMember, room.roomId);
+    try {
+      expect(await recalledDraftIds(page, room.actorMember)).toEqual([]);
+
+      await recallOwnMessage(page, messageId);
+      const reedit = page.locator(`[data-reedit-message-id="${messageId}"]`);
+      await expect(reedit).toBeVisible();
+      await expect(reedit).toHaveText('重新编辑');
+      await expect.poll(() => recalledDraftIds(page, room.actorMember)).toContain(messageId);
+
+      await reedit.click();
+      await expect(page.locator('#body')).toHaveValue(body);
+      await expect(page.locator('#body')).toBeFocused();
+      // 只回填、不自动发送；恢复后入口消失。
+      await expect(page.locator('#messages')).not.toContainText(body);
+      await expect(reedit).toHaveCount(0);
+    } finally {
+      await close();
+    }
+  });
+
+  test('群主撤回他人消息时不读取也不缓存原文', async ({ browser }) => {
+    const room = await createModerationRoom(base);
+    const body = `成员待撤回 ${crypto.randomUUID().replaceAll('-', '').slice(0, 8)}`;
+    const messageId = await sendMessage(base, room.tokenMember, room.roomId, body);
+    const { page, close } = await openRoom(browser, base, room.tokenOwner, room.roomId);
+    try {
+      const readMessageIds: string[] = [];
+      await page.route('**/mcp', async (route) => {
+        const request = route.request();
+        if (request.headers()['mcp-name'] === 'network_message_read') {
+          const payload = request.postDataJSON() as {
+            params?: { arguments?: { message_id?: string } };
+          };
+          readMessageIds.push(payload.params?.arguments?.message_id ?? '');
+        }
+        await route.continue();
+      });
+
+      await recallOwnMessage(page, messageId);
+      await expect(
+        page.locator(`li.msg-system.msg-recalled[data-message-id="${messageId}"]`),
+      ).toBeVisible();
+      await expect(page.locator(`[data-reedit-message-id="${messageId}"]`)).toHaveCount(0);
+      expect(await recalledDraftIds(page, room.actorOwner)).toEqual([]);
+      expect(readMessageIds).not.toContain(messageId);
+    } finally {
+      await close();
+    }
+  });
+
+  test('读取原文失败时撤回仍成功且没有重新编辑入口', async ({ browser }) => {
+    const room = await createModerationRoom(base);
+    const body = `读取失败仍撤回 ${crypto.randomUUID().replaceAll('-', '').slice(0, 8)}`;
+    const messageId = await sendMessage(base, room.tokenMember, room.roomId, body);
+    const { page, close } = await openRoom(browser, base, room.tokenMember, room.roomId);
+    try {
+      await page.route('**/mcp', async (route) => {
+        if (route.request().headers()['mcp-name'] !== 'network_message_read') {
+          await route.continue();
+          return;
+        }
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: { message: '读取失败' } }),
+        });
+      });
+
+      await recallOwnMessage(page, messageId);
+      await expect(
+        page.locator(`li.msg-system.msg-recalled[data-message-id="${messageId}"]`),
+      ).toBeVisible();
+      await expect(page.locator(`[data-reedit-message-id="${messageId}"]`)).toHaveCount(0);
+      expect(await recalledDraftIds(page, room.actorMember)).toEqual([]);
+    } finally {
+      await close();
+    }
+  });
+
+  test('超过 16KB 的正文撤回成功但不缓存截断原文', async ({ browser }) => {
+    const room = await createModerationRoom(base);
+    const body = `超长正文 ${'长'.repeat(6000)}`;
+    expect(new TextEncoder().encode(body).length).toBeGreaterThan(16 * 1024);
+    const messageId = await sendMessage(base, room.tokenMember, room.roomId, body);
+    const { page, close } = await openRoom(browser, base, room.tokenMember, room.roomId);
+    try {
+      await recallOwnMessage(page, messageId);
+      await expect(
+        page.locator(`li.msg-system.msg-recalled[data-message-id="${messageId}"]`),
+      ).toBeVisible();
+      await expect(page.locator(`[data-reedit-message-id="${messageId}"]`)).toHaveCount(0);
+      expect(await recalledDraftIds(page, room.actorMember)).toEqual([]);
     } finally {
       await close();
     }
