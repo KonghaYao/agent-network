@@ -42,10 +42,12 @@ import {
   buildSendPlan,
   composeMessageBody,
   mentionNames,
+  needsLatestMentionProbe,
   resolveReplyAgentTarget,
   senderName,
   type HistoryMessage,
 } from '../lib/chat';
+import { readLatestMentionItems } from '../lib/auto-mention';
 import { groupColorFor } from '../lib/group-colors';
 import { filePreviewKind, type RoomFileItem } from '../lib/files-ui';
 import { callTool } from '../lib/mcp-client';
@@ -437,7 +439,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
         return { ok: false, error: message };
       }
       const body = composeMessageBody(input.text, input.urls);
-      const plan = buildSendPlan({
+      const planInput = {
         room,
         members,
         identityId: identity.actor_id,
@@ -447,7 +449,17 @@ export function ChatPage({ roomId }: ChatPageProps) {
         items: chat.items,
         hasAttachments: input.urls.length > 0,
         hasReply: Boolean(reply?.messageId),
-      });
+      };
+      let plan = buildSendPlan(planInput);
+      // 已加载窗口可能因长时间挂起/恢复轮/补读失败而滞后：只在这种情况下
+      // 回读最近一条确认上一位发送者；失败或超时沿用当前窗口直接发送。
+      if (!plan.error && token && needsLatestMentionProbe(planInput)) {
+        const latest = await readLatestMentionItems({ token, roomId });
+        if (latest) {
+          const recovered = buildSendPlan({ ...planInput, items: latest });
+          if (!recovered.error) plan = recovered;
+        }
+      }
       if (plan.error) {
         setStatus(plan.error);
         return { ok: false, error: plan.error };
@@ -473,7 +485,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
       }
       return outcome;
     },
-    [room, identity, members, chat.items, queue, reply, refresh],
+    [room, identity, members, chat.items, queue, reply, refresh, token, roomId],
   );
 
   const onRetryOutbox = useCallback(

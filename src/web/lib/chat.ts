@@ -642,6 +642,65 @@ function maintainerMention(members: Map<string, RoomMember>, identityId: string)
   return `@${AUTO_MENTION_MAINTAINER}`;
 }
 
+/** 已解析到正文 @ 的选择器目标数；与 buildSendPlan 的 resolved 判定一致。 */
+function resolvedSelectionCount(
+  selections: MentionSelection[],
+  members: Map<string, RoomMember>,
+  body: string,
+): number {
+  let resolved = 0;
+  for (const selection of selections) {
+    const member = members.get(selection.actor_id);
+    if (!member) continue;
+    if (!body.includes(`@${member.name}`)) continue;
+    resolved += 1;
+  }
+  return resolved;
+}
+
+/** 自动 @ 只依赖不会因窗口变化而改变输入的字段。 */
+export interface AutoMentionProbeInput {
+  room: RoomView | null;
+  members: Map<string, RoomMember>;
+  identityId: string;
+  identityKind: ActorKind;
+  body: string;
+  selections: MentionSelection[];
+  items?: HistoryItem[];
+  hasReply?: boolean;
+}
+
+/**
+ * 是否需要在发送前回读服务端最新一条消息。
+ *
+ * 已加载历史窗口是易失的：长时间挂起、恢复轮进行中、历史补读失败或只加载
+ * 了旧页时，`items` 可能为空或停在发送者自己的上一条。只有此时才需要一次
+ * 轻量回读；正文命中、选择器目标、回复状态与 Agent 身份都保持原语义。
+ *
+ * `previousMemberMention` 返回空串既可能是“最后一条是自己”，也可能是窗口
+ * 为空或发送者已不在成员列表。两种情况下都交给服务端确认，避免把滞后窗口
+ * 当成权威答案；正文重名（空串）时不回读，保持“不猜”的规则。
+ */
+export function needsLatestMentionProbe(input: AutoMentionProbeInput): boolean {
+  const {
+    room,
+    members,
+    identityId,
+    identityKind,
+    body,
+    selections,
+    items = [],
+    hasReply = false,
+  } = input;
+  if (!room || room.kind !== 'group') return false;
+  if (identityKind !== 'human') return false;
+  if (hasReply) return false;
+  if (bodyHasAnyMention(body, members)) return false;
+  if (bodyMemberMention(body, members, identityId) !== null) return false;
+  if (resolvedSelectionCount(selections, members, body) > 0) return false;
+  return previousMemberMention(items, members, identityId) === '';
+}
+
 /**
  * 发送计划。
  *
