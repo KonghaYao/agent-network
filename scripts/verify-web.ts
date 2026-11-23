@@ -23,6 +23,7 @@ import { logFenixError } from '../src/web/features/memory/fenix/log-error';
 import {
   appendMention,
   buildSendPlan,
+  needsLatestMentionProbe,
   resolveReplyAgentTarget,
   type HistoryItem,
   type HistoryMessage,
@@ -4155,6 +4156,91 @@ function runAutoMentionPlanChecks(): void {
   });
   checkEqual('计划：回复时跳过 legacy 自动 @', replied.body, '接着处理');
   checkEqual('计划：回复时没有目标则省略 invoke', replied.invokeExplicit, false);
+
+  // 发送前兜底读取：只在已加载窗口无法确定“上一位成员”时需要回读服务端。
+  const presence: HistoryItem = {
+    kind: 'presence',
+    presence_event_id: 'presence_1',
+    room_id: room.room_id,
+    agent_id: agentA.actor_id,
+    transition: 'offline',
+    occurred_at: '60',
+    recorded_at: '60',
+    timeline_seq: '60',
+    time_basis: 'observed',
+  };
+  const probe = (
+    options: {
+      body?: string;
+      items?: HistoryItem[];
+      members?: Map<string, RoomMember>;
+      identityId?: string;
+      identityKind?: 'human' | 'agent';
+      room?: RoomView;
+      hasReply?: boolean;
+      selections?: { actor_id: string; name: string; kind: 'human' | 'agent' }[];
+    } = {},
+  ) =>
+    needsLatestMentionProbe({
+      room: options.room ?? room,
+      members: options.members ?? members,
+      identityId: options.identityId ?? human.actor_id,
+      identityKind: options.identityKind ?? 'human',
+      body: options.body ?? '窗口不确定',
+      selections: options.selections ?? [],
+      items: options.items ?? [],
+      hasReply: options.hasReply ?? false,
+    });
+  check('探测：窗口为空时需要回读', probe());
+  check(
+    '探测：窗口最后一条是自己时需要回读',
+    probe({ items: [planMessage(agentA.actor_id, '60'), planMessage(human.actor_id, '61')] }),
+  );
+  check(
+    '探测：窗口最后一条是其他成员时不需要回读',
+    !probe({ items: [planMessage(agentA.actor_id, '62')] }),
+  );
+  check(
+    '探测：presence 之后仍按最近一条消息判断',
+    !probe({ items: [planMessage(agentA.actor_id, '63'), presence] }),
+  );
+  check(
+    '探测：发送者不在成员列表时需要回读',
+    probe({
+      items: [planMessage('plan_unknown', '64')],
+    }),
+  );
+  check(
+    '探测：正文命中成员时不需要回读',
+    !probe({ body: '请 正文命中 Agent 处理' }),
+  );
+  check(
+    '探测：正文重名歧义时保持不猜',
+    !probe({
+      body: '请 重名 Agent 处理',
+      members: duplicateMembers,
+    }),
+  );
+  check(
+    '探测：回复状态不需要回读',
+    !probe({ hasReply: true, items: [planMessage(agentA.actor_id, '65')] }),
+  );
+  check(
+    '探测：Agent 身份不需要回读',
+    !probe({ identityKind: 'agent', identityId: agentA.actor_id }),
+  );
+  check(
+    '探测：direct 房间不需要回读',
+    !probe({ room: { ...room, room_id: 'plan_direct', kind: 'direct' } }),
+  );
+  check(
+    '探测：已解析选择器目标时不需要回读',
+    !probe({ selections: [{ actor_id: agentB.actor_id, name: agentB.name, kind: 'agent' }], body: '请 @正文命中 Agent 处理' }),
+  );
+  check(
+    '探测：空窗口附件仍先探测上一位再兜底维护员',
+    probe({ members: attachMembers }),
+  );
 }
 
 /**
