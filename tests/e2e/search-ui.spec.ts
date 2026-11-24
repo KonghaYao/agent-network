@@ -394,6 +394,14 @@ test.describe('会话历史搜索 UI', () => {
     });
     await expect(target).toBeVisible();
     await expect(target).toHaveAttribute('data-search-active', 'true');
+    // 虚拟时间线把 .msg 包进 .vt-item；高亮必须仍然是后代选择器生效。
+    const highlight = await target.evaluate((node) => {
+      const style = getComputedStyle(node);
+      return { outlineStyle: style.outlineStyle, animationName: style.animationName };
+    });
+    expect(highlight.outlineStyle).not.toBe('none');
+    expect(highlight.animationName).not.toBe('none');
+    console.log(`SEARCH_HIGHLIGHT ${JSON.stringify(highlight)}`);
   });
 
   test('搜索弹窗无 critical/serious axe 违规', async ({ page }) => {

@@ -152,7 +152,11 @@ export function TimelineVirtual({
   const [scrollerNode, setScrollerNode] = useState<HTMLDivElement | null>(null);
   const attachScroller = useCallback((node: HTMLDivElement | null) => {
     scrollerRef.current = node;
-    if (node) setScrollerNode(node);
+    if (!node) return;
+    setScrollerNode(node);
+    if (!node.hasAttribute('data-loaded-ready')) {
+      node.setAttribute('data-loaded-ready', 'false');
+    }
   }, []);
   const pinnedRef = useRef(true);
   const [pinned, setPinned] = useState(true);
@@ -162,7 +166,10 @@ export function TimelineVirtual({
   const [flashId, setFlashId] = useState<string | null>(null);
   const lastKeyRef = useRef<string | null>(null);
   const lastForceRef = useRef(forcePinToken);
-  const lastScrollResetRef = useRef(scrollResetToken);
+  // 复位令牌来自“anchor 窗口被撤回丢弃”。它和 anchor→live 的 key 切换发生在
+  // 同一次提交里；用状态记住是否已应用，才能在重挂载的初始定位上生效。
+  const [appliedResetToken, setAppliedResetToken] = useState(scrollResetToken);
+  const resetPending = scrollResetToken !== appliedResetToken;
   const lastJumpRef = useRef(searchNavigation?.jumpToken ?? -1);
   const anchored = searchNavigation?.anchored === true;
   const anchoredRef = useRef(anchored);
@@ -204,8 +211,11 @@ export function TimelineVirtual({
       : items.findIndex(
           (item) => item.kind !== 'presence' && item.message_id === anchorTargetId,
         );
-  const initialTopMostItemIndex =
-    anchorIndex >= 0
+  // 复位时必须让新挂载的 live 窗口从顶部开始，而不是用“最后一条 align=end”
+  // 的初始定位把 anchor 撤销后的页面直接带到底部。
+  const initialTopMostItemIndex = resetPending
+    ? { index: 0, align: 'start' as const }
+    : anchorIndex >= 0
       ? { index: anchorIndex, align: 'center' as const }
       : { index: Math.max(0, items.length - 1), align: 'end' as const };
   // anchor 窗口整体替换数据；换 key 让 Virtuoso 用初始索引定位，避免旧窗口
@@ -239,8 +249,10 @@ export function TimelineVirtual({
         (item) => item.kind !== 'presence' && item.message_id === messageId,
       );
       if (index < 0) return false;
+      const handle = virtuosoRef.current;
+      if (!handle) return false;
       setPin(false);
-      virtuosoRef.current?.scrollToIndex({ index, align: 'center' });
+      handle.scrollToIndex({ index, align: 'center' });
       return true;
     },
     [indexState.items, setPin],
@@ -404,6 +416,9 @@ export function TimelineVirtual({
         revealWhenSettled();
       }
       if (start > 0) startLatchRef.current = false;
+      if (items.length > 0 && end >= start) {
+        scrollerRef.current?.setAttribute('data-loaded-ready', 'true');
+      }
       scrollerRef.current?.setAttribute(
         'data-visible-count',
         String(Math.max(0, Math.min(items.length, end - start + 1))),
@@ -441,11 +456,19 @@ export function TimelineVirtual({
   );
 
   useLayoutEffect(() => {
-    if (scrollResetToken === lastScrollResetRef.current) return;
-    lastScrollResetRef.current = scrollResetToken;
+    if (!resetPending) return undefined;
     setPin(false);
-    virtuosoRef.current?.scrollToIndex({ index: 0, align: 'start' });
-  }, [scrollResetToken, setPin]);
+    const toTop = () => virtuosoRef.current?.scrollToIndex({ index: 0, align: 'start' });
+    toTop();
+    // Virtuoso 的初始测量可能晚于本次布局 effect；在下一帧再补一次，
+    // 避免 anchor→live 重挂载的初始定位覆盖复位。initialTopMostItemIndex
+    // 已按 resetPending 改为 0/start，这里只兜底异步测量。
+    const frame = requestAnimationFrame(() => {
+      toTop();
+      setAppliedResetToken(scrollResetToken);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [resetPending, scrollResetToken, setPin]);
 
   useEffect(() => {
     if (anchored) setPin(false);
@@ -493,12 +516,14 @@ export function TimelineVirtual({
     messageCount: messages.length,
   });
   lastRendered.current = { length: items.length, messageCount: messages.length };
+  const oldestLoadedId = messages[0]?.message_id ?? '';
   useEffect(() => {
     const node = scrollerRef.current;
     if (!node) return;
     node.setAttribute('data-loaded-count', String(lastRendered.current.length));
     node.setAttribute('data-loaded-message-count', String(lastRendered.current.messageCount));
-  }, [items.length, messages.length]);
+    node.setAttribute('data-loaded-oldest-id', oldestLoadedId);
+  }, [items.length, messages.length, oldestLoadedId, scrollerNode]);
 
   const components = useMemo(
     () => ({

@@ -664,6 +664,7 @@ export const ChatMessage = memo(function ChatMessage({
           data-message-id={item.message_id}
           data-search-active={searchActive ? 'true' : undefined}
           data-sender-kind={agent ? 'agent' : 'human'}
+          data-auto-pending={autoPending ? 'true' : undefined}
           data-message-preview={item.preview}
           ref={rowRef}
           role="listitem"

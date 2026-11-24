@@ -1140,13 +1140,13 @@ body .memory-drawer {
   outline-offset: 2px;
 }
 
-#messages > .msg.search-active {
+#messages .msg.search-active {
   border-radius: 8px;
   outline: 2px solid var(--lenso-tint-text);
   outline-offset: 2px;
 }
 
-#messages > .msg.search-flash {
+#messages .msg.search-flash {
   animation: message-search-flash var(--app-search-flash-duration, 1600ms) ease-out;
 }
 
@@ -1161,7 +1161,7 @@ body .memory-drawer {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  #messages > .msg.search-flash {
+  #messages .msg.search-flash {
     animation: none;
     background: color-mix(in srgb, var(--lenso-tint) 14%, transparent);
   }

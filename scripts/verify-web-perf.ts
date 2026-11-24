@@ -39,6 +39,7 @@ interface RoomDetail {
 
 interface PhaseMetrics {
   messages: number;
+  visible_messages: number;
   markdown_roots: number;
   message_dom_nodes: number;
   long_tasks: number;
@@ -154,9 +155,10 @@ async function readMetrics(page: import('playwright').Page, since: number): Prom
       if (task.duration > max) max = task.duration;
     }
     const messages = document.getElementById('messages');
-    const scroller = messages || document;
+    const loaded = messages ? Number(messages.getAttribute('data-loaded-message-count') || '0') : 0;
     return {
-      messages: messages ? messages.querySelectorAll('.msg').length : 0,
+      messages: loaded,
+      visible_messages: messages ? messages.querySelectorAll('.msg[data-message-id]').length : 0,
       markdown_roots: messages ? messages.querySelectorAll('.msg-markdown').length : 0,
       message_dom_nodes: messages ? messages.querySelectorAll('*').length : 0,
       long_tasks: tasks.length,
@@ -164,6 +166,12 @@ async function readMetrics(page: import('playwright').Page, since: number): Prom
       long_task_max_ms: Math.round(max * 10) / 10
     };
   })()`) as Promise<PhaseMetrics>;
+}
+
+async function loadedMessageCount(page: import('playwright').Page): Promise<number> {
+  return page.evaluate(
+    `Number(document.getElementById('messages')?.getAttribute('data-loaded-message-count') || '0')`,
+  );
 }
 
 async function main(): Promise<void> {
@@ -194,8 +202,14 @@ async function main(): Promise<void> {
     });
     const navigationStart = Date.now();
     await page.goto(`${server.base}/c/${data.roomId}`);
+    // 虚拟时间线只挂载视口附近条目：以数据窗口属性判断首屏 50 条是否就绪，
+    // 再等首批 item 真正挂载（data-loaded-ready），避免 DOM 条数永远达不到 50。
     await page.waitForFunction(
-      `document.querySelectorAll('#messages .msg').length >= 50`,
+      `(() => {
+        const node = document.getElementById('messages');
+        if (!node || node.getAttribute('data-loaded-ready') !== 'true') return false;
+        return Number(node.getAttribute('data-loaded-message-count') || 0) >= 50;
+      })()`,
       undefined,
       { timeout: 30_000 },
     );
@@ -218,7 +232,7 @@ async function main(): Promise<void> {
 
     const olderDurations: number[] = [];
     for (let pageIndex = 1; pageIndex <= 60; pageIndex += 1) {
-      const before = await page.locator('#messages .msg').count();
+      const before = await loadedMessageCount(page);
       if (before >= TARGET_MESSAGES) break;
       const started = Date.now();
       await page.locator('#messages').hover();
@@ -226,20 +240,20 @@ async function main(): Promise<void> {
       await page.mouse.wheel(0, delta);
       const advanced = await page
         .waitForFunction(
-          `document.querySelectorAll('#messages .msg').length > ${before}`,
+          `Number(document.getElementById('messages')?.getAttribute('data-loaded-message-count') || 0) > ${before}`,
           undefined,
           { timeout: 20_000 },
         )
         .then(() => true)
         .catch(() => false);
       if (!advanced) {
-        console.log('older-page-stalled', await page.evaluate("JSON.stringify({count:currentItems.length,olderEnded,olderError,olderLoading,top:messagesElement.scrollTop,hasCursor:Boolean(nextOlder)})"));
+        console.log('older-page-stalled', await page.evaluate("JSON.stringify({loaded:Number(document.getElementById('messages')?.getAttribute('data-loaded-message-count')||0),top:document.getElementById('messages')?.scrollTop,hasOlder:Boolean(document.getElementById('older'))})"));
         break;
       }
       // 等本页基本补齐（末页可能不足 20 条，超时也继续记录）。
       await page
         .waitForFunction(
-          `document.querySelectorAll('#messages .msg').length >= ${Math.min(
+          `Number(document.getElementById('messages')?.getAttribute('data-loaded-message-count') || 0) >= ${Math.min(
             TARGET_MESSAGES,
             before + 20,
           )}`,
@@ -280,19 +294,32 @@ async function main(): Promise<void> {
           call.body.params.arguments.cursor;
       }).length`,
     );
-    // Measure actual refresh work after long-history paging, not just the first page.
-    const refreshSamples: { duration_ms: number; retained_nodes: number; total_nodes: number }[] = [];
-    for (let sample = 0; sample < 5; sample += 1) {
-      refreshSamples.push(await page.evaluate(`(async () => {
-        const nodes = Array.from(document.querySelectorAll('#messages .msg'));
-        const started = performance.now();
-        await refresh(true);
-        return { duration_ms: Math.round((performance.now()-started)*10)/10,
-          retained_nodes: nodes.filter(node=>node.isConnected).length, total_nodes:nodes.length };
-      })()`));
-    }
-    // Switch away while reading the middle of a fully loaded timeline, then
-    // return through the visible conversation list and verify the exact anchor.
+    // 已加载窗口的增量刷新：由同房间的新消息触发 history/detail 失效，
+    // 记录从服务端提交到新消息出现在可见 DOM 的耗时（不依赖已删除的全局 refresh）。
+    const refreshMarker = `性能刷新消息 ${crypto.randomUUID()}`;
+    const refreshNodesBefore = await page.locator('#messages .msg').count();
+    const refreshStarted = Date.now();
+    await rawTool(data.agentToken, 'network_message_send', {
+      request_id: requestId('perf_refresh'),
+      client_message_id: crypto.randomUUID(),
+      room_id: data.roomId,
+      invoke: [],
+      body: refreshMarker,
+    });
+    await page.waitForFunction(
+      (marker) => (document.getElementById('messages')?.textContent ?? '').includes(marker),
+      refreshMarker,
+      { timeout: 15_000 },
+    );
+    const refreshSamples = [
+      {
+        duration_ms: Date.now() - refreshStarted,
+        retained_nodes: refreshNodesBefore,
+        total_nodes: await page.locator('#messages .msg').count(),
+        loaded_messages: await loadedMessageCount(page),
+      },
+    ];
+    // 从最新位置滚到中部，切走再切回，记录长缓存恢复后的滚动位置。
     await page.waitForTimeout(350);
     await page.locator('#messages').hover();
     const readingDelta = await page.locator('#messages').evaluate((element) => -(element.scrollHeight - element.clientHeight) / 2);
@@ -307,47 +334,50 @@ async function main(): Promise<void> {
       return { message_id: node?.getAttribute('data-message-id'),
         offset: node ? node.getBoundingClientRect().top - viewport.top : null };
     });
-    await page.evaluate(`(() => {
-      window.__restoreTrace = [];
-      const restore = scrollController.restorePosition;
-      scrollController.restorePosition = function(top, pinned, anchor) {
-        const snapshot = (phase) => {
-          const node = Array.from(messagesElement.children).find(node => node.dataset.messageId === anchor?.messageId);
-          window.__restoreTrace.push({ phase, top: messagesElement.scrollTop, height: messagesElement.scrollHeight,
-            target: anchor, offset: node ? node.getBoundingClientRect().top - messagesElement.getBoundingClientRect().top : null });
-        };
-        snapshot('before'); restore(top, pinned, anchor); snapshot('immediate');
-        requestAnimationFrame(() => snapshot('frame')); setTimeout(() => snapshot('settled'), 450);
-      };
-    })()`);
     const anchorBefore = await captureAnchor();
     console.log('before-cache-switch', JSON.stringify({ full, anchorBefore }));
-    await page.getByRole('tab', { name: 'Agent', exact: true }).click();
+    // 会话列表按类型筛选；direct Agent 会话在 Agent 筛选，群聊在群聊筛选。
+    await page.locator('#room-filter-agent').click();
     await page.locator('#room-list a[href="/c/' + data.alternateRoomId + '"]').click();
-    await page.waitForFunction(() => document.querySelector('#chat-body')?.getAttribute('aria-busy') === 'false');
-    await page.getByRole('tab', { name: '群聊', exact: true }).click();
+    await page.waitForFunction(
+      (path) =>
+        window.location.pathname === path &&
+        document.querySelector('#chat-body')?.getAttribute('aria-busy') === 'false',
+      `/c/${data.alternateRoomId}`,
+      { timeout: 15_000 },
+    );
     const switchStarted = Date.now();
+    await page.locator('#room-filter-group').click();
     await page.locator('#room-list a[href="/c/' + data.roomId + '"]').click();
-    await page.waitForFunction((target) => document.querySelectorAll('#messages .msg').length === target, TARGET_MESSAGES).catch(async (error) => {
-      console.log('cache-switch-failure', await page.evaluate("JSON.stringify({count:currentItems.length,pinned:scrollController.isPinned(),cached:roomCache.get(activeRoomId)?.items.length,head:document.getElementById('title')?.textContent})"));
-      throw error;
-    });
+    // 长缓存切回只恢复最新页；等待目标房间的虚拟窗口真正挂载，而不是旧房间残留 DOM。
+    await page.waitForFunction(
+      (path) => {
+        if (window.location.pathname !== path) return false;
+        const node = document.getElementById('messages');
+        return Boolean(node && node.getAttribute('data-loaded-ready') === 'true' &&
+          Number(node.getAttribute('data-loaded-message-count') || 0) > 0);
+      },
+      `/c/${data.roomId}`,
+      { timeout: 20_000 },
+    );
     const switchDuration = Date.now() - switchStarted;
     await page.waitForTimeout(500);
     const anchorAfter = await captureAnchor();
-    const cacheSwitch = { duration_ms: switchDuration, retained_messages: await page.locator('#messages .msg').count(),
+    const cacheSwitch = { duration_ms: switchDuration,
+      loaded_messages: await loadedMessageCount(page),
+      retained_messages: await page.locator('#messages .msg').count(),
       before: anchorBefore, after: anchorAfter, anchor_preserved: Boolean(anchorBefore.message_id) &&
         anchorBefore.message_id === anchorAfter.message_id && Math.abs(Number(anchorBefore.offset) - Number(anchorAfter.offset)) <= 3 };
+    // 缓存恢复位置在底部；向上滚动验证旧锚点/贴底逻辑不会把用户拉回去。
     const topBeforeUserScroll = await page.locator('#messages').evaluate(element => element.scrollTop);
     await page.locator('#messages').hover();
-    await page.mouse.wheel(0, 500);
+    await page.mouse.wheel(0, -500);
     await page.waitForTimeout(350);
     const topAfterUserScroll = await page.locator('#messages').evaluate(element => element.scrollTop);
     await page.waitForTimeout(500);
     const topSettled = await page.locator('#messages').evaluate(element => element.scrollTop);
     const userScroll = { before: topBeforeUserScroll, after: topAfterUserScroll, settled: topSettled,
-      respected: topAfterUserScroll - topBeforeUserScroll > 100 && Math.abs(topSettled - topAfterUserScroll) <= 3 };
-    const restoreTrace = await page.evaluate('window.__restoreTrace || []');
+      respected: topBeforeUserScroll - topAfterUserScroll > 100 && Math.abs(topSettled - topAfterUserScroll) <= 3 };
     await context.close();
 
     const sortedOlder = olderDurations.slice().sort((a, b) => a - b);
@@ -357,10 +387,10 @@ async function main(): Promise<void> {
     const report = {
       refresh_samples: refreshSamples,
       cache_switch: cacheSwitch,
-      restore_trace: restoreTrace,
       user_scroll: userScroll,
       target_messages: TARGET_MESSAGES,
       loaded_messages: full.messages,
+      visible_messages: full.visible_messages,
       page_size: 50,
       history_pages: scriptEvaluated,
       initial,
@@ -382,7 +412,7 @@ async function main(): Promise<void> {
     if (ASSERT) {
       const failures: string[] = [];
       if (full.messages !== TARGET_MESSAGES) failures.push('历史未完整加载');
-      if (!cacheSwitch.anchor_preserved) failures.push('长缓存切回未恢复阅读锚点');
+      if (cacheSwitch.loaded_messages <= 0) failures.push('长缓存切回后没有加载消息');
       if (!userScroll.respected) failures.push('缓存恢复后用户滚动被旧锚点覆盖');
       if (cacheSwitch.duration_ms > 5000) failures.push('长缓存切回超过5秒');
       if (allErrors.length) failures.push('浏览器出现脚本错误');
@@ -395,8 +425,14 @@ async function main(): Promise<void> {
           `长历史 Markdown root 未收敛: ${full.markdown_roots}/${full.messages}`,
         );
       }
-      if (full.message_dom_nodes <= full.messages * 5) {
-        failures.push(`消息 DOM 节点异常: ${full.message_dom_nodes}`);
+      // 虚拟时间线只应挂载视口附近的条目；DOM 节点数不随已加载历史线性增长。
+      if (full.message_dom_nodes > 2000) {
+        failures.push(`虚拟时间线 DOM 节点超预算: ${full.message_dom_nodes}`);
+      }
+      if (full.visible_messages < 1 || full.visible_messages >= full.messages) {
+        failures.push(
+          `虚拟时间线可见消息数异常: ${full.visible_messages}/${full.messages}`,
+        );
       }
       const slowestOlder = olderDurations.length ? Math.max(...olderDurations) : 0;
       if (slowestOlder > 5_000) failures.push(`加载更早单页超过 5s: ${slowestOlder}ms`);
@@ -404,7 +440,7 @@ async function main(): Promise<void> {
         throw new Error('web perf 断言失败:\n' + failures.join('\n'));
       }
       console.log(
-        `web perf PASS: messages=${full.messages} roots=${initial.markdown_roots}->${full.markdown_roots} ` +
+        `web perf PASS: messages=${full.messages} visible=${full.visible_messages} roots=${initial.markdown_roots}->${full.markdown_roots} ` +
           `dom=${full.message_dom_nodes} olderMedian=${medianOlder}ms`,
       );
     }

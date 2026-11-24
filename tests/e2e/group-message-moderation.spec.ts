@@ -648,8 +648,18 @@ test.describe.serial('群主消息管理前端', () => {
         max: element.scrollHeight - element.clientHeight,
       }));
       expect(scroll.max).toBeGreaterThan(0);
+      // 复位到最新页顶部（若顶部触发自动补页，会保留原最新页首条的位置），
+      // 不得停在底部。
       expect(scroll.top).toBeLessThan(scroll.max);
       const after = await readRoomState(base, room.tokenMember, room.roomId);
+      console.log(
+        `ANCHOR_RECALL ${JSON.stringify({
+          ...scroll,
+          readBefore: before.room.my_last_read_seq,
+          readAfter: after.room.my_last_read_seq,
+          head: after.room.head_seq,
+        })}`,
+      );
       expect(after.room.my_last_read_seq).toBe(before.room.my_last_read_seq);
       expect(Number(after.room.my_last_read_seq)).toBeLessThan(Number(after.room.head_seq));
     } finally {
@@ -671,10 +681,22 @@ test.describe.serial('群主消息管理前端', () => {
     const context = await browser.newContext();
     const page = await context.newPage();
     await login(page, base, room.tokenMember);
-    const counts = { history: 0, task: 0 };
+    const counts = { history: 0, historyWindow: 0, task: 0 };
     await page.route('**/mcp', async (route) => {
       const name = route.request().headers()['mcp-name'];
-      if (name === 'network_history_list') counts.history += 1;
+      if (name === 'network_history_list') {
+        counts.history += 1;
+        let cursor: unknown = null;
+        try {
+          cursor =
+            (JSON.parse(route.request().postData() ?? '{}') as {
+              params?: { arguments?: { cursor?: unknown } };
+            }).params?.arguments?.cursor ?? null;
+        } catch {
+          // 非 JSON 请求按无 cursor 统计。
+        }
+        if (!cursor) counts.historyWindow += 1;
+      }
       if (name === 'network_task_list') counts.task += 1;
       await route.continue();
     });
@@ -693,7 +715,10 @@ test.describe.serial('群主消息管理前端', () => {
       await page.locator(`[data-pinned-message-id="${taskRoot}"]`).click();
       await expect(page.locator('#messages')).toHaveAttribute('data-search-anchored', 'true');
       await expect(messageNode(page, taskRoot)).toBeVisible();
+      // 等 anchor 请求与首屏补拉全部落定后再清零计数，避免迟到请求串到下一次断言。
+      await page.waitForTimeout(400);
       counts.history = 0;
+      counts.historyWindow = 0;
       counts.task = 0;
 
       await callTool(base, room.tokenOwner, 'network_message_recall', {
@@ -703,7 +728,8 @@ test.describe.serial('群主消息管理前端', () => {
       await expect(page.locator('#messages')).toHaveAttribute('data-search-anchored', 'false');
       await expect(page.locator('#messages')).not.toContainText('锚点 Task 待撤回消息');
       await expect.poll(() => counts.task, { timeout: 10_000 }).toBeGreaterThan(0);
-      expect(counts.history).toBe(0);
+      // 复位到顶部后可能触发带 cursor 的自动补页；不得重新读取无 cursor 窗口。
+      expect(counts.historyWindow).toBe(0);
 
       // Dock 不再保留旧 preview，而是服务端返回的墓碑。
       await expect(page.locator('#task-dock-toggle')).toBeVisible();
@@ -712,11 +738,14 @@ test.describe.serial('群主消息管理前端', () => {
 
       // 普通 anchor 消息撤回只丢弃窗口，不触发 Task 请求。
       counts.history = 0;
+      counts.historyWindow = 0;
       counts.task = 0;
       await page.locator(`[data-pinned-message-id="${ordinary}"]`).click();
       await expect(page.locator('#messages')).toHaveAttribute('data-search-anchored', 'true');
       await expect(messageNode(page, ordinary)).toBeVisible();
+      await page.waitForTimeout(400);
       counts.history = 0;
+      counts.historyWindow = 0;
       counts.task = 0;
 
       await callTool(base, room.tokenOwner, 'network_message_recall', {
@@ -726,7 +755,7 @@ test.describe.serial('群主消息管理前端', () => {
       await expect(page.locator('#messages')).toHaveAttribute('data-search-anchored', 'false');
       await expect(page.locator('#messages')).not.toContainText('锚点普通待撤回消息');
       await page.waitForTimeout(800);
-      expect(counts.history).toBe(0);
+      expect(counts.historyWindow).toBe(0);
       expect(counts.task).toBe(0);
     } finally {
       await context.close();
@@ -742,10 +771,22 @@ test.describe.serial('群主消息管理前端', () => {
     const context = await browser.newContext();
     const page = await context.newPage();
     await login(page, base, room.tokenMember);
-    const counts = { history: 0, task: 0 };
+    const counts = { history: 0, historyWindow: 0, task: 0 };
     await page.route('**/mcp', async (route) => {
       const name = route.request().headers()['mcp-name'];
-      if (name === 'network_history_list') counts.history += 1;
+      if (name === 'network_history_list') {
+        counts.history += 1;
+        let cursor: unknown = null;
+        try {
+          cursor =
+            (JSON.parse(route.request().postData() ?? '{}') as {
+              params?: { arguments?: { cursor?: unknown } };
+            }).params?.arguments?.cursor ?? null;
+        } catch {
+          // 非 JSON 请求按无 cursor 统计。
+        }
+        if (!cursor) counts.historyWindow += 1;
+      }
       if (name === 'network_task_list') counts.task += 1;
       await route.continue();
     });

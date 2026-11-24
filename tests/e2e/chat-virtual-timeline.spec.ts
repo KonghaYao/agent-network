@@ -176,6 +176,7 @@ async function openRoom(page: Page, roomId: string): Promise<void> {
   await expect(page.locator('body[data-spa-route="room"]')).toBeVisible();
   await expect(page.locator('#messages')).toHaveAttribute('data-timeline-mode', 'virtual');
   await expect.poll(() => loadedCount(page), { timeout: 20_000 }).toBe(50);
+  await expect(page.locator('#messages')).toHaveAttribute('data-loaded-ready', 'true');
 }
 
 async function loadedCount(page: Page): Promise<number> {
@@ -217,8 +218,14 @@ async function firstVisibleAnchor(page: Page): Promise<AnchorSample | null> {
     const list = document.getElementById('messages');
     if (!list) return null;
     const top = list.getBoundingClientRect().top;
+    const bottom = list.getBoundingClientRect().bottom;
+    // 选第一条完整落在视口内的消息；半截在顶部的条目会随 overscan 变化，
+    // 不适合作为 prepend 前后稳定的锚点。
     const node = Array.from(list.querySelectorAll<HTMLElement>('.msg[data-message-id]')).find(
-      (element) => element.getBoundingClientRect().bottom > top + 1,
+      (element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.top >= top - 1 && rect.top < bottom - 1;
+      },
     );
     if (!node) return null;
     return { id: node.dataset.messageId ?? '', top: node.getBoundingClientRect().top };
@@ -316,13 +323,24 @@ test.describe('virtual chat timeline', () => {
         longFrames: frames.longFrames,
       })}`,
     );
-    expect(frames.p95).toBeLessThan(100);
+    expect(frames.p95).toBeLessThan(20);
+    expect(frames.longFrames).toBe(0);
   });
 
   test('keeps the prepend anchor within 2px', async ({ page }) => {
     await openRoom(page, roomId);
     await scrollToTop(page);
-    await page.waitForTimeout(250);
+    // startReached 可能在滚到顶部时自动补一页；先等数据窗口稳定，
+    // 再用手动点击验证“一次 prepend”，避免自动补页与点击竞争。
+    let loadedBefore = await loadedCount(page);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await page.waitForTimeout(200);
+      const current = await loadedCount(page);
+      if (current === loadedBefore) break;
+      loadedBefore = current;
+    }
+    await page.waitForTimeout(300);
+    loadedBefore = await loadedCount(page);
     const before = await firstVisibleAnchor(page);
     expect(before).not.toBeNull();
     if (!before) return;
@@ -360,7 +378,7 @@ test.describe('virtual chat timeline', () => {
     await page.evaluate(() => {
       (document.getElementById('older') as HTMLButtonElement | null)?.click();
     });
-    await expect.poll(() => loadedCount(page), { timeout: 20_000 }).toBe(100);
+    await expect.poll(() => loadedCount(page), { timeout: 20_000 }).toBe(loadedBefore + 50);
     await page.waitForTimeout(2_600);
 
     const report = await page.evaluate(() => {
@@ -382,9 +400,18 @@ test.describe('virtual chat timeline', () => {
     const after = await firstVisibleAnchor(page);
     expect(after?.id).toBe(before.id);
     expect(Math.abs((after?.top ?? 0) - before.top)).toBeLessThanOrEqual(2);
-    console.log(`VIRTUAL_PREPEND ${JSON.stringify(report)}`);
+    console.log(
+      `VIRTUAL_PREPEND ${JSON.stringify({
+        ...report,
+        before: before.id,
+        after: after?.id,
+        loaded: loadedBefore + 50,
+        top: after?.top,
+      })}`,
+    );
     expect(report.correctedDrift).toBeLessThanOrEqual(2);
     expect(report.missed).toBe(false);
+    expect(report.maxAbsDrift).toBeLessThanOrEqual(8);
   });
 
   test('jumps to a quoted message inside the virtual window', async ({ page }) => {
@@ -409,14 +436,22 @@ test.describe('virtual chat timeline', () => {
 
     const jumped = page.locator(`#messages .msg[data-message-id="${target.id}"]`);
     await expect(jumped).toBeVisible({ timeout: 10_000 });
-    const withinViewport = await jumped.evaluate((node) => {
-      const list = document.getElementById('messages');
-      if (!list) return false;
-      const rect = node.getBoundingClientRect();
-      const listRect = list.getBoundingClientRect();
-      return rect.bottom > listRect.top && rect.top < listRect.bottom;
-    });
-    expect(withinViewport).toBe(true);
+    // 点击引用后 Virtuoso 的滚动/测量异步完成；等待目标真正进入视口，
+    // 而不是在滚动尚未结束时单次采样。500ms 上限不放宽“在视口内”的要求。
+    await page.waitForFunction(
+      (messageId) => {
+        const list = document.getElementById('messages');
+        const node = document.querySelector<HTMLElement>(
+          `#messages .msg[data-message-id="${messageId}"]`,
+        );
+        if (!list || !node) return false;
+        const rect = node.getBoundingClientRect();
+        const listRect = list.getBoundingClientRect();
+        return rect.bottom > listRect.top && rect.top < listRect.bottom;
+      },
+      target.id,
+      { timeout: 500, polling: 'raf' },
+    );
   });
 
   test('does not advance the read watermark while scrolled away', async ({ page }) => {

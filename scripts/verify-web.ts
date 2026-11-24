@@ -247,6 +247,92 @@ async function messageCount(page: Page): Promise<number> {
   });
 }
 
+/**
+ * 逐屏采样已挂载消息的展开入口。
+ * 虚拟列表只挂载视口附近条目；截断预览在自动展开完成前会隐藏按钮，
+ * 因此把“自动展开中”也视为可展开状态，只断言预览态不丢入口。
+ */
+async function sampleMessageExpandButtons(page: Page): Promise<{
+  sampled: number;
+  truncated: number;
+  missing: number;
+}> {
+  const seen = new Map<string, { truncated: boolean; expandable: boolean }>();
+  const collect = async (): Promise<void> => {
+    const rows = (await page.evaluate(`(() => {
+      return Array.from(document.querySelectorAll('#messages .msg[data-message-id]'))
+        .map(function (node) {
+          return {
+            id: node.getAttribute('data-message-id') || '',
+            truncated: Boolean(node.querySelector('.msg-plain-preview')),
+            expandable: Boolean(node.querySelector('.expand')) ||
+              node.getAttribute('data-auto-pending') === 'true'
+          };
+        });
+    })()`)) as { id: string; truncated: boolean; expandable: boolean }[];
+    for (const row of rows) {
+      if (!row.id) continue;
+      const previous = seen.get(row.id);
+      seen.set(row.id, {
+        truncated: row.truncated || Boolean(previous?.truncated),
+        expandable: row.expandable || Boolean(previous?.expandable),
+      });
+    }
+  };
+  await collect();
+  const startTop = (await page.evaluate(
+    `document.getElementById('messages')?.scrollTop ?? 0`,
+  )) as number;
+  let steps = 0;
+  for (let step = 0; step < 80; step += 1) {
+    const moved = (await page.evaluate(`(() => {
+      const node = document.getElementById('messages');
+      if (!node) return false;
+      const before = node.scrollTop;
+      node.dispatchEvent(new WheelEvent('wheel', { deltaY: 600, bubbles: true }));
+      node.scrollTop = Math.min(node.scrollHeight - node.clientHeight, before + 1000);
+      return node.scrollTop > before + 1;
+    })()`)) as boolean;
+    await sleep(120);
+    await collect();
+    steps += 1;
+    if (!moved) break;
+  }
+  const rows = Array.from(seen.values());
+  const endTop = (await page.evaluate(
+    `document.getElementById('messages')?.scrollTop ?? 0`,
+  )) as number;
+  console.log(
+    `LONG_HISTORY_EXPAND_SAMPLE ${JSON.stringify({ sampled: rows.length, startTop, endTop, steps })}`,
+  );
+  return {
+    sampled: rows.length,
+    truncated: rows.filter((row) => row.truncated).length,
+    missing: rows.filter((row) => row.truncated && !row.expandable).length,
+  };
+}
+
+/** 当前挂载的截断预览是否都有展开入口（自动展开中除外）。 */
+async function mountedTruncatedMissingExpand(page: Page): Promise<{
+  truncated: number;
+  missing: number;
+}> {
+  const rows = (await page.evaluate(`(() => {
+    return Array.from(document.querySelectorAll('#messages .msg[data-message-id]'))
+      .map(function (node) {
+        return {
+          truncated: Boolean(node.querySelector('.msg-plain-preview')),
+          expandable: Boolean(node.querySelector('.expand')) ||
+            node.getAttribute('data-auto-pending') === 'true'
+        };
+      });
+  })()`)) as { truncated: boolean; expandable: boolean }[];
+  return {
+    truncated: rows.filter((row) => row.truncated).length,
+    missing: rows.filter((row) => row.truncated && !row.expandable).length,
+  };
+}
+
 async function sendRoomMessage(token: string, roomId: string, body: string): Promise<void> {
   await rawTool(token, 'network_message_send', {
     request_id: requestId('msg'),
@@ -2699,11 +2785,11 @@ async function runLongHistoryAcceptance(
     check('首屏读取数量明显小于消息总数', initialReads < 50, initialReads);
     const visibleMessages = await page.locator('#messages .msg[data-message-id]').count();
     check('虚拟窗口只挂载部分已加载消息', visibleMessages < 50, visibleMessages);
-    const offscreenButtons = await page.locator('#messages .msg .expand').count();
+    const mountedTruncated = await mountedTruncatedMissingExpand(page);
     check(
-      '虚拟窗口内的截断消息保留展开按钮',
-      offscreenButtons >= 1,
-      offscreenButtons,
+      '虚拟窗口内截断预览保留展开入口（自动展开中除外）',
+      mountedTruncated.truncated >= 1 && mountedTruncated.missing === 0,
+      { visibleMessages, ...mountedTruncated },
     );
 
     // 向上滚动若干屏（不触及顶部）触发新消息进入视口与补读。
@@ -2801,6 +2887,17 @@ async function runLongHistoryAcceptance(
       `滚动到历史顶部后仍只读取视口附近消息（${readsBeforeTop}→${readsAfterTop}/56）`,
       readsAfterTop > readsBeforeTop && readsAfterTop < 56,
       { readsBeforeTop, readsAfterTop },
+    );
+
+    // 虚拟列表逐屏挂载：滚回底部采样已加载的截断消息，确认展开入口
+    // 不因卸载/重挂载丢失（用已加载数据窗口而非单次可见 DOM 断言）。
+    const sampledExpand = await sampleMessageExpandButtons(page);
+    check(
+      `已加载消息逐屏采样不丢展开入口（${sampledExpand.sampled}/56 条）`,
+      sampledExpand.sampled >= 40 &&
+        sampledExpand.truncated >= 1 &&
+        sampledExpand.missing === 0,
+      sampledExpand,
     );
   } finally {
     await context.close();
@@ -4427,8 +4524,8 @@ async function runStreamInvalidationAcceptance(
       '流失效范围补齐 60 条',
       20_000,
     );
-    const oldestId = await page.locator('#messages .msg[data-message-id]').first().getAttribute(
-      'data-message-id',
+    const oldestId = await page.evaluate(
+      `document.getElementById('messages')?.getAttribute('data-loaded-oldest-id') ?? null`,
     );
     const beforeOther = {
       history: await roomHistoryWithoutCursor(page, roomId),
@@ -4467,6 +4564,9 @@ async function runStreamInvalidationAcceptance(
       history: await roomHistoryWithoutCursor(page, roomId),
       roomGet: await roomCallCount(page, 'network_room_get', roomId),
       count: await messageCount(page),
+      oldestId: (await page.evaluate(
+        `document.getElementById('messages')?.getAttribute('data-loaded-oldest-id') ?? null`,
+      )) as string | null,
       ids: (await page.evaluate(`Array.from(document.querySelectorAll('#messages .msg[data-message-id]')).map(function (item) { return item.dataset.messageId; })`)) as string[],
     };
     checkEqual(
@@ -4480,6 +4580,11 @@ async function runStreamInvalidationAcceptance(
       1,
     );
     checkEqual('刷新后已加载 older 不丢', afterCurrent.count, 61);
+    check(
+      '刷新后最早一条仍在（已加载窗口）',
+      oldestId !== null && afterCurrent.oldestId === oldestId,
+      { oldestId, afterOldestId: afterCurrent.oldestId, count: afterCurrent.count },
+    );
     check(
       '刷新后可见窗口内消息无重复',
       new Set(afterCurrent.ids).size === afterCurrent.ids.length,
