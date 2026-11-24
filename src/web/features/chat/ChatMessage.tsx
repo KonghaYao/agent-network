@@ -1,7 +1,18 @@
 import { Tooltip } from '../../app/lenso-tooltip';
 import { Button, Menu } from '../../app/lenso-controls';
 import { ContextMenu, ContextMenuItem } from '../../app/lenso-context-menu';
-import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  lazy,
+  memo,
+  Suspense,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 
 import { LIMITS } from '../../../contracts/limits';
 import {
@@ -25,6 +36,7 @@ import { openAgentMemory, type AgentMemoryTarget } from '../memory/memory-store'
 import { ActorAvatar } from '../avatar/ActorAvatar';
 import { HumanBody } from './MessageBody';
 import { MarkdownIsland } from './MarkdownIsland';
+import { BodyPendingContext } from './body-pending';
 import { TaskSummaryBar } from '../tasks/TaskSummaryBar';
 import { scrollToMessage } from './scroll-to-message';
 
@@ -35,6 +47,19 @@ import { scrollToMessage } from './scroll-to-message';
 const MessageFileCard = lazy(() =>
   import('./MessageFileCard').then((module) => ({ default: module.MessageFileCard })),
 );
+
+/**
+ * lazy chunk 未就绪时卡片本身还不在 DOM 里，高度也尚未出现。入口隐藏阶段
+ * 把这次等待计入正文 pending，避免 reveal 后卡片整块出现把底部顶开。
+ */
+function MessageFileCardFallback() {
+  const pendingRegistry = useContext(BodyPendingContext);
+  useLayoutEffect(() => {
+    const release = pendingRegistry?.begin();
+    return release;
+  }, [pendingRegistry]);
+  return null;
+}
 
 interface ChatMessageProps {
   item: HistoryMessage;
@@ -700,7 +725,7 @@ export const ChatMessage = memo(function ChatMessage({
             />
             {cards.length > 0 ? (
               <div className="msg-files">
-                <Suspense fallback={null}>
+                <Suspense fallback={<MessageFileCardFallback />}>
                   {cards.map((card) => (
                     <MessageFileCard
                       key={card.fileId}

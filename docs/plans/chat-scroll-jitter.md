@@ -563,22 +563,32 @@ Playwright：
   贴一次真实底部。
 - **正文 pending 门控**：`body-pending.ts` 提供时间线级计数器，只统计当前挂载窗口
   中正文未就绪的消息。`MarkdownIsland` 在挂载的 layout effect 里登记，Markdown 岛
-  同步挂载完成（或失败回退）后释放；`watchInitialReveal` 要求 `pending===0` 且高度
-  稳定才 reveal。有 pending 时隐藏上限放宽到
+  同步挂载完成（或失败回退）后释放；文件卡的 lazy chunk fallback 与
+  `MessageFileCard` 元数据（决定缩略图、类型/大小/时间行与操作按钮的一次性高度）
+  同样登记，元数据 ready/error 后释放。`watchInitialReveal` 要求 `pending===0` 且
+  高度稳定才 reveal。有 pending 时隐藏上限放宽到
   `webTimelineRevealPendingMaxWaitMs = 2 s`，避免资源挂住时长期白屏；超时后仍按
   原有同步贴底显示。计数器随 Virtuoso 卸载释放，不累计整段历史。
 - **提交后贴底**：父级 `useLayoutEffect`（依赖 `items` / `pinned` / `ready`）在
-  `pinned`、非 anchor/恢复窗口且 `gap>2` 时于绘制前写 `scrollTop = scrollHeight`，
-  覆盖 Virtuoso 在本组件提交后按旧锚点写回、`totalListHeightChanged` 晚于绘制的
-  路径。入口 reveal 后的 300 ms 内不执行：这段窗口由 `watchInitialReveal` 的同步
-  贴底与 ResizeObserver 负责，额外写入会触发新的 range 测量，把尚未测高的图片卡
-  提前画出来。没有引入全容器 MutationObserver。
+  `pinned`、非 anchor/恢复窗口且 `gap>2` 时于绘制前写 `scrollTop = scrollHeight`。
+  **不再有“reveal 后 300 ms 内跳过”的时间窗**：隐藏阶段与 reveal 后走同一条路径，
+  是否显示只由 `watchInitialReveal` 的 settle/pending 门控决定。该 effect 覆盖
+  Virtuoso 在本组件提交后按旧锚点写回、`totalListHeightChanged` 晚于绘制的路径。
+- **残差收口**：写完 `scrollTop = scrollHeight` 后，下一帧再读真实 gap；仍 >2 时
+  调用 `virtuosoRef.scrollToIndex({ index: last, align: 'end' })` 并重新写真实
+  `scrollHeight`，最多 2 次。它专门吸收 Virtuoso 尺寸缓存比真实内容短 18 px
+  （footer padding）导致的底部残留；预算耗尽后停止，不与测量循环无限互抢。
 - **同步校正**：`handleTotalListHeightChanged` 在 `pinned`、非 anchor/恢复窗口且
   `gap>2` 时同步贴底；item list 的 `ResizeObserver` 同样在绘制前校正（rAF 仍作为
-  合并兜底），图片 `load` 捕获后下一帧再按真实高度贴一次。校正优先调用 Virtuoso 的
-  `autoscrollToBottom()` 更新其内部滚动状态，再兜底写 `scrollTop = scrollHeight`。
-  Virtuoso 可能在同帧末尾按旧锚点把 `scrollTop` 写回，因此一次高度变化后最多重试
-  8 帧，直到 `gap≤2`；预算有限，不会退化成旧的无限 MutationObserver 互抢。
+  合并兜底），图片 `load` 捕获后下一帧再按真实高度贴一次。Markdown 岛是命令式
+  插进 DOM 的，不经过本组件提交，因此在 item list 上另挂 `MutationObserver`：
+  微任务里只写 `scrollTop`，不触发 `scrollToIndex`；reveal 后
+  `webTimelineMutationSettleMs = 120 ms` 内不介入，避开 Virtuoso 首轮测量重算
+  range 造成的已渲染高度收缩。reveal 后的程序化 scroll 事件也会在绘制前贴回底部。
+- **重试预算的边界**：ResizeObserver 的 rAF 重试最多 8 帧，只是合并同一轮高度
+  变化的兜底，**不保证**“直到 gap≤2”；真正兜底残差的是上面的 2 次
+  `scrollToIndex`。2 s 上限后的晚到内容仍由提交后贴底 / scroll / MO / 2 次
+  `scrollToIndex` 在绘制前吸收，不能再出现 4,568 px 的单帧 gap。
 - **方向化贴底**：只有近期“向上”手势（滚轮 `deltaY<0`、PageUp/ArrowUp/Home、
   触摸/指针按原语义）才在 `atBottom=false` 时取消 pinned；向下滚轮会清除向上意图。
   向下手势一旦落到 `gap≤2` 就立即 `setPin(true)`，不等 Virtuoso 的 `atBottom` 回调；
@@ -632,6 +642,40 @@ Playwright：
 0；确定性的差异是 **reveal 时正文尚未挂载**（`firstVisibleMarkdownChars=0`），
 新用例把它设为硬断言，`d9aa96e` 上 100 ms / 300 ms 各 3/3 失败，修复后各 3/3 通过。
 
+**240 条富内容 + 文件卡元数据（独立夹具，`416b414` → 本次修复）**
+
+240 条混排长 Markdown、图片文件卡、`.md` 文件卡与 Task，Markdown 资源延迟 100 ms。
+文件卡元数据决定缩略图与“类型 · 大小 · 时间”行；旧实现只等 Markdown，卡片会在
+reveal 后从 244 px 长到 420 px。
+
+| 场景 | `416b414` | 本次修复 |
+| --- | --- | --- |
+| 绘制后 `maxGap`（3 次） | **149 px**（2/3） | **0 px**（3/3） |
+| `maxBackwardRaf` | **189 px** | **0 px** |
+| 最终 gap | 0 | **0** |
+| 首帧仍有 `data-loading="1"` 文件卡（e2e，元数据延迟 400 ms） | **2–3 张**（3/3） | **0 张**（3/3） |
+
+e2e 用 400 ms 文件卡元数据延迟固定“元数据晚于旧实现 reveal（约 250–320 ms）”的
+时序。旧版 `maxVisibleBackwardPainted` 在本机 e2e 环境偶尔仍为 0（同帧 RO 补上），
+因此用例同时断言首帧不能有正在读取的文件卡，旧版 3/3 失败、新版 3/3 通过。
+
+**2 s 兜底与 3 s / 5 s 挂起（32 条纯 Markdown）**
+
+| 场景 | `416b414` | 本次修复 |
+| --- | --- | --- |
+| 3 s 延迟首帧可见 | 2.01–2.02 s | **2.02 s** |
+| 3 s 延迟内容到达后 `maxGap` | **4,551 px** | **0 px** |
+| 3 s 延迟可见回退 `maxVisibleBackwardPainted` | **4,551 px** | **0 px** |
+| 3 s 延迟最终 gap | 旧版 6 s 观测 **18 px**；内容到达后 1.2 s 采样时仍不稳定 | **0** |
+| 5 s 延迟 `maxGap` / `maxVisibleBackwardPainted` | **4,551 px** / **4,551 px** | **0 px** / **0 px** |
+| 5 s 延迟最终 gap | **4,551 px**（内容到达后 1.2 s 采样） | **0** |
+
+240 条富内容、Markdown 延迟 2,000 ms 的独立采样：旧版 `maxGapPainted=40 px`、
+`maxBackwardPainted=423 px`；本次修复 `maxGapPainted=0`、`maxBackwardPainted=0`、
+`maxBackwardRaf=36 px`（gap=0 的底部高度补偿）、最终 gap 0。3 s/5 s 用例里
+`maxBackwardPainted` 仍会记录到 296–3,711 px 的 scrollTop 下降，但这些帧的 gap=0
+（内容整体收缩、底部锚点不变），`maxVisibleBackwardPainted` 为 0；两个指标不能混读。
+
 ### 12.4 新增 e2e
 
 `tests/e2e/chat-virtual-timeline.spec.ts` 的 `virtual timeline bottom stability`：
@@ -652,6 +696,19 @@ Playwright：
   `maxVisibleBackwardPainted≤20`、绘制后 `maxGap≤20`、最终 gap≤2。`d9aa96e`
   100/300 ms 各 3/3 失败（首帧正文为 0，部分轮次 gap 4,551 px），HEAD 各 3/3 通过
   （0 px）。
+- `reveals 240 rich messages after slow Markdown without a visible jump`：240 条富内容
+  房间，Markdown 延迟 100 ms、`network_room_file_get` 延迟 400 ms；断言首帧
+  `firstVisibleFileLoading=0`（文件卡元数据/缩略图已就位）、
+  `maxVisibleBackwardPainted≤20`、`maxGap≤20`、最终 gap≤2。`416b414` 上首帧仍有
+  2–3 张读取中的文件卡，3/3 失败；修复后 3/3 通过（全部 0 px）。
+- `absorbs late Markdown after the 3000ms|5000ms stall`：同一 32 条房间，Markdown
+  延迟 3 s / 5 s；入口在 2 s 上限显示，继续采样到内容到达后 1.2 s。断言首帧可见
+  ≤2.5 s、内容确实挂载（`markdownChars>0`）、绘制后 `maxGap≤20`、最终 gap≤2。
+  `416b414` 上 `maxGap=4,551 px`，3/3 失败；修复后为 0，3/3 通过。
+- `follows a long append without bouncing back` 由“`maxGap>50` 证明发生了高度变化”
+  改为“`heightGrowth>50` 证明追加真实长高，同时 `maxGap≤2`”。旧断言依赖
+  “绘制前贴底不完整”，修复后 gap 被完全吸收，继续要求 >50 会与目标相反；回退
+  `maxBackward≤2` 与 `range>0` 保留。
 
 ### 12.5 回滚与边界
 
@@ -661,10 +718,18 @@ Playwright：
 - 本机 headless Chromium 无法模拟 Safari 的橡皮筋回弹；修复只保证程序化校正在绘制前
   完成，不与橡皮筋争抢。
 - 剩余边界：
-  - pending 只统计**当前挂载窗口**。reveal 之后才挂载的窗口外消息、缩略图解码等
-    仍依赖 item list ResizeObserver、`totalListHeightChanged` 与 retry 预算；本机
-    10 次入口采样为 0 px，但低端设备/慢图片仍需真机复核。
+  - pending 只统计**当前挂载窗口**的 Markdown 岛、文件卡 lazy fallback 与文件卡
+    元数据；reveal 之后才挂载的窗口外消息、缩略图字节解码等仍依赖 item list
+    ResizeObserver、`totalListHeightChanged`、MutationObserver 与 2 次
+    `scrollToIndex` 预算。本机入口/2 s/3 s/5 s 采样为 0 px，但低端设备/慢图片
+    仍需真机复核。
   - 单条超高消息首次测量仍可能有一次向下的高度修正（估算切真实值）；提交后
-    layout effect 在 reveal 后 300 ms 内不参与，避免与 Virtuoso 首轮测量争抢。
-  - 正文 pending 的上限是 2 s：资源挂住时最多多等 2 s 再显示，之后仍可能出现
-    一次高度修正；没有用长时间空白遮罩替代修复。
+    layout effect 会在绘制前贴底，2 次 `scrollToIndex` 只吸收底部残差，不改变
+    消息自身的真实高度。
+  - 正文 pending 的上限是 2 s：资源挂住时最多多等 2 s 再显示。显示后晚到的
+    Markdown/文件卡由提交后贴底、scroll 事件、MutationObserver（reveal 后
+    120 ms 起）与最多 2 次 `scrollToIndex` 吸收；实测 3 s/5 s 挂起的绘制后
+    `maxGap=0`、最终 gap 0，不再出现旧版的 4,568 px 单帧与 18 px 残留。
+  - `maxBackwardPainted` 与 `maxVisibleBackwardPainted` 必须分开读：前者包含
+    “高度整体收缩、scrollTop 随之下移但 gap 仍为 0”的底部补偿（3 s/5 s 实测
+    296–3,711 px），后者只在 `gap>2` 时统计，才是用户可见的回退。

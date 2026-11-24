@@ -237,6 +237,8 @@ interface BottomProbeReport {
   minTop: number;
   maxTop: number;
   range: number;
+  /** 采样期间 scrollHeight 的最大增长；用于确认长追加真的发生了高度变化。 */
+  heightGrowth: number;
   scrollEvents: number;
   maxGap: number;
   finalGap: number;
@@ -363,6 +365,12 @@ async function stopBottomProbe(page: Page): Promise<BottomProbeReport> {
       minTop: Math.min(...tops),
       maxTop: Math.max(...tops),
       range: Math.round((Math.max(...tops) - Math.min(...tops)) * 100) / 100,
+      heightGrowth:
+        Math.round(
+          (Math.max(...frames.map((frame) => frame.height)) -
+            Math.min(...frames.map((frame) => frame.height))) *
+            100,
+        ) / 100,
       scrollEvents: state.scrollEvents,
       maxGap: Math.round(Math.max(...gaps) * 100) / 100,
       finalGap: Number(
@@ -423,6 +431,17 @@ interface EntryProbeReport {
   firstVisibleTextLen: number;
   /** 第一帧可见时已挂载 Markdown 岛的总字符数。 */
   firstVisibleMarkdownChars: number;
+  /** 第一帧可见时仍在读取元数据的文件卡数量。 */
+  firstVisibleFileLoading: number;
+  /** 第一帧可见时的滚动位置与高度，用于定位 reveal 瞬间的回退。 */
+  firstVisibleTop: number;
+  firstVisibleHeight: number;
+  /** 最大可见回退的时刻与前后帧（top/height）。 */
+  maxBackwardAt: number;
+  maxBackwardFrom: number;
+  maxBackwardTo: number;
+  maxBackwardFromHeight: number;
+  maxBackwardToHeight: number;
 }
 
 /**
@@ -439,6 +458,9 @@ async function installEntryProbe(page: Page): Promise<void> {
       firstVisibleAt: -1,
       firstVisibleTextLen: -1,
       firstVisibleMarkdownChars: -1,
+      firstVisibleFileLoading: -1,
+      firstVisibleTop: -1,
+      firstVisibleHeight: -1,
       startedAt: -1,
     };
     (window as unknown as { __entryProbe: typeof state }).__entryProbe = state;
@@ -462,6 +484,11 @@ async function installEntryProbe(page: Page): Promise<void> {
             markdownChars += (element.textContent ?? '').trim().length;
           });
           state.firstVisibleMarkdownChars = markdownChars;
+          state.firstVisibleFileLoading = node.querySelectorAll(
+            '.msg-file[data-loading="1"]',
+          ).length;
+          state.firstVisibleTop = node.scrollTop;
+          state.firstVisibleHeight = node.scrollHeight;
         }
         state.frames.push({
           t,
@@ -510,6 +537,9 @@ async function stopEntryProbe(page: Page): Promise<EntryProbeReport> {
         firstVisibleAt: number;
         firstVisibleTextLen: number;
         firstVisibleMarkdownChars: number;
+        firstVisibleFileLoading: number;
+        firstVisibleTop: number;
+        firstVisibleHeight: number;
       };
     }).__entryProbe;
     state.stopped = true;
@@ -525,6 +555,32 @@ async function stopEntryProbe(page: Page): Promise<EntryProbeReport> {
       }
       return backward;
     };
+    const backwardDetail = (() => {
+      let peak = -1;
+      let peakFrame: EntryFrame | null = null;
+      let best = 0;
+      let at = 0;
+      let fromTop = 0;
+      let toTop = 0;
+      let fromHeight = 0;
+      let toHeight = 0;
+      for (const frame of visible) {
+        if (frame.top >= peak) {
+          peak = frame.top;
+          peakFrame = frame;
+        }
+        const backward = peak - frame.top;
+        if (peakFrame && backward > best) {
+          best = backward;
+          at = frame.t;
+          fromTop = peakFrame.top;
+          toTop = frame.top;
+          fromHeight = peakFrame.height;
+          toHeight = frame.height;
+        }
+      }
+      return { at, fromTop, toTop, fromHeight, toHeight };
+    })();
     const maxGap = (list: EntryFrame[]): number =>
       list.length ? Math.max(...list.map((frame) => frame.gap)) : 0;
     const visibleBackwardPainted = (() => {
@@ -562,6 +618,14 @@ async function stopEntryProbe(page: Page): Promise<EntryProbeReport> {
       finalAtBottom: node.getAttribute('data-virt-at-bottom'),
       firstVisibleTextLen: state.firstVisibleTextLen,
       firstVisibleMarkdownChars: state.firstVisibleMarkdownChars,
+      firstVisibleFileLoading: state.firstVisibleFileLoading,
+      firstVisibleTop: state.firstVisibleTop,
+      firstVisibleHeight: state.firstVisibleHeight,
+      maxBackwardAt: Math.round(backwardDetail.at * 100) / 100,
+      maxBackwardFrom: backwardDetail.fromTop,
+      maxBackwardTo: backwardDetail.toTop,
+      maxBackwardFromHeight: backwardDetail.fromHeight,
+      maxBackwardToHeight: backwardDetail.toHeight,
     };
   });
 }
@@ -1187,6 +1251,108 @@ test.describe('virtual timeline bottom stability', () => {
     });
   }
 
+  // 富内容入口：240 条混排长 Markdown、图片文件卡、`.md` 文件卡与 Task。
+  // 文件卡是 lazy chunk，元数据 `network_room_file_get` 决定缩略图与
+  // “类型 · 大小 · 时间”行；若在 reveal 后才返回，卡片会从 244px 长到
+  // 420px（独立夹具曾出现一帧 149px 可见 gap）。这里把元数据延迟 400ms，
+  // 固定“晚于旧实现 reveal”的时序；旧实现首帧仍会画出读取中的卡片。
+  test('reveals 240 rich messages after slow Markdown without a visible jump', async ({
+    page,
+  }) => {
+    await page.route('**/assets/chat-markdown.js*', async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      await route.continue();
+    });
+    await page.route('**/mcp', async (route) => {
+      if (route.request().headers()['mcp-name'] === 'network_room_file_get') {
+        // 400ms 保证元数据稳定晚于旧实现的 reveal（约 250–320ms），
+        // 又不至于超过 2s pending 上限。
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      }
+      await route.continue();
+    });
+    await installEntryProbe(page);
+    const origin = await baseUrl();
+    await page.goto(`${origin}/c/${roomId}`);
+    await expect(page.locator('body[data-spa-route="room"]')).toBeVisible();
+    await page.waitForFunction(
+      () => {
+        const probe = (window as unknown as { __entryProbe?: { startedAt: number } })
+          .__entryProbe;
+        return (
+          probe !== undefined && probe.startedAt > 0 && performance.now() - probe.startedAt >= 1_400
+        );
+      },
+      undefined,
+      { timeout: 15_000, polling: 'raf' },
+    );
+    const report = await stopEntryProbe(page);
+    console.log(`VIRTUAL_BOTTOM_RICH_SLOW_MARKDOWN ${JSON.stringify(report)}`);
+
+    expect(report.visibleFrames).toBeGreaterThan(10);
+    expect(report.firstVisibleMarkdownChars).toBeGreaterThan(0);
+    // 文件卡元数据/缩略图占位也必须计入入口 pending：首帧不能还有
+    // “正在读取…”的卡片在 reveal 后长高。
+    expect(report.firstVisibleFileLoading).toBe(0);
+    expect(report.maxVisibleBackwardPainted).toBeLessThanOrEqual(20);
+    expect(report.maxGap).toBeLessThanOrEqual(20);
+    expect(report.finalGap).toBeLessThanOrEqual(2);
+    expect(report.finalAtBottom).toBe('true');
+    expect(report.flipsAfterFirstTrue).toBe(0);
+  });
+
+  // 2s 兜底：慢 Markdown 挂起 3s/5s 时，入口在
+  // webTimelineRevealPendingMaxWaitMs 后必须显示；内容晚到不能把底部一次性
+  // 顶开（旧实现实测单帧 4,568px、最终残留 18px）。
+  for (const delay of [3_000, 5_000]) {
+    test(`absorbs late Markdown after the ${delay}ms stall`, async ({ page }) => {
+      await page.route('**/assets/chat-markdown.js*', async (route) => {
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        await route.continue();
+      });
+      await installEntryProbe(page);
+      const origin = await baseUrl();
+      await page.goto(`${origin}/c/${slowRoomId}`);
+      await expect(page.locator('body[data-spa-route="room"]')).toBeVisible();
+      await page.waitForFunction(
+        (wait) => {
+          const probe = (window as unknown as { __entryProbe?: { startedAt: number } })
+            .__entryProbe;
+          return (
+            probe !== undefined &&
+            probe.startedAt > 0 &&
+            performance.now() - probe.startedAt >= wait
+          );
+        },
+        delay + 1_200,
+        { timeout: 20_000, polling: 'raf' },
+      );
+      const report = await stopEntryProbe(page);
+      const markdownChars = await page.evaluate(() => {
+        let chars = 0;
+        document.querySelectorAll('#messages .msg-markdown').forEach((element) => {
+          chars += (element.textContent ?? '').trim().length;
+        });
+        return chars;
+      });
+      console.log(
+        `VIRTUAL_BOTTOM_LATE_MARKDOWN_${delay} ${JSON.stringify({
+          ...report,
+          markdownChars,
+        })}`,
+      );
+
+      // 2s 上限必须显示，不能白屏等到资源到达。
+      expect(report.firstVisibleAt).toBeGreaterThan(0);
+      expect(report.firstVisibleAt).toBeLessThanOrEqual(2_500);
+      expect(markdownChars).toBeGreaterThan(0);
+      // 内容晚到时的绘制后 gap：允许 20px 的测量/布局误差，不能出现单帧大跳。
+      expect(report.maxGap).toBeLessThanOrEqual(20);
+      expect(report.finalGap).toBeLessThanOrEqual(2);
+      expect(report.finalAtBottom).toBe('true');
+    });
+  }
+
   test('stays pinned after scrolling the loaded window to the bottom', async ({ page }) => {
     await openRoom(page, lightRoomId);
     await loadOlderUntil(page, LIGHT_TOTAL);
@@ -1308,7 +1474,10 @@ test.describe('virtual timeline bottom stability', () => {
     console.log(`VIRTUAL_BOTTOM_APPEND ${JSON.stringify(report)}`);
 
     expect(await bottomGap(page)).toBeLessThanOrEqual(2);
-    expect(report.maxGap).toBeGreaterThan(50);
+    // 长追加必须真的带来高度变化；修复后每一帧都在绘制前贴底，因此不再
+    // 用“看得见的 gap>50”作为跟随证据，改为要求 gap 始终 ≤2。
+    expect(report.heightGrowth).toBeGreaterThan(50);
+    expect(report.maxGap).toBeLessThanOrEqual(2);
     expect(report.range).toBeGreaterThan(0);
     // 只允许向下跟随；任何明显的向上回弹都是旧实现的测量争抢。
     expect(report.maxBackward).toBeLessThanOrEqual(2);

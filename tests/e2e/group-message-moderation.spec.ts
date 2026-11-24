@@ -574,10 +574,22 @@ test.describe.serial('群主消息管理前端', () => {
     }
     const { page, close } = await openRoom(browser, base, room.tokenMember, room.roomId);
     try {
-      // 等虚拟时间线完成首屏贴底后再离开底部。
-      await page.waitForTimeout(300);
+      // 等虚拟时间线完成入口 reveal 并真正贴底后再离开底部。固定 300ms 在
+      // 负载较高时可能早于 reveal，此时 scrollTop=0 会被入口 settle 拉回。
+      await expect
+        .poll(
+          () =>
+            page.evaluate(() => {
+              const node = document.getElementById('messages');
+              if (!node || getComputedStyle(node).visibility === 'hidden') return 9999;
+              return Math.round(node.scrollHeight - node.scrollTop - node.clientHeight);
+            }),
+          { timeout: 10_000 },
+        )
+        .toBeLessThanOrEqual(2);
       await page.locator('#messages').evaluate((element) => {
         element.scrollTop = 0;
+        element.dispatchEvent(new Event('scroll'));
       });
       const before = await page.locator('#messages').evaluate((element) => element.scrollTop);
 

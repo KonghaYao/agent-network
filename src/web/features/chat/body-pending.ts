@@ -3,10 +3,11 @@ import { createContext } from 'react';
 /**
  * 已挂载消息的正文就绪计数。
  *
- * 虚拟时间线在入口隐藏阶段用 `count()` 判断当前挂载窗口里是否还有异步正文
- * （目前是 `/assets/chat-markdown.js` 与 Markdown 岛的首次挂载）没有完成；
- * 只有计数归零且高度稳定才 reveal，避免先把空气泡画给用户、再让真实高度
- * 在绘制后把底部顶开。
+ * 虚拟时间线在入口隐藏阶段用 `count()` 判断当前挂载窗口里是否还有异步内容
+ * 没有完成：`/assets/chat-markdown.js` 与 Markdown 岛的首次挂载、
+ * `MessageFileCard` 的 lazy chunk 与文件元数据（决定缩略图和元数据行的
+ * 最终高度）。只有计数归零且高度稳定才 reveal，避免先把空气泡/半高文件卡
+ * 画给用户、再让真实高度在绘制后把底部顶开。
  *
  * 计数只覆盖当前挂载的窗口：消息随 Virtuoso 卸载时 release，不会累计整段
  * 历史。注册不触发 React 状态更新，只更新 ref 与 `data-body-pending`，因此

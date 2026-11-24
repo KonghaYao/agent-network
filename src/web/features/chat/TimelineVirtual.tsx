@@ -166,6 +166,7 @@ export function TimelineVirtual({
   const readyRef = useRef(false);
   const revealWatchRef = useRef(0);
   const revealedAtRef = useRef(0);
+  const revealedPerfRef = useRef(0);
   const [flashId, setFlashId] = useState<string | null>(null);
   const lastKeyRef = useRef<string | null>(null);
   const lastForceRef = useRef(forcePinToken);
@@ -190,6 +191,11 @@ export function TimelineVirtual({
   const markReadTimerRef = useRef<number | null>(null);
   const pendingReadThroughRef = useRef<string | null>(null);
   const bottomCorrectionRef = useRef<() => void>(() => {});
+  const lastItemIndexRef = useRef(0);
+  // Virtuoso 的尺寸缓存偶尔比真实内容矮（本机实测为 footer 的 18px）：写完
+  // scrollTop=scrollHeight 后它仍可能在同一帧末尾按旧锚点写回。用
+  // scrollToIndex(align:'end') 让内部定位重算后再贴真实底部；最多 2 次。
+  const bottomRetryRef = useRef({ attempts: 0, frame: 0 });
   // 只统计当前挂载窗口的正文就绪情况；入口 reveal 在 count()===0 前不显示。
   const [bodyPending] = useState(() =>
     createBodyPendingRegistry((count) => {
@@ -208,6 +214,7 @@ export function TimelineVirtual({
   }
   const firstItemIndexRef = useRef(indexState.firstItemIndex);
   firstItemIndexRef.current = indexState.firstItemIndex;
+  lastItemIndexRef.current = Math.max(0, indexState.items.length - 1);
 
   const messages = useMemo(
     () => items.filter((entry): entry is HistoryMessage => entry.kind !== 'presence'),
@@ -247,6 +254,7 @@ export function TimelineVirtual({
     if (readyRef.current) return;
     readyRef.current = true;
     revealedAtRef.current = Date.now();
+    revealedPerfRef.current = performance.now();
     initialSettledRef.current = true;
     setReady(true);
   }, []);
@@ -333,6 +341,76 @@ export function TimelineVirtual({
     );
   }, []);
 
+  const cancelBottomRetry = useCallback(() => {
+    const state = bottomRetryRef.current;
+    if (state.frame !== 0) {
+      cancelAnimationFrame(state.frame);
+      state.frame = 0;
+    }
+    state.attempts = 0;
+  }, []);
+
+  // 下一帧确认残差：真实底部仍差 >2px 时让 Virtuoso 重新对齐一次。最多 2 次，
+  // 每次仍先写真实 scrollHeight；预算耗尽后停止，避免与测量循环无限互抢。
+  const bottomRetryTick = useCallback(() => {
+    const state = bottomRetryRef.current;
+    state.frame = 0;
+    // 隐藏阶段由 watchInitialReveal 每帧 settle，不需要 scrollToIndex 介入；
+    // 提前调用会让 Virtuoso 在首轮测量中反复切换 range，反而把即将 reveal
+    // 的正文窗口卸载掉。
+    if (!readyRef.current) {
+      state.attempts = 0;
+      return;
+    }
+    if (!pinnedRef.current || anchoredRef.current || restoringRef.current) {
+      state.attempts = 0;
+      return;
+    }
+    const scroller = scrollerRef.current;
+    if (!scroller) {
+      state.attempts = 0;
+      return;
+    }
+    if (scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 2) {
+      state.attempts = 0;
+      return;
+    }
+    if (state.attempts >= 2) {
+      state.attempts = 0;
+      return;
+    }
+    state.attempts += 1;
+    virtuosoRef.current?.scrollToIndex({
+      index: lastItemIndexRef.current,
+      align: 'end',
+      behavior: 'auto',
+    });
+    scroller.scrollTop = scroller.scrollHeight;
+    state.frame = requestAnimationFrame(bottomRetryTick);
+  }, []);
+
+  const scheduleBottomRetry = useCallback(() => {
+    if (!readyRef.current) return;
+    const state = bottomRetryRef.current;
+    if (state.frame !== 0) return;
+    state.attempts = 0;
+    state.frame = requestAnimationFrame(bottomRetryTick);
+  }, [bottomRetryTick]);
+
+  useEffect(() => cancelBottomRetry, [cancelBottomRetry]);
+
+  // MutationObserver 的轻量贴底：只看 markdown/文件卡插入后的真实 gap，
+  // 不在同一微任务里触发 scrollToIndex（那会让 Virtuoso 在 reveal 瞬间
+  // 重算 range 并缩掉已渲染高度）。残差交给下一帧的 scroll/layout 校验。
+  const snapBottom = useCallback(() => {
+    if (anchoredRef.current || restoringRef.current) return;
+    if (!wantsBottom()) return;
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    if (scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 2) return;
+    scroller.scrollTop = scroller.scrollHeight;
+  }, [wantsBottom]);
+
   // 只用于“已经在贴底”的同步修正：pinned 且非 anchor/恢复窗口，且真实
   // 离底超过 2px。直接写 scrollTop 发生在同一帧内（totalListHeightChanged
   // 与 ResizeObserver 都在绘制前），避免先画出一帧“消息整体上移”。
@@ -343,9 +421,13 @@ export function TimelineVirtual({
     if (!wantsBottom()) return;
     const scroller = scrollerRef.current;
     if (!scroller) return;
-    if (scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 2) return;
+    if (scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 2) {
+      cancelBottomRetry();
+      return;
+    }
     scroller.scrollTop = scroller.scrollHeight;
-  }, [wantsBottom]);
+    scheduleBottomRetry();
+  }, [cancelBottomRetry, scheduleBottomRetry, wantsBottom]);
 
   // 进入房间时高度先按估算值布局，随后 Markdown/图片/文件卡才给出真实高度。
   // 不能“一次 atBottom 就显示”：那会把估算阶段的回退画给用户。这里在隐藏
@@ -465,6 +547,20 @@ export function TimelineVirtual({
     const onScroll = () => {
       const gap = node.scrollHeight - node.scrollTop - node.clientHeight;
       if (gap <= LIMITS.webScrollStickyPx) lastAtBottomAtRef.current = Date.now();
+      // 程序化滚动（Virtuoso 按旧锚点写回）也可能把贴底位置改小；scroll
+      // 事件在绘制前派发，此时同步贴回真实底部，避免这一帧被画出来。
+      if (
+        readyRef.current &&
+        pinnedRef.current &&
+        !anchoredRef.current &&
+        !restoringRef.current &&
+        // 到顶是明确的“离开底部”信号（下方会 unpin），不能被程序化
+        // scrollTop=0 触发的贴底抢回去；只吸收底部附近的程序化写回。
+        node.scrollTop > LIMITS.webScrollStickyPx &&
+        gap > 2
+      ) {
+        settleBottom();
+      }
       // 向下手势真正到达底部时立即 pinned，不等 Virtuoso 的 atBottom 回调。
       // 超高消息测量可能持续几百毫秒，回调晚到时不能用 500ms 输入窗口兜底。
       if (
@@ -531,6 +627,7 @@ export function TimelineVirtual({
     let frame = 0;
     let list: HTMLElement | null = null;
     let retries = 0;
+    let mutations: MutationObserver | null = null;
     const needsCorrection = () => {
       if (anchoredRef.current || restoringRef.current) return false;
       if (!wantsBottom()) return false;
@@ -548,6 +645,7 @@ export function TimelineVirtual({
       // 调度后到执行前用户可能已上翻，必须在帧内再次确认。
       if (!needsCorrection()) {
         retries = 0;
+        cancelBottomRetry();
         return;
       }
       const scroller = scrollerRef.current;
@@ -557,6 +655,7 @@ export function TimelineVirtual({
       // 之后它又按旧锚点写回。再兜底贴真实 scrollHeight。
       virtuosoRef.current?.autoscrollToBottom();
       scroller.scrollTop = scroller.scrollHeight;
+      scheduleBottomRetry();
       // Virtuoso 可能在同帧末尾按旧锚点把 scrollTop 写回去；高度变化后的
       // 几帧内继续贴底，直到它稳定。预算有限，避免无限互抢。
       if (retries < 8) {
@@ -580,8 +679,28 @@ export function TimelineVirtual({
       const next = node.querySelector<HTMLElement>('[data-testid="virtuoso-item-list"]');
       if (next === list) return;
       observer.disconnect();
+      mutations?.disconnect();
       list = next;
-      if (next) observer.observe(next);
+      if (next) {
+        observer.observe(next);
+        // Markdown 岛是命令式挂载进 DOM 的，不经过本组件的 React 提交；
+        // 只看 item list 的高度变化会漏掉“正文刚插入、尚未测量”的那一帧。
+        // MutationObserver 回调是微任务，仍在绘制前；只在真实离底时写
+        // scrollTop，已贴底时 no-op，不参与 Virtuoso 的测量循环。
+        mutations = new MutationObserver(() => {
+          // reveal 后的头几帧 Virtuoso 还在完成首轮测量；此时插入/卸载
+          // 节点由 settle、ResizeObserver 与 layout effect 处理，MO 再写
+          // scrollTop 会让它重算 range、缩掉已渲染高度（本机 232px 的
+          // scrollTop 回退）。MO 只负责 reveal 稳定后的异步晚到内容。
+          if (
+            readyRef.current &&
+            performance.now() - revealedPerfRef.current >= LIMITS.webTimelineMutationSettleMs
+          ) {
+            snapBottom();
+          }
+        });
+        mutations.observe(next, { childList: true, subtree: true });
+      }
     };
     observeContent();
     // Virtuoso 可能在 effect 之后才创建 item list；只补几帧，不做全量 DOM 观察。
@@ -598,10 +717,18 @@ export function TimelineVirtual({
     return () => {
       bottomCorrectionRef.current = () => {};
       observer.disconnect();
+      mutations?.disconnect();
       if (frame) cancelAnimationFrame(frame);
       if (retryFrame) cancelAnimationFrame(retryFrame);
     };
-  }, [items.length, scrollerNode, wantsBottom]);
+  }, [
+    cancelBottomRetry,
+    items.length,
+    scheduleBottomRetry,
+    scrollerNode,
+    snapBottom,
+    wantsBottom,
+  ]);
 
   // Virtuoso 的 totalListHeight 还包含 header/footer（例如 outbox 行），
   // item list 的 ResizeObserver 覆盖不到；两个信号合并到同一帧校正。
@@ -694,18 +821,20 @@ export function TimelineVirtual({
   // ResizeObserver 与 totalListHeightChanged 都是“事件驱动”的兜底，覆盖不了
   // 这种提交后的写回。只在 pinned 且非 anchor/恢复窗口时执行；gap 已 ≤2 时
   // no-op，同一帧多次提交也只有第一次真正写 scrollTop（幂等合并）。
+  // 入口隐藏阶段与 reveal 后走同一条路径：是否显示由 watchInitialReveal 的
+  // settle/pending 门控决定，这里不再按“reveal 后 N ms”跳过。
   // 绝不在用户上翻/搜索定位时抢滚动。
   useLayoutEffect(() => {
-    // 入口 reveal 后的前 300ms 由 watchInitialReveal 的同步贴底与
-    // ResizeObserver 负责；这段窗口里 Virtuoso 仍在完成首轮测量，额外写入
-    // 会触发新的 range 测量，把尚未测高的图片卡提前画出来。
-    if (Date.now() - revealedAtRef.current < LIMITS.webTimelineRevealMaxWaitMs) return;
     if (!pinnedRef.current || anchoredRef.current || restoringRef.current) return;
     const scroller = scrollerRef.current;
     if (!scroller) return;
-    if (scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 2) return;
+    if (scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 2) {
+      cancelBottomRetry();
+      return;
+    }
     scroller.scrollTop = scroller.scrollHeight;
-  }, [items, pinned, ready]);
+    scheduleBottomRetry();
+  }, [cancelBottomRetry, items, pinned, ready, scheduleBottomRetry]);
 
   const lastItem: HistoryItem | undefined = items[items.length - 1];
   const lastKey = lastItem ? historyItemKey(lastItem) : null;
