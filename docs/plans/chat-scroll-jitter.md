@@ -525,3 +525,69 @@ Playwright：
 - **prepend 漂移**：加载更早时锚点瞬时最大位移 8 px，校正后 0 px，最终锚点回到 ≤2 px；`missed=false`。
 - **回滚开关**：URL `?timeline=dom` 优先于 `LIMITS.webTimelineVirtual`；置 `false` 需重新构建，属于发版级回滚。DOM 路径保留 `#messages` 全量渲染与 `scrollHeight` 差值补偿，并有独立 e2e 覆盖。
 - **已知边界**：浏览器 `Ctrl+F`、跨消息选中复制、打印与无障碍树只覆盖当前挂载窗口；帧率数据来自本机，低端 Android 需真机复测。
+
+---
+
+## 12. 贴底抖动修复（2026-11-04）
+
+### 12.1 复现
+
+隔离实例（Bun + 临时 SQLite，Playwright Chromium，1280×720）中创建 direct Agent 会话，
+消息由 Agent 发出以走 Markdown 岛，混排长 Markdown 表格/代码块、图片文件卡、`.md`
+文件卡与消息式 Task；`network_message_read` 人为延迟 250 ms，模拟真实展开时序。
+测量每帧 `scrollTop` / `scrollHeight` / `gap`、`scroll` 事件与 DOM mutation。
+
+- **修复前**：进入会话并落到底部时，`scrollTop` 先冲到 `12497`，随后在 16 ms 内回跳到
+  `11691`（**806 px**），再继续向下测量；另一次 80 条夹具中记录到 `5517→5732`
+  （215 px）的同类回跳。回跳期间 `data-virt-at-bottom` 在 `true/false` 间切换。
+- **静止后**：两种实现都能在约 0.2–1 s 内稳定；稳定后 2–3 s 内 `scrollTop` range 为
+  **0 px**、`scroll` 事件 0、mutation 0。也就是说，用户看到的“抖”是**到底/异步长高
+  的收敛过程**，不是静止后的无限循环。
+- **旧实现的成因**：整棵 scroller 的 `MutationObserver{childList,subtree,characterData}`
+  把 Virtuoso 挂载/卸载条目、替换文本都当成“内容长高”，每次 mutation 都在 rAF 里
+  强制 `scrollTop = scrollHeight`；同时 `atBottomStateChange` 与 range 重算又触发新一轮
+  挂载。两者对 `scrollTop` 的写入互相抢，造成冲过头再回跳。
+
+### 12.2 改法
+
+`src/web/features/chat/TimelineVirtual.tsx`：
+
+- 删除整棵 scroller 的 `MutationObserver`。只保留
+  `[data-testid="virtuoso-item-list"]` 的 `ResizeObserver`，并接入 Virtuoso 的
+  `totalListHeightChanged`（覆盖 header/footer，例如 outbox 行）。两个信号合并到
+  同一帧，只执行一次校正。
+- 校正前检查 `pinned && !anchored && !restoring`，且真实
+  `scrollHeight - scrollTop - clientHeight > 2`；已经在底部时 no-op，不写
+  `scrollTop`、不制造额外 `scroll` 事件与 range 重算。
+- `handleAtBottom` 在已经 pinned 时不重复 `setPin(true)`；`scheduleMarkRead` 对同一个
+  待落已读水位不重复清/设定时器，已读延迟与 atBottom 语义不变。
+- 保留 `followOutput` 对新数据的跟随、anchor/search/restoring 抑制与 `?timeline=dom`
+  回滚路径。
+
+### 12.3 修复后数据
+
+同夹具、同内容 A/B：
+
+| 场景 | 修复前 | 修复后 |
+| --- | --- | --- |
+| 进入会话贴底最大回跳 | 806 px（另一次 215 px） | 90 px（高度测量的浏览器 clamp） |
+| 贴底收敛时间 | 约 0.18–0.33 s | 约 0.20 s |
+| 到底静止 2 s `scrollTop` range | 0 px | **0 px** |
+| 到底静止 2 s `scroll` 事件 | 0 | **0** |
+| 底部追加长 Markdown 后 | 最终 gap 0，无回弹 | 最终 gap 0，`maxBackward` **0 px** |
+
+新增 e2e（`tests/e2e/chat-virtual-timeline.spec.ts`）：
+
+- `keeps scrollTop stable for 2s after reaching the bottom`：加载 220 条富内容后到底，
+  等首轮挂载完成，2 s 内 `range ≤ 1 px`、`scroll` 事件 0、`maxBackward ≤ 1 px`。
+- `follows a long append without bouncing back`：底部追加长 Markdown + 图片卡，
+  最终 gap ≤ 2 px，`maxBackward ≤ 1 px`，结束时 `data-virt-at-bottom=true`。
+
+### 12.4 回滚与边界
+
+- `?timeline=dom` 不经过本文件，DOM 路径的 3 个关键场景（分页、搜索、群消息管控）
+  仍由既有 e2e 覆盖。
+- 本机 headless Chromium 无法模拟 Safari 的橡皮筋回弹；修复只保证程序化校正不再
+  在底部写入 `scrollTop`，因此也不会与橡皮筋争抢。
+- 剩余边界：极端内容（超高单条消息）首次测量仍会有一次向下的高度修正；这是
+  Virtuoso 从估算高度切到真实高度的固有行为，不是来回抖动。

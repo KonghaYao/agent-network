@@ -182,6 +182,8 @@ export function TimelineVirtual({
   const visibleEndRef = useRef(0);
   const lastUserInputRef = useRef(0);
   const markReadTimerRef = useRef<number | null>(null);
+  const pendingReadThroughRef = useRef<string | null>(null);
+  const bottomCorrectionRef = useRef<() => void>(() => {});
   anchoredRef.current = anchored;
   restoringRef.current = restoring;
 
@@ -274,9 +276,14 @@ export function TimelineVirtual({
       if (anchoredRef.current || restoringRef.current || !atBottomRef.current) return;
       const through = renderedWatermark(items.slice(0, Math.max(0, endIndex) + 1));
       if (!through) return;
+      // range 变化会随高度测量反复触发；同一个可见水位已在等待时不要
+      // 清掉重设定时器，避免底部高度变化时反复“落已读”。
+      if (through === pendingReadThroughRef.current && markReadTimerRef.current !== null) return;
+      pendingReadThroughRef.current = through;
       if (markReadTimerRef.current !== null) window.clearTimeout(markReadTimerRef.current);
       markReadTimerRef.current = window.setTimeout(() => {
         markReadTimerRef.current = null;
+        pendingReadThroughRef.current = null;
         if (anchoredRef.current || restoringRef.current || !atBottomRef.current) return;
         onMarkRead(through);
       }, LIMITS.webScrollMarkReadDelayMs);
@@ -303,13 +310,15 @@ export function TimelineVirtual({
           setPin(false);
           return;
         }
-        setPin(true);
+        // Virtuoso 的高度测量可能连续触发 atBottom=true；已经 pinned 时
+        // 不重复 setState，只保留首次到底/新水位时的已读调度。
+        if (!pinnedRef.current) setPin(true);
         scheduleMarkRead(visibleEndRef.current);
         return;
       }
       if (!pinnedRef.current || anchoredRef.current) return;
       // 只有近期真实用户输入才取消贴底；图片/Markdown/文件卡异步长高
-      // 造成的离底保持 pinned，由 ResizeObserver 反复贴回底部。
+      // 造成的离底保持 pinned，由 item list 的 ResizeObserver 校正。
       if (Date.now() - lastUserInputRef.current < 500) setPin(false);
     },
     [revealWhenSettled, scheduleMarkRead, setPin],
@@ -356,46 +365,73 @@ export function TimelineVirtual({
 
   // 内容异步长高（Markdown 岛、图片、文件卡）时保持贴底；虚拟化后
   // Virtuoso 只在追加数据时 followOutput，不会自动跟随单条 item 的高度变化。
+  //
+  // 只观察 item list 的高度，不做整棵 scroller 的 MutationObserver：后者会
+  // 对每次挂载、卸载、文本变化强制写 scrollTop，与 Virtuoso 的测量/range
+  // 重算互相触发，滚到底部时表现为反复抖动。校正还必须满足：
+  // - pinned 且不在 anchor/恢复窗口；
+  // - 真实滚动位置确实离底（>2px）。已经在底部时 no-op，避免制造多余的
+  //   scroll 事件与 range 重算；
+  // - 多次高度变化合并到同一帧，只校正一次。
   useEffect(() => {
     const node = scrollerNode;
     if (!node) return undefined;
     let frame = 0;
-    const keepPinned = () => {
-      if (!pinnedRef.current || anchoredRef.current || restoringRef.current) return;
-      if (frame) cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
-        // 调度后到执行前用户可能已上翻，必须在帧内再次确认。
-        if (!pinnedRef.current || anchoredRef.current || restoringRef.current) return;
-        const node = scrollerRef.current;
-        // Virtuoso 的尺寸缓存可能仍按估算高度计算底部；直接贴到真实
-        // scrollHeight，连续测量帧会继续把随后长高的内容纳入底部。
-        if (node) node.scrollTop = node.scrollHeight;
-        else {
-          const lastIndex = Math.max(0, items.length - 1);
-          virtuosoRef.current?.scrollToIndex({ index: lastIndex, align: 'end' });
-        }
-      });
+    let list: HTMLElement | null = null;
+    const needsCorrection = () => {
+      if (!pinnedRef.current || anchoredRef.current || restoringRef.current) return false;
+      const scroller = scrollerRef.current;
+      if (!scroller) return false;
+      return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight > 2;
     };
-    let resizeObserver: ResizeObserver | null = null;
+    const correct = () => {
+      frame = 0;
+      // 调度后到执行前用户可能已上翻，必须在帧内再次确认。
+      if (!needsCorrection()) return;
+      const scroller = scrollerRef.current;
+      if (!scroller) return;
+      // Virtuoso 的尺寸缓存可能仍按估算高度计算底部；直接贴到真实
+      // scrollHeight，下一帧若仍有高度变化会再次校正。
+      scroller.scrollTop = scroller.scrollHeight;
+    };
+    const schedule = () => {
+      if (frame || !needsCorrection()) return;
+      frame = requestAnimationFrame(correct);
+    };
+    bottomCorrectionRef.current = schedule;
+    const observer = new ResizeObserver(schedule);
     const observeContent = () => {
-      const list = node.querySelector('[data-testid="virtuoso-item-list"]');
-      if (!list) return;
-      resizeObserver?.disconnect();
-      resizeObserver = new ResizeObserver(keepPinned);
-      resizeObserver.observe(list);
+      const next = node.querySelector<HTMLElement>('[data-testid="virtuoso-item-list"]');
+      if (next === list) return;
+      observer.disconnect();
+      list = next;
+      if (next) observer.observe(next);
     };
     observeContent();
-    const mutations = new MutationObserver(() => {
+    // Virtuoso 可能在 effect 之后才创建 item list；只补几帧，不做全量 DOM 观察。
+    let retry = 0;
+    let retryFrame = 0;
+    const retryObserve = () => {
       observeContent();
-      keepPinned();
-    });
-    mutations.observe(node, { childList: true, subtree: true, characterData: true });
+      if (!list && retry < 10) {
+        retry += 1;
+        retryFrame = requestAnimationFrame(retryObserve);
+      }
+    };
+    if (!list) retryFrame = requestAnimationFrame(retryObserve);
     return () => {
-      resizeObserver?.disconnect();
-      mutations.disconnect();
+      bottomCorrectionRef.current = () => {};
+      observer.disconnect();
       if (frame) cancelAnimationFrame(frame);
+      if (retryFrame) cancelAnimationFrame(retryFrame);
     };
   }, [items.length, scrollerNode]);
+
+  // Virtuoso 的 totalListHeight 还包含 header/footer（例如 outbox 行），
+  // item list 的 ResizeObserver 覆盖不到；两个信号合并到同一帧校正。
+  const handleTotalListHeightChanged = useCallback(() => {
+    bottomCorrectionRef.current();
+  }, []);
 
   const handleRangeChanged = useCallback(
     (range: ListRange) => {
@@ -722,6 +758,7 @@ export function TimelineVirtual({
           atBottomThreshold={LIMITS.webScrollStickyPx}
           rangeChanged={handleRangeChanged}
           increaseViewportBy={{ top: 1_200, bottom: 1_200 }}
+          totalListHeightChanged={handleTotalListHeightChanged}
           scrollerRef={(node) => {
             if (node instanceof HTMLDivElement) {
               attachScroller(node);
