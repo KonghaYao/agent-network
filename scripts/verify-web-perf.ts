@@ -349,7 +349,9 @@ async function main(): Promise<void> {
     const switchStarted = Date.now();
     await page.locator('#room-filter-group').click();
     await page.locator('#room-list a[href="/c/' + data.roomId + '"]').click();
-    // 长缓存切回只恢复最新页；等待目标房间的虚拟窗口真正挂载，而不是旧房间残留 DOM。
+    // 长缓存切回恢复已加载窗口并定位到最新；这里记录阅读锚点漂移作为信息，
+    // 当前产品语义不保证跨会话恢复阅读位置。等待目标房间的虚拟窗口真正挂载，
+    // 而不是旧房间残留 DOM。
     await page.waitForFunction(
       (path) => {
         if (window.location.pathname !== path) return false;
@@ -363,9 +365,13 @@ async function main(): Promise<void> {
     const switchDuration = Date.now() - switchStarted;
     await page.waitForTimeout(500);
     const anchorAfter = await captureAnchor();
+    const bottomGapAfterSwitch = await page.locator('#messages').evaluate(
+      (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
+    );
     const cacheSwitch = { duration_ms: switchDuration,
       loaded_messages: await loadedMessageCount(page),
       retained_messages: await page.locator('#messages .msg').count(),
+      at_bottom: bottomGapAfterSwitch <= 2,
       before: anchorBefore, after: anchorAfter, anchor_preserved: Boolean(anchorBefore.message_id) &&
         anchorBefore.message_id === anchorAfter.message_id && Math.abs(Number(anchorBefore.offset) - Number(anchorAfter.offset)) <= 3 };
     // 缓存恢复位置在底部；向上滚动验证旧锚点/贴底逻辑不会把用户拉回去。
@@ -413,6 +419,7 @@ async function main(): Promise<void> {
       const failures: string[] = [];
       if (full.messages !== TARGET_MESSAGES) failures.push('历史未完整加载');
       if (cacheSwitch.loaded_messages <= 0) failures.push('长缓存切回后没有加载消息');
+      if (!cacheSwitch.at_bottom) failures.push('长缓存切回未定位到最新');
       if (!userScroll.respected) failures.push('缓存恢复后用户滚动被旧锚点覆盖');
       if (cacheSwitch.duration_ms > 5000) failures.push('长缓存切回超过5秒');
       if (allErrors.length) failures.push('浏览器出现脚本错误');
