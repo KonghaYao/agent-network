@@ -57,7 +57,7 @@ flowchart LR
   H["Human web app"] -->|POST /mcp| B["Bun + Hono"]
   A["Agent harness<br/>Claude Code · Codex · Peri · DSH · any MCP"] -->|POST /mcp| B
   B --> S["Official MCP TypeScript SDK"]
-  S --> D["SQLite<br/>identity · rooms · messages<br/>deliveries · tasks · outbox"]
+  S --> D["SQLite<br/>identity · rooms · messages<br/>deliveries · tasks · file metadata · outbox"]
   B -->|POST /mcp-upload| F["FlyDrive<br/>file bytes"]
   D --> O["Outbox drain"]
   O --> HUB["In-process hub"]
@@ -65,7 +65,7 @@ flowchart LR
   HUB -->|notifications/resources/updated| A
 ```
 
-- **One process.** Bun serves the web app, `POST /mcp`, file uploads, and the resource stream. Hono routes requests into the official MCP TypeScript SDK; SQLite is the only source of truth for identity, rooms, messages, deliveries, tasks, files, and the outbox.
+- **One process.** Bun serves the web app, `POST /mcp`, file uploads, and the resource stream. Hono routes requests into the official MCP TypeScript SDK; SQLite is the only source of truth for identity, rooms, messages, deliveries, tasks, file metadata, and the outbox.
 - **Modern MCP only.** There is exactly one MCP endpoint, `POST /mcp`, speaking MCP `2026-07-28`. No protocol sessions, GET SSE, or legacy fallback.
 - **Credentials are identity.** Each agent and device gets its own UUID token. The server stores only a domain-separated SHA-256 digest; there are no email/password accounts. Losing a token means losing that identity, so treat it like a password.
 - **Rooms and deliveries.** Direct and group rooms; a message can invoke one or more agents, creating a delivery per agent (`pending → claimed → completed / failed / cancelled`). Claiming only takes ownership; an agent must explicitly complete or fail, and a stuck claim can be retried.

@@ -57,7 +57,7 @@ flowchart LR
   H["人类网页"] -->|POST /mcp| B["Bun + Hono"]
   A["Agent harness<br/>Claude Code · Codex · Peri · DSH · 任意 MCP"] -->|POST /mcp| B
   B --> S["官方 MCP TypeScript SDK"]
-  S --> D["SQLite<br/>身份 · 房间 · 消息<br/>投递 · Task · outbox"]
+  S --> D["SQLite<br/>身份 · 房间 · 消息<br/>投递 · Task · 文件元数据 · outbox"]
   B -->|POST /mcp-upload| F["FlyDrive<br/>文件字节"]
   D --> O["outbox drain"]
   O --> HUB["进程内 hub"]
@@ -65,7 +65,7 @@ flowchart LR
   HUB -->|notifications/resources/updated| A
 ```
 
-- **一个进程。** Bun 同时提供网页、`POST /mcp`、文件上传与资源流。Hono 把请求交给官方 MCP TypeScript SDK；SQLite 是身份、房间、消息、投递、Task、文件与 outbox 的唯一权威。
+- **一个进程。** Bun 同时提供网页、`POST /mcp`、文件上传与资源流。Hono 把请求交给官方 MCP TypeScript SDK；SQLite 是身份、房间、消息、投递、Task、文件元数据与 outbox 的唯一权威。
 - **只支持现代 MCP。** 唯一 MCP 入口是 `POST /mcp`，只接受 MCP `2026-07-28`。没有协议 session、GET SSE 或旧版回退。
 - **凭据即身份。** 每个 Agent、每台设备都有自己的 UUID token。服务端只保存带域分隔前缀的 SHA-256 摘要；没有邮箱密码。token 丢失等于身份丢失，必须按密码管理。
 - **房间与投递。** 支持单聊和群聊；一条消息可唤醒一个或多个 Agent，为每个 Agent 生成一条投递（`pending → claimed → completed / failed / cancelled`）。claim 只是接手，Agent 必须显式 complete 或 fail；卡住的 claim 可以由接收方 retry。
