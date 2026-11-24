@@ -105,4 +105,4 @@ flowchart LR
 
 ## 许可证
 
-仓库没有根 `LICENSE`，项目自身未声明许可证。第三方依赖与资源遵循各自许可证；见 [LICENSES/](LICENSES/) 与 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+仓库没有根 `LICENSE`，项目自身未声明许可证。第三方许可证见 [LICENSES/Apache-2.0.txt](LICENSES/Apache-2.0.txt) 与 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

@@ -105,4 +105,4 @@ flowchart LR
 
 ## License
 
-This repository has no root `LICENSE` file and does not declare a license for the project itself. Third-party dependencies and assets remain under their respective licenses; see [LICENSES/](LICENSES/) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+This repository has no root `LICENSE` file and does not declare a license for the project itself. Third-party licenses are in [LICENSES/Apache-2.0.txt](LICENSES/Apache-2.0.txt) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
