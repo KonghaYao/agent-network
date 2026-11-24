@@ -28,6 +28,7 @@ import {
   type HistoryMessage,
 } from '../../lib/chat';
 import { outboxPreview } from '../../lib/outbox';
+import { BodyPendingContext, createBodyPendingRegistry } from './body-pending';
 import { ChatMessage } from './ChatMessage';
 import {
   registerLoadedMessageTest,
@@ -189,6 +190,12 @@ export function TimelineVirtual({
   const markReadTimerRef = useRef<number | null>(null);
   const pendingReadThroughRef = useRef<string | null>(null);
   const bottomCorrectionRef = useRef<() => void>(() => {});
+  // 只统计当前挂载窗口的正文就绪情况；入口 reveal 在 count()===0 前不显示。
+  const [bodyPending] = useState(() =>
+    createBodyPendingRegistry((count) => {
+      scrollerRef.current?.setAttribute('data-body-pending', String(count));
+    }),
+  );
   anchoredRef.current = anchored;
   restoringRef.current = restoring;
 
@@ -359,6 +366,7 @@ export function TimelineVirtual({
       }
       settleBottom();
       const height = Math.round(scroller.scrollHeight);
+      const pendingBodies = bodyPending.count();
       if (height === lastHeight) {
         stableFrames += 1;
       } else {
@@ -367,9 +375,18 @@ export function TimelineVirtual({
       }
       const gap = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
       const elapsed = performance.now() - startedAt;
+      // 正文还在异步加载（慢 Markdown）时不能只凭“高度稳定”reveal：空气泡
+      // 本身就是稳定的。等挂载窗口的正文计数归零；超时上限放宽到
+      // webTimelineRevealPendingMaxWaitMs，避免资源挂住时长期白屏。
+      const maxWait =
+        pendingBodies > 0
+          ? LIMITS.webTimelineRevealPendingMaxWaitMs
+          : LIMITS.webTimelineRevealMaxWaitMs;
       if (
-        elapsed >= LIMITS.webTimelineRevealMaxWaitMs ||
-        (stableFrames >= LIMITS.webTimelineRevealStableFrames && gap <= 2)
+        elapsed >= maxWait ||
+        (pendingBodies === 0 &&
+          stableFrames >= LIMITS.webTimelineRevealStableFrames &&
+          gap <= 2)
       ) {
         // reveal 的第一帧必须已经在真实底部。
         settleBottom();
@@ -379,7 +396,7 @@ export function TimelineVirtual({
       revealWatchRef.current = requestAnimationFrame(tick);
     };
     revealWatchRef.current = requestAnimationFrame(tick);
-  }, [revealWhenSettled, settleBottom]);
+  }, [bodyPending, revealWhenSettled, settleBottom]);
 
   // 首次进入的兜底：即使 atBottom/range 信号都没出现，也要在
   // webTimelineRevealMaxWaitMs 后显示；空会话同样适用。anchor/恢复窗口
@@ -672,6 +689,24 @@ export function TimelineVirtual({
     if (anchored) setPin(false);
   }, [anchored, setPin]);
 
+  // 相关提交（items/pinned/ready）后、浏览器绘制前再贴一次底。Virtuoso 的
+  // 异步测量/内部滚动状态可能在本组件提交之后才按旧锚点写回 scrollTop；
+  // ResizeObserver 与 totalListHeightChanged 都是“事件驱动”的兜底，覆盖不了
+  // 这种提交后的写回。只在 pinned 且非 anchor/恢复窗口时执行；gap 已 ≤2 时
+  // no-op，同一帧多次提交也只有第一次真正写 scrollTop（幂等合并）。
+  // 绝不在用户上翻/搜索定位时抢滚动。
+  useLayoutEffect(() => {
+    // 入口 reveal 后的前 300ms 由 watchInitialReveal 的同步贴底与
+    // ResizeObserver 负责；这段窗口里 Virtuoso 仍在完成首轮测量，额外写入
+    // 会触发新的 range 测量，把尚未测高的图片卡提前画出来。
+    if (Date.now() - revealedAtRef.current < LIMITS.webTimelineRevealMaxWaitMs) return;
+    if (!pinnedRef.current || anchoredRef.current || restoringRef.current) return;
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    if (scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 2) return;
+    scroller.scrollTop = scroller.scrollHeight;
+  }, [items, pinned, ready]);
+
   const lastItem: HistoryItem | undefined = items[items.length - 1];
   const lastKey = lastItem ? historyItemKey(lastItem) : null;
 
@@ -904,36 +939,38 @@ export function TimelineVirtual({
           </Button>
         </div>
       ) : null}
-      <ScrollerContext.Provider value={scrollerContext}>
-        <Virtuoso<HistoryItem>
-          key={timelineKey}
-          ref={virtuosoRef}
-          data={items}
-          computeItemKey={(_, item) => historyItemKey(item)}
-          firstItemIndex={indexState.firstItemIndex}
-          initialTopMostItemIndex={initialTopMostItemIndex}
-          defaultItemHeight={96}
-          initialItemCount={Math.min(30, items.length)}
-          followOutput={followOutput}
-          startReached={handleStartReached}
-          atBottomStateChange={handleAtBottom}
-          atBottomThreshold={LIMITS.webScrollStickyPx}
-          rangeChanged={handleRangeChanged}
-          increaseViewportBy={{ top: 1_200, bottom: 1_200 }}
-          totalListHeightChanged={handleTotalListHeightChanged}
-          scrollerRef={(node) => {
-            if (node instanceof HTMLDivElement) {
-              attachScroller(node);
-              node.setAttribute('data-loaded-count', String(items.length));
-              node.setAttribute('data-loaded-message-count', String(messages.length));
-            } else {
-              attachScroller(null);
-            }
-          }}
-          components={components}
-          itemContent={renderItem}
-        />
-      </ScrollerContext.Provider>
+      <BodyPendingContext.Provider value={bodyPending}>
+        <ScrollerContext.Provider value={scrollerContext}>
+          <Virtuoso<HistoryItem>
+            key={timelineKey}
+            ref={virtuosoRef}
+            data={items}
+            computeItemKey={(_, item) => historyItemKey(item)}
+            firstItemIndex={indexState.firstItemIndex}
+            initialTopMostItemIndex={initialTopMostItemIndex}
+            defaultItemHeight={96}
+            initialItemCount={Math.min(30, items.length)}
+            followOutput={followOutput}
+            startReached={handleStartReached}
+            atBottomStateChange={handleAtBottom}
+            atBottomThreshold={LIMITS.webScrollStickyPx}
+            rangeChanged={handleRangeChanged}
+            increaseViewportBy={{ top: 1_200, bottom: 1_200 }}
+            totalListHeightChanged={handleTotalListHeightChanged}
+            scrollerRef={(node) => {
+              if (node instanceof HTMLDivElement) {
+                attachScroller(node);
+                node.setAttribute('data-loaded-count', String(items.length));
+                node.setAttribute('data-loaded-message-count', String(messages.length));
+              } else {
+                attachScroller(null);
+              }
+            }}
+            components={components}
+            itemContent={renderItem}
+          />
+        </ScrollerContext.Provider>
+      </BodyPendingContext.Provider>
       <Button
         id="jump-latest"
         className="jump-latest"

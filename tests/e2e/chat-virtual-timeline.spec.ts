@@ -405,6 +405,12 @@ interface EntryProbeReport {
   maxBackwardAllFrames: number;
   /** 绘制后可见的最大 gap（真正画到屏幕上的“离底”）。 */
   maxGap: number;
+  /**
+   * 只在“确实离底（gap>2）”的绘制后帧上统计的相对峰值回退。
+   * scrollTop 随底部高度收缩而下降但 gap 仍为 0 时，画面锚在内容底部，
+   * 不是可见回退（与计划文档 12.3 的判定一致）。
+   */
+  maxVisibleBackwardPainted: number;
   paintedFrames: number;
   /** rAF 采样（绘制前）的最大 gap，仅用于诊断。 */
   maxGapRaf: number;
@@ -413,6 +419,10 @@ interface EntryProbeReport {
   flipsAfterFirstTrue: number;
   finalGap: number;
   finalAtBottom: string | null;
+  /** 第一帧可见时 `#messages` 的文本长度；慢 Markdown 下用于识别“空气泡先 reveal”。 */
+  firstVisibleTextLen: number;
+  /** 第一帧可见时已挂载 Markdown 岛的总字符数。 */
+  firstVisibleMarkdownChars: number;
 }
 
 /**
@@ -427,6 +437,9 @@ async function installEntryProbe(page: Page): Promise<void> {
       stopped: false,
       atBottom: [] as string[],
       firstVisibleAt: -1,
+      firstVisibleTextLen: -1,
+      firstVisibleMarkdownChars: -1,
+      startedAt: -1,
     };
     (window as unknown as { __entryProbe: typeof state }).__entryProbe = state;
     const begin = () => {
@@ -436,11 +449,20 @@ async function installEntryProbe(page: Page): Promise<void> {
         return;
       }
       const startedAt = performance.now();
+      state.startedAt = startedAt;
       const tick = () => {
         if (state.stopped) return;
         const t = performance.now() - startedAt;
         const visible = window.getComputedStyle(node).visibility !== 'hidden';
-        if (visible && state.firstVisibleAt < 0) state.firstVisibleAt = t;
+        if (visible && state.firstVisibleAt < 0) {
+          state.firstVisibleAt = t;
+          state.firstVisibleTextLen = (node.textContent ?? '').trim().length;
+          let markdownChars = 0;
+          node.querySelectorAll('.msg-markdown').forEach((element) => {
+            markdownChars += (element.textContent ?? '').trim().length;
+          });
+          state.firstVisibleMarkdownChars = markdownChars;
+        }
         state.frames.push({
           t,
           top: node.scrollTop,
@@ -486,6 +508,8 @@ async function stopEntryProbe(page: Page): Promise<EntryProbeReport> {
         stopped: boolean;
         atBottom: string[];
         firstVisibleAt: number;
+        firstVisibleTextLen: number;
+        firstVisibleMarkdownChars: number;
       };
     }).__entryProbe;
     state.stopped = true;
@@ -503,6 +527,15 @@ async function stopEntryProbe(page: Page): Promise<EntryProbeReport> {
     };
     const maxGap = (list: EntryFrame[]): number =>
       list.length ? Math.max(...list.map((frame) => frame.gap)) : 0;
+    const visibleBackwardPainted = (() => {
+      let peak = -1;
+      let backward = 0;
+      for (const frame of paintedVisible) {
+        peak = Math.max(peak, frame.top);
+        if (frame.gap > 2) backward = Math.max(backward, peak - frame.top);
+      }
+      return backward;
+    })();
     const firstTrue = state.atBottom.indexOf('true');
     return {
       frames: frames.length,
@@ -514,6 +547,7 @@ async function stopEntryProbe(page: Page): Promise<EntryProbeReport> {
       maxBackwardPainted:
         Math.round(peakBackward(paintedVisible) * 100) / 100,
       maxGap: Math.round(maxGap(paintedVisible) * 100) / 100,
+      maxVisibleBackwardPainted: Math.round(visibleBackwardPainted * 100) / 100,
       paintedFrames: paintedVisible.length,
       maxGapRaf: Math.round(maxGap(visible) * 100) / 100,
       maxGapAllFrames: Math.round(maxGap(frames) * 100) / 100,
@@ -526,6 +560,8 @@ async function stopEntryProbe(page: Page): Promise<EntryProbeReport> {
         (node.scrollHeight - node.scrollTop - node.clientHeight).toFixed(2),
       ),
       finalAtBottom: node.getAttribute('data-virt-at-bottom'),
+      firstVisibleTextLen: state.firstVisibleTextLen,
+      firstVisibleMarkdownChars: state.firstVisibleMarkdownChars,
     };
   });
 }
@@ -637,6 +673,50 @@ async function seedRichTimeline(
               message_id: sent.message.message_id,
             });
           }
+        });
+      }),
+    );
+  }
+}
+
+/**
+ * 慢 Markdown 房间只放 Agent 正文（表格/代码/长列表），不放文件卡：
+ * 入口 reveal 的等待对象是 Markdown 岛本身，排除缩略图异步解码的干扰。
+ */
+async function seedSlowMarkdownRoom(
+  base: string,
+  token: string,
+  roomId: string,
+  count: number,
+): Promise<void> {
+  const batch = 8;
+  for (let start = 1; start <= count; start += batch) {
+    await Promise.all(
+      Array.from({ length: Math.min(batch, count - start + 1) }, (_, offset) => {
+        const index = start + offset;
+        const body =
+          index % 3 === 0
+            ? [
+                `## 慢 Markdown ${index}`,
+                '',
+                '| 项 | 状态 | 备注 |',
+                '| --- | --- | --- |',
+                ...Array.from(
+                  { length: 10 },
+                  (_, row) => `| 检查 ${row + 1} | 通过 | 入口时序 |`,
+                ),
+                '',
+                '```ts',
+                'const pending = mounted.filter((item) => !item.ready);',
+                '```',
+              ].join('\n')
+            : `慢 Markdown 进度 ${index}：${'入口等待正文就绪。'.repeat(12)}`;
+        return callTool(base, token, 'network_message_send', {
+          request_id: requestId('virt_slow_md'),
+          client_message_id: crypto.randomUUID(),
+          room_id: roomId,
+          invoke: [],
+          body,
         });
       }),
     );
@@ -938,11 +1018,15 @@ test.describe('virtual timeline bottom stability', () => {
   const RICH_TOTAL = 240;
   const LOADED_TARGET = 220;
   const LIGHT_TOTAL = 80;
+  // 慢 Markdown 用例使用更小的房间：入口数据窗口更快就绪，延迟 100ms 的
+  // 资源必然晚于/逼近 reveal，才能稳定复现“空气泡先显示”的时序。
+  const SLOW_MARKDOWN_TOTAL = 32;
   let base = '';
   let ownerToken = '';
   let agentToken = '';
   let roomId = '';
   let lightRoomId = '';
+  let slowRoomId = '';
   let lightAgentToken = '';
   let imageUrl = '';
   let documentUrl = '';
@@ -988,6 +1072,18 @@ test.describe('virtual timeline bottom stability', () => {
     );
     lightRoomId = lightRoom.room.room_id;
     lightAgentToken = lightAgent.token;
+    const slowRoom = await callTool<{ room: { room_id: string } }>(
+      base,
+      ownerToken,
+      'network_room_create',
+      {
+        request_id: requestId('virt_slow_room'),
+        kind: 'group',
+        members: [agent.actor_id],
+        title: '慢 Markdown 入口',
+      },
+    );
+    slowRoomId = slowRoom.room.room_id;
     await seedMessages(base, lightAgent.token, lightRoomId, LIGHT_TOTAL);
     const image = await uploadRoomFile(
       base,
@@ -1008,6 +1104,7 @@ test.describe('virtual timeline bottom stability', () => {
     imageUrl = image.publicUrl;
     documentUrl = document.publicUrl;
     await seedRichTimeline(base, agentToken, roomId, RICH_TOTAL, imageUrl, documentUrl);
+    await seedSlowMarkdownRoom(base, agentToken, slowRoomId, SLOW_MARKDOWN_TOTAL);
   });
 
   test.beforeEach(async ({ page }) => {
@@ -1043,6 +1140,52 @@ test.describe('virtual timeline bottom stability', () => {
     // 到达底部后不得再反复翻转 data-virt-at-bottom。
     expect(report.flipsAfterFirstTrue).toBe(0);
   });
+
+  // 慢资源：Markdown 岛延迟到达时，入口不能先以空气泡 reveal，再让真实
+  // 高度在绘制后把底部顶开。旧实现（`d9aa96e`）100/300ms 各 3/3 失败；
+  // 修复后首帧可见时正文已挂载，绘制后 gap 为 0。
+  for (const delay of [100, 300]) {
+    test(`reveals after slow Markdown (${delay}ms) without a visible jump`, async ({ page }) => {
+      await page.route('**/assets/chat-markdown.js*', async (route) => {
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        await route.continue();
+      });
+      await installEntryProbe(page);
+      const origin = await baseUrl();
+      await page.goto(`${origin}/c/${slowRoomId}`);
+      await expect(page.locator('body[data-spa-route="room"]')).toBeVisible();
+      // 从 `#messages` 出现的第一帧起完整采样 900ms；慢 Markdown 会推迟
+      // reveal，固定从 goto 起算会少采到可见帧。
+      await page.waitForFunction(
+        () => {
+          const probe = (window as unknown as { __entryProbe?: { startedAt: number } })
+            .__entryProbe;
+          return (
+            probe !== undefined && probe.startedAt > 0 && performance.now() - probe.startedAt >= 900
+          );
+        },
+        undefined,
+        { timeout: 10_000, polling: 'raf' },
+      );
+      const report = await stopEntryProbe(page);
+      console.log(`VIRTUAL_BOTTOM_SLOW_MARKDOWN_${delay} ${JSON.stringify(report)}`);
+
+      expect(report.visibleFrames).toBeGreaterThan(10);
+      expect(report.paintedFrames).toBeGreaterThan(5);
+      expect(report.firstVisibleAt).toBeGreaterThan(0);
+      // 可见后第一帧必须有正文；不能把空气泡画给用户。
+      expect(report.firstVisibleTextLen).toBeGreaterThan(0);
+      // 慢 Markdown 场景的窗口里至少有一条已挂载的 Markdown 正文：
+      // reveal 不能早于 pending 归零。
+      expect(report.firstVisibleMarkdownChars).toBeGreaterThan(0);
+      expect(report.maxBackward).toBeLessThanOrEqual(20);
+      // 绘制后的可见回退：gap>2 时 scrollTop 相对峰值的回退。
+      expect(report.maxVisibleBackwardPainted).toBeLessThanOrEqual(20);
+      expect(report.maxGap).toBeLessThanOrEqual(20);
+      expect(report.finalGap).toBeLessThanOrEqual(2);
+      expect(report.finalAtBottom).toBe('true');
+    });
+  }
 
   test('stays pinned after scrolling the loaded window to the bottom', async ({ page }) => {
     await openRoom(page, lightRoomId);

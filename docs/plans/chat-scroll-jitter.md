@@ -558,8 +558,21 @@ Playwright：
 
 - **入口 settle**：`atBottom` / `rangeChanged` / 挂载兜底只启动 `watchInitialReveal`，
   不再一到底就显示。隐藏期间逐帧同步贴底，连续 `webTimelineRevealStableFrames = 3`
-  帧高度不变且 `gap≤2` 才 reveal；最多等 `webTimelineRevealMaxWaitMs = 300 ms`，
-  超时必须显示，不能白屏。reveal 前再同步贴一次真实底部。
+  帧高度不变且 `gap≤2` 才 reveal；没有异步正文时最多等
+  `webTimelineRevealMaxWaitMs = 300 ms`，超时必须显示，不能白屏。reveal 前再同步
+  贴一次真实底部。
+- **正文 pending 门控**：`body-pending.ts` 提供时间线级计数器，只统计当前挂载窗口
+  中正文未就绪的消息。`MarkdownIsland` 在挂载的 layout effect 里登记，Markdown 岛
+  同步挂载完成（或失败回退）后释放；`watchInitialReveal` 要求 `pending===0` 且高度
+  稳定才 reveal。有 pending 时隐藏上限放宽到
+  `webTimelineRevealPendingMaxWaitMs = 2 s`，避免资源挂住时长期白屏；超时后仍按
+  原有同步贴底显示。计数器随 Virtuoso 卸载释放，不累计整段历史。
+- **提交后贴底**：父级 `useLayoutEffect`（依赖 `items` / `pinned` / `ready`）在
+  `pinned`、非 anchor/恢复窗口且 `gap>2` 时于绘制前写 `scrollTop = scrollHeight`，
+  覆盖 Virtuoso 在本组件提交后按旧锚点写回、`totalListHeightChanged` 晚于绘制的
+  路径。入口 reveal 后的 300 ms 内不执行：这段窗口由 `watchInitialReveal` 的同步
+  贴底与 ResizeObserver 负责，额外写入会触发新的 range 测量，把尚未测高的图片卡
+  提前画出来。没有引入全容器 MutationObserver。
 - **同步校正**：`handleTotalListHeightChanged` 在 `pinned`、非 anchor/恢复窗口且
   `gap>2` 时同步贴底；item list 的 `ResizeObserver` 同样在绘制前校正（rAF 仍作为
   合并兜底），图片 `load` 捕获后下一帧再按真实高度贴一次。校正优先调用 Virtuoso 的
@@ -596,7 +609,28 @@ Playwright：
 
 入口 `maxBackward` 是 rAF（绘制前）采样值；`maxGap` 取绘制后采样，代表用户真正看到的
 “最新消息被推离底部”。底部高度补偿造成的 `scrollTop` 回退如果 `gap` 仍为 0，画面
-锚在内容底部，不计入可见回退。
+锚在内容底部，不计入可见回退；新增用例里的 `maxVisibleBackwardPainted` 只在
+`gap>2` 的绘制后帧上统计回退，`maxBackwardPainted` 仍保留为诊断值。
+
+**慢 Markdown 资源（`/assets/chat-markdown.js` 延迟）**
+
+隔离实例、同一份 e2e，对照 `d9aa96e` 的只读 worktree（独立 `dist/web`）。房间为
+32 条 Agent Markdown（无文件卡），从 `#messages` 第一帧起采样 900 ms：
+
+| 场景 | `d9aa96e` | 修复后 |
+| --- | --- | --- |
+| 100 ms 延迟：首帧可见 | 126–179 ms | 291–300 ms |
+| 100 ms 延迟：首帧已挂载 Markdown 字符 | **0**（3/3） | **1,700**（3/3） |
+| 100 ms 延迟：绘制后 `maxGap` | 0 或 **4,551 px**（时序相关） | **0 px** |
+| 100 ms 延迟：可见回退 | 0 或 **4,551 px** | **0 px** |
+| 300 ms 延迟：首帧可见 | 121–137 ms | 407–412 ms |
+| 300 ms 延迟：首帧已挂载 Markdown 字符 | **0**（3/3） | **5,600**（3/3） |
+| 300 ms 延迟：绘制后 `maxGap` | 0 或 **4,551 px**（时序相关） | **0 px** |
+| 300 ms 延迟：可见回退 | 0 或 **4,551 px** | **0 px** |
+
+旧实现在这两档都可能在 reveal 后由同帧 ResizeObserver 补上，因此“绘制后 gap”偶发为
+0；确定性的差异是 **reveal 时正文尚未挂载**（`firstVisibleMarkdownChars=0`），
+新用例把它设为硬断言，`d9aa96e` 上 100 ms / 300 ms 各 3/3 失败，修复后各 3/3 通过。
 
 ### 12.4 新增 e2e
 
@@ -611,6 +645,13 @@ Playwright：
   再一次性滚轮拖到底；以页面内第一帧 `gap≤2` 为到达起点，观察 500 ms 的绘制后样本。
   断言 `maxGapAfterArrival ≤ 20`、`maxVisibleBackwardAfterArrival ≤ 20`、最终 gap ≤2。
   基线 5/5 失败（74/76 px），HEAD 10/10 通过。
+- `reveals after slow Markdown (100ms|300ms) without a visible jump`：`page.route`
+  把 `/assets/chat-markdown.js` 延迟 100/300 ms，进入 32 条 Agent Markdown 的小房间，
+  从 `#messages` 第一帧起完整采样 900 ms。断言首帧可见时
+  `firstVisibleMarkdownChars>0`（不能先画空气泡）、rAF `maxBackward≤20`、
+  `maxVisibleBackwardPainted≤20`、绘制后 `maxGap≤20`、最终 gap≤2。`d9aa96e`
+  100/300 ms 各 3/3 失败（首帧正文为 0，部分轮次 gap 4,551 px），HEAD 各 3/3 通过
+  （0 px）。
 
 ### 12.5 回滚与边界
 
@@ -619,5 +660,11 @@ Playwright：
   不是 DOM 回滚，不能用来证明 DOM 路径。
 - 本机 headless Chromium 无法模拟 Safari 的橡皮筋回弹；修复只保证程序化校正在绘制前
   完成，不与橡皮筋争抢。
-- 剩余边界：单条超高消息首次测量仍可能有一次向下的高度修正（估算切真实值）；
-  入口最多隐藏 300 ms，慢设备上 reveal 与首轮长高可能同帧，由同步校正吸收。
+- 剩余边界：
+  - pending 只统计**当前挂载窗口**。reveal 之后才挂载的窗口外消息、缩略图解码等
+    仍依赖 item list ResizeObserver、`totalListHeightChanged` 与 retry 预算；本机
+    10 次入口采样为 0 px，但低端设备/慢图片仍需真机复核。
+  - 单条超高消息首次测量仍可能有一次向下的高度修正（估算切真实值）；提交后
+    layout effect 在 reveal 后 300 ms 内不参与，避免与 Virtuoso 首轮测量争抢。
+  - 正文 pending 的上限是 2 s：资源挂住时最多多等 2 s 再显示，之后仍可能出现
+    一次高度修正；没有用长时间空白遮罩替代修复。
