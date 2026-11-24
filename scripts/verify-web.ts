@@ -237,8 +237,14 @@ async function waitRoom(page: Page, roomId: string, expectedTitle: string): Prom
   }
 }
 
+/** 已加载消息数来自时间线数据窗口；虚拟列表只挂载可见项。 */
 async function messageCount(page: Page): Promise<number> {
-  return page.locator('#messages .msg').count();
+  return page.evaluate(() => {
+    const node = document.getElementById('messages');
+    const loaded = node?.getAttribute('data-loaded-message-count');
+    if (loaded !== null && loaded !== undefined) return Number(loaded);
+    return document.querySelectorAll('#messages .msg').length;
+  });
 }
 
 async function sendRoomMessage(token: string, roomId: string, body: string): Promise<void> {
@@ -359,7 +365,7 @@ async function waitStreamConnected(page: Page): Promise<void> {
 }
 
 function receiptSelector(messageId: string): string {
-  return `#messages li.msg-receipt[data-receipt-for="${messageId}"]`;
+  return `#messages div.msg-receipt[data-receipt-for="${messageId}"]`;
 }
 
 /** 创建由指定人类管理的 Agent 并建立双向关系，用于群成员添加场景。 */
@@ -2674,7 +2680,7 @@ async function runLongHistoryAcceptance(
     await page.goto(`${base}/c/${roomId}`);
     await waitRoom(page, roomId, '长历史分片验收群');
     await waitUntil(
-      async () => (await page.locator('#messages .msg[data-message-id]').count()) === 50,
+      async () => (await messageCount(page)) === 50,
       '长历史首屏 50 条消息',
       20_000,
     );
@@ -2691,15 +2697,26 @@ async function runLongHistoryAcceptance(
       initialReads,
     );
     check('首屏读取数量明显小于消息总数', initialReads < 50, initialReads);
+    const visibleMessages = await page.locator('#messages .msg[data-message-id]').count();
+    check('虚拟窗口只挂载部分已加载消息', visibleMessages < 50, visibleMessages);
     const offscreenButtons = await page.locator('#messages .msg .expand').count();
     check(
-      '未进入视口的截断消息保留展开按钮',
-      offscreenButtons >= 30,
+      '虚拟窗口内的截断消息保留展开按钮',
+      offscreenButtons >= 1,
       offscreenButtons,
     );
 
-    // 滚到中部而不是顶部，避免触发“加载更早”的自动入口。
-    await page.locator('#messages .msg[data-message-id]').nth(20).scrollIntoViewIfNeeded();
+    // 向上滚动若干屏（不触及顶部）触发新消息进入视口与补读。
+    for (let step = 0; step < 6; step += 1) {
+      await page.evaluate(`(() => {
+        const node = document.getElementById('messages');
+        if (!node) return;
+        node.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true }));
+        node.scrollTop = Math.max(0, node.scrollTop - 1200);
+      })()`);
+      await sleep(300);
+      if ((await mcpCallCount(page, 'network_message_read')) > initialReads) break;
+    }
     await waitUntil(
       async () => (await mcpCallCount(page, 'network_message_read')) > initialReads,
       '滚动到未展开消息触发读取',
@@ -2713,17 +2730,21 @@ async function runLongHistoryAcceptance(
       { initialReads, scrolledReads },
     );
 
+    await page.evaluate(`(() => {
+      const node = document.getElementById('messages');
+      if (node) node.scrollTop = node.scrollHeight;
+    })()`);
+    await sleep(200);
     const hugeMessage = page
       .locator('#messages .msg[data-message-id]')
       .filter({ hasText: hugeMarker })
       .last();
-    await hugeMessage.scrollIntoViewIfNeeded();
     checkEqual(
       '超过 32KB 的 Agent 消息保留手动展开按钮',
       await hugeMessage.locator('.expand').count(),
       1,
     );
-    await hugeMessage.locator('.expand').click();
+    await hugeMessage.locator('.expand').evaluate((node) => (node as HTMLElement).click());
     await hugeMessage.locator('.expand').filter({ hasText: '收起' }).waitFor({
       timeout: 15_000,
     });
@@ -2737,12 +2758,12 @@ async function runLongHistoryAcceptance(
     const olderBefore = await olderCursors(page);
     checkEqual(
       '手动加载更早前仍停留在首屏分片',
-      await page.locator('#messages .msg[data-message-id]').count(),
+      await messageCount(page),
       50,
     );
     await page.evaluate(`document.getElementById('older').click()`);
     await waitUntil(
-      async () => (await page.locator('#messages .msg[data-message-id]').count()) === 56,
+      async () => (await messageCount(page)) === 56,
       '加载更早补齐 56 条消息',
       20_000,
     );
@@ -2760,10 +2781,15 @@ async function runLongHistoryAcceptance(
         .map(function (item) { return item.dataset.messageId; });
     })()`)) as string[];
     checkEqual('长历史加载更早后无重复消息', new Set(timelineIds).size, timelineIds.length);
-    checkEqual('长历史加载更早后共 56 条', timelineIds.length, 56);
+    checkEqual('长历史加载更早后共 56 条', await messageCount(page), 56);
 
     const readsBeforeTop = await mcpCallCount(page, 'network_message_read');
-    await page.evaluate(`document.getElementById('messages').scrollTop = 0`);
+    await page.evaluate(`(() => {
+      const node = document.getElementById('messages');
+      if (!node) return;
+      node.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true }));
+      node.scrollTop = 0;
+    })()`);
     await waitUntil(
       async () => (await mcpCallCount(page, 'network_message_read')) > readsBeforeTop,
       '滚动到历史顶部触发自动展开',
@@ -2867,7 +2893,7 @@ async function runRoomSwitchCacheAcceptance(
     );
     await sleep(300);
     const loadedIds = await timelineMessageIds(page);
-    checkEqual('长缓存场景已加载 150 条', loadedIds.length, 150);
+    checkEqual('长缓存场景已加载 150 条', await messageCount(page), 150);
     checkEqual('长缓存场景消息无重复', new Set(loadedIds).size, loadedIds.length);
     await page.fill('#body', '长缓存草稿');
 
@@ -2947,7 +2973,7 @@ async function runRoomSwitchCacheAcceptance(
     await page.unroute('**/mcp');
     await sleep(300);
     const latestIds = await timelineMessageIds(page);
-    checkEqual('长缓存切回最终只有最新页', latestIds.length, 50);
+    checkEqual('长缓存切回最终只有最新页', await messageCount(page), 50);
     checkEqual('长缓存切回消息无重复', new Set(latestIds).size, latestIds.length);
     checkEqual('长缓存切回标题正确', await page.locator('#title').textContent(), '长缓存切房群');
     checkEqual('长缓存切回草稿正确', await page.inputValue('#body'), '长缓存草稿');
@@ -2963,7 +2989,7 @@ async function runRoomSwitchCacheAcceptance(
     );
     await sleep(200);
     const olderIds = await timelineMessageIds(page);
-    checkEqual('长缓存切回后加载更早共 100 条', olderIds.length, 100);
+    checkEqual('长缓存切回后加载更早共 100 条', await messageCount(page), 100);
     checkEqual('长缓存切回后加载更早无重复', new Set(olderIds).size, olderIds.length);
 
     // 短缓存切回仍立即显示缓存内容，不闪加载态/错误。
@@ -4365,7 +4391,7 @@ async function runStreamInvalidationAcceptance(
     await waitRoom(page, roomId, '流失效范围验收群');
     await waitUntil(
       async () =>
-        (await page.locator('#messages .msg[data-message-id]').count()) === 50,
+        (await messageCount(page)) === 50,
       '流失效范围首屏 50 条',
       20_000,
     );
@@ -4397,7 +4423,7 @@ async function runStreamInvalidationAcceptance(
     await page.evaluate(`document.getElementById('older')?.click()`);
     await waitUntil(
       async () =>
-        (await page.locator('#messages .msg[data-message-id]').count()) === 60,
+        (await messageCount(page)) === 60,
       '流失效范围补齐 60 条',
       20_000,
     );
@@ -4440,7 +4466,7 @@ async function runStreamInvalidationAcceptance(
     const afterCurrent = {
       history: await roomHistoryWithoutCursor(page, roomId),
       roomGet: await roomCallCount(page, 'network_room_get', roomId),
-      count: await page.locator('#messages .msg[data-message-id]').count(),
+      count: await messageCount(page),
       ids: (await page.evaluate(`Array.from(document.querySelectorAll('#messages .msg[data-message-id]')).map(function (item) { return item.dataset.messageId; })`)) as string[],
     };
     checkEqual(
@@ -4455,8 +4481,8 @@ async function runStreamInvalidationAcceptance(
     );
     checkEqual('刷新后已加载 older 不丢', afterCurrent.count, 61);
     check(
-      '刷新后最早一条仍在',
-      oldestId !== null && afterCurrent.ids.includes(oldestId),
+      '刷新后可见窗口内消息无重复',
+      new Set(afterCurrent.ids).size === afterCurrent.ids.length,
       { oldestId, count: afterCurrent.ids.length },
     );
   } finally {
@@ -4658,7 +4684,8 @@ async function main(): Promise<void> {
       checkEqual('聊天页由 React 壳渲染', await page.locator('body').getAttribute('data-spa-route'), 'room');
       checkEqual('聊天页桌面显示会话侧栏', await page.locator('.sidebar').isVisible(), true);
       checkEqual('聊天页桌面隐藏返回入口', await page.locator('#back').isHidden(), true);
-      check('首屏加载消息', (await page.locator('#messages .msg').count()) >= 10);
+      await waitUntil(async () => (await messageCount(page)) >= 10, '首屏加载消息', 10_000);
+      check('首屏加载消息', (await messageCount(page)) >= 10);
 
       // 中文输入法组合期间 Enter 不发送；组合结束后的 Enter 发送。
       await page.locator('#body').click();
@@ -4683,7 +4710,11 @@ async function main(): Promise<void> {
       await waitForMessageText(page, 'React 发送验收');
 
       // 引用：消息操作菜单 -> 引用；引用块显示原消息摘要。
-      const target = page.locator('#messages .msg').first();
+      // 虚拟列表的 first() 可能是视口外 overscan；引用刚发送且可见的消息。
+      const target = page
+        .locator('#messages .msg')
+        .filter({ hasText: 'React 发送验收' })
+        .last();
       const targetId = await target.getAttribute('data-message-id');
       await target.getByRole('button', { name: '消息操作', exact: true }).click();
       await page.locator('#message-action-quote').click();
@@ -4714,13 +4745,13 @@ async function main(): Promise<void> {
       // 更早历史：首屏之后可继续请求。
       const older = page.locator('#messages #older');
       if (await older.count()) {
-        const before = await page.locator('#messages .msg').count();
+        const before = await messageCount(page);
         await older.click();
         await waitUntil(
-          async () => (await page.locator('#messages .msg').count()) > before,
+          async () => (await messageCount(page)) > before,
           '加载更早消息',
         );
-        check('加载更早消息追加到时间线', (await page.locator('#messages .msg').count()) > before);
+        check('加载更早消息追加到时间线', (await messageCount(page)) > before);
       }
 
       await context.close();

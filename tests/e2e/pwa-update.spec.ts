@@ -678,7 +678,7 @@ test('写保护：不兼容时文件上传、绑定重试与删除均不发出�
 
 test('写保护：不兼容时转发入口与已打开的转发弹窗均不发出写请求', async ({ page }) => {
   await openRoom(page);
-  const message = page.locator('li.msg[data-message-id]').first();
+  const message = page.locator('div.msg[data-message-id]').first();
   await message.getByRole('button', { name: '消息操作', exact: true }).click();
   await page.locator('#message-action-forward').click();
   const dialog = page.locator('#forward-modal');
@@ -762,7 +762,7 @@ test('兼容状态下文件、转发与发送保持可用', async ({ page }) => 
       .getByRole('button', { name: '删除', exact: true }),
   ).toBeEnabled();
 
-  const message = page.locator('li.msg[data-message-id]').first();
+  const message = page.locator('div.msg[data-message-id]').first();
   await message.getByRole('button', { name: '消息操作', exact: true }).click();
   await page.locator('#message-action-forward').click();
   await expect(page.locator('#forward-modal')).toBeVisible();

@@ -188,10 +188,52 @@ function messageNode(page: Page, messageId: string) {
   return page.locator(`[data-message-id="${messageId}"]`).first();
 }
 
+/**
+ * 虚拟时间线只挂载窗口内消息；直接对 item 调 scrollIntoViewIfNeeded 会在
+ * 滚动过程中触发卸载/重挂，Playwright 报 “Element is not attached”。
+ * 这里只滚动真正的容器，并在节点被回收时重新贴到底部窗口。
+ */
+async function revealMessage(page: Page, messageId: string) {
+  const node = messageNode(page, messageId);
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if ((await node.count()) === 0) {
+      await page.evaluate(() => {
+        const list = document.getElementById('messages');
+        if (!list) return;
+        list.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true }));
+        list.scrollTop = list.scrollHeight;
+      });
+      await page.waitForTimeout(80);
+      continue;
+    }
+    const visible = await node.evaluate((element) => {
+      const list = document.getElementById('messages');
+      if (!list) return false;
+      const rect = element.getBoundingClientRect();
+      const listRect = list.getBoundingClientRect();
+      return rect.bottom > listRect.top + 2 && rect.top < listRect.bottom - 2;
+    });
+    if (visible) return node;
+    await page.evaluate((id) => {
+      const list = document.getElementById('messages');
+      const element = document.querySelector<HTMLElement>(`[data-message-id="${id}"]`);
+      if (!list || !element) return;
+      const rect = element.getBoundingClientRect();
+      const listRect = list.getBoundingClientRect();
+      const delta = rect.top - listRect.top - listRect.height / 2 + rect.height / 2;
+      list.dispatchEvent(
+        new WheelEvent('wheel', { deltaY: delta < 0 ? -120 : 120, bubbles: true }),
+      );
+      list.scrollTop += delta;
+    }, messageId);
+    await page.waitForTimeout(80);
+  }
+  return node;
+}
+
 async function openMessageMenu(page: Page, messageId: string): Promise<void> {
   await expect(page.locator('#message-action-menu')).toHaveCount(0);
-  const node = messageNode(page, messageId);
-  await node.scrollIntoViewIfNeeded();
+  const node = await revealMessage(page, messageId);
   await node.getByRole('button', { name: '消息操作', exact: true }).click();
   await expect(page.locator('#message-action-menu')).toHaveCount(1);
   await expect(page.locator('#message-action-menu')).toBeVisible();
@@ -218,7 +260,7 @@ async function recallOwnMessage(page: Page, messageId: string): Promise<void> {
   await page.locator('#message-action-recall').click();
   await page.locator('#confirm-dialog-ok').click();
   await expect(
-    page.locator(`li.msg-system.msg-recalled[data-message-id="${messageId}"]`),
+    page.locator(`div.msg-system.msg-recalled[data-message-id="${messageId}"]`),
   ).toBeVisible();
 }
 
@@ -229,7 +271,7 @@ async function recallWithin(page: Page, messageId: string, budgetMs: number): Pr
   await page.locator('#message-action-recall').click();
   await page.locator('#confirm-dialog-ok').click();
   await expect(
-    page.locator(`li.msg-system.msg-recalled[data-message-id="${messageId}"]`),
+    page.locator(`div.msg-system.msg-recalled[data-message-id="${messageId}"]`),
   ).toBeVisible({ timeout: budgetMs });
   return Date.now() - started;
 }
@@ -516,7 +558,7 @@ test.describe.serial('群主消息管理前端', () => {
       await page.locator('#message-action-recall').click();
       await page.locator('#confirm-dialog-ok').click();
       await expect(page.locator('#status')).toContainText('消息已撤回');
-      await expect(page.locator(`li.msg-system.msg-recalled[data-message-id="${target}"]`)).toBeVisible();
+      await expect(page.locator(`div.msg-system.msg-recalled[data-message-id="${target}"]`)).toBeVisible();
       await expect(page.locator('#pinned-messages')).toHaveCount(0);
     } finally {
       await close();
@@ -532,6 +574,8 @@ test.describe.serial('群主消息管理前端', () => {
     }
     const { page, close } = await openRoom(browser, base, room.tokenMember, room.roomId);
     try {
+      // 等虚拟时间线完成首屏贴底后再离开底部。
+      await page.waitForTimeout(300);
       await page.locator('#messages').evaluate((element) => {
         element.scrollTop = 0;
       });
@@ -551,7 +595,7 @@ test.describe.serial('群主消息管理前端', () => {
         message_id: recalled,
       });
       await expect(
-        page.locator(`li.msg-system.msg-recalled[data-message-id="${recalled}"]`),
+        page.locator(`div.msg-system.msg-recalled[data-message-id="${recalled}"]`),
       ).toBeVisible();
       const afterRecall = await page.locator('#messages').evaluate((element) => element.scrollTop);
       expect(afterRecall).toBeLessThanOrEqual(before + 4);
@@ -724,7 +768,7 @@ test.describe.serial('群主消息管理前端', () => {
         message_id: ordinary,
       });
       await expect(
-        page.locator(`li.msg-system.msg-recalled[data-message-id="${ordinary}"]`),
+        page.locator(`div.msg-system.msg-recalled[data-message-id="${ordinary}"]`),
       ).toBeVisible();
       await page.waitForTimeout(800);
       expect(counts.history).toBe(1);
@@ -737,7 +781,7 @@ test.describe.serial('群主消息管理前端', () => {
         message_id: taskRoot,
       });
       await expect(
-        page.locator(`li.msg-system.msg-recalled[data-message-id="${taskRoot}"]`),
+        page.locator(`div.msg-system.msg-recalled[data-message-id="${taskRoot}"]`),
       ).toBeVisible();
       await page.waitForTimeout(800);
       expect(counts.history).toBe(1);
@@ -890,7 +934,7 @@ test.describe.serial('群主消息管理前端', () => {
 
       // 右键菜单提供同名入口。
       await member.page
-        .locator(`li.msg-system.msg-recalled[data-message-id="${messageId}"]`)
+        .locator(`div.msg-system.msg-recalled[data-message-id="${messageId}"]`)
         .click({ button: 'right' });
       const menuItem = member.page.locator('#message-action-reedit');
       await expect(menuItem).toBeVisible();
@@ -900,7 +944,7 @@ test.describe.serial('群主消息管理前端', () => {
 
       // 同一房间的其他成员能看到墓碑，但没有本地原文入口。
       await expect(
-        owner.page.locator(`li.msg-system.msg-recalled[data-message-id="${messageId}"]`),
+        owner.page.locator(`div.msg-system.msg-recalled[data-message-id="${messageId}"]`),
       ).toBeVisible();
       await expect(owner.page.locator(`[data-reedit-message-id="${messageId}"]`)).toHaveCount(0);
 
@@ -949,7 +993,7 @@ test.describe.serial('群主消息管理前端', () => {
 
       // 右键菜单走同一确认与替换逻辑。
       await page
-        .locator(`li.msg-system.msg-recalled[data-message-id="${messageId}"]`)
+        .locator(`div.msg-system.msg-recalled[data-message-id="${messageId}"]`)
         .click({ button: 'right' });
       await page.locator('#message-action-reedit').click();
       await expect(page.locator('#confirm-dialog-message')).toHaveText(
@@ -1041,7 +1085,7 @@ test.describe.serial('群主消息管理前端', () => {
 
       await recallOwnMessage(page, messageId);
       await expect(
-        page.locator(`li.msg-system.msg-recalled[data-message-id="${messageId}"]`),
+        page.locator(`div.msg-system.msg-recalled[data-message-id="${messageId}"]`),
       ).toBeVisible();
       await expect(page.locator(`[data-reedit-message-id="${messageId}"]`)).toHaveCount(0);
       expect(await recalledDraftIds(page, room.actorOwner)).toEqual([]);
@@ -1071,7 +1115,7 @@ test.describe.serial('群主消息管理前端', () => {
 
       await recallOwnMessage(page, messageId);
       await expect(
-        page.locator(`li.msg-system.msg-recalled[data-message-id="${messageId}"]`),
+        page.locator(`div.msg-system.msg-recalled[data-message-id="${messageId}"]`),
       ).toBeVisible();
       await expect(page.locator(`[data-reedit-message-id="${messageId}"]`)).toHaveCount(0);
       expect(await recalledDraftIds(page, room.actorMember)).toEqual([]);
@@ -1089,7 +1133,7 @@ test.describe.serial('群主消息管理前端', () => {
     try {
       await recallOwnMessage(page, messageId);
       await expect(
-        page.locator(`li.msg-system.msg-recalled[data-message-id="${messageId}"]`),
+        page.locator(`div.msg-system.msg-recalled[data-message-id="${messageId}"]`),
       ).toBeVisible();
       await expect(page.locator(`[data-reedit-message-id="${messageId}"]`)).toHaveCount(0);
       expect(await recalledDraftIds(page, room.actorMember)).toEqual([]);

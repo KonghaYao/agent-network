@@ -1111,7 +1111,8 @@ test.describe.serial('SPA 组件库与状态管理', () => {
 
   test('危险色降饱和，消息操作按钮默认弱化', async ({ page }) => {
     await page.goto(`${base}/c/${roomId}`);
-    const trigger = page.locator('.message-actions-trigger').first();
+    // 虚拟列表 first() 可能位于视口外 overscan；取底部窗口内可见消息。
+    const trigger = page.locator('#messages .msg').last().locator('.message-actions-trigger');
     await expect(trigger).toBeVisible();
 
     expect(await semanticColor(page, '--wx-danger')).toBe('rgb(201, 74, 79)');

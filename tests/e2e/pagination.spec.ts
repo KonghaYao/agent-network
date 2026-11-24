@@ -197,7 +197,15 @@ async function messageIds(page: Page): Promise<string[]> {
   );
 }
 
-async function messageCount(page: Page): Promise<number> {
+/** 已加载条数来自时间线数据窗口，不受虚拟列表只挂载可见项影响。 */
+async function loadedMessageCount(page: Page): Promise<number> {
+  return page.$eval('#messages', (node) =>
+    Number(node.getAttribute('data-loaded-message-count') ?? '0'),
+  );
+}
+
+/** 可见窗口条数 = 当前真正挂载的消息 DOM；虚拟路径下应远小于已加载条数。 */
+async function visibleMessageCount(page: Page): Promise<number> {
   return (await messageIds(page)).length;
 }
 
@@ -247,6 +255,10 @@ async function firstVisibleAnchor(page: Page): Promise<VisibleAnchor | null> {
 
 async function setScrollTop(page: Page, top: number): Promise<void> {
   await page.$eval('#messages', (element, value) => {
+    // 模拟真实用户滚动，确保虚拟时间线取消“贴底”而不是被自动拉回底部。
+    element.dispatchEvent(
+      new WheelEvent('wheel', { deltaY: value < element.scrollTop ? -120 : 120, bubbles: true }),
+    );
     element.scrollTop = value;
   }, top);
 }
@@ -255,14 +267,31 @@ async function scrollRange(page: Page): Promise<number> {
   return page.$eval('#messages', (element) => element.scrollHeight - element.clientHeight);
 }
 
-async function openRoom(page: Page, roomId: string): Promise<void> {
-  const origin = await baseUrl();
-  await page.goto(`${origin}/c/${roomId}`);
-  await expect(page.locator('body[data-spa-route="room"]')).toBeVisible();
-  await expect(page.locator('#messages .msg[data-message-id]')).toHaveCount(
-    LIMITS.historyPageDefault,
-    { timeout: 20_000 },
+async function bottomGap(page: Page): Promise<number> {
+  return page.$eval(
+    '#messages',
+    (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
   );
+}
+
+async function openRoom(page: Page, roomId: string, mode: 'virtual' | 'dom' = 'virtual'): Promise<void> {
+  const origin = await baseUrl();
+  const query = mode === 'dom' ? '?timeline=dom' : '';
+  await page.goto(`${origin}/c/${roomId}${query}`);
+  await expect(page.locator('body[data-spa-route="room"]')).toBeVisible();
+  await expect(page.locator('#messages')).toHaveAttribute('data-timeline-mode', mode, {
+    timeout: 20_000,
+  });
+  await expect.poll(() => loadedMessageCount(page), { timeout: 20_000 }).toBe(
+    LIMITS.historyPageDefault,
+  );
+  const visible = await visibleMessageCount(page);
+  expect(visible).toBeGreaterThan(0);
+  if (mode === 'virtual') {
+    expect(visible).toBeLessThanOrEqual(LIMITS.historyPageDefault);
+  } else {
+    expect(visible).toBe(LIMITS.historyPageDefault);
+  }
 }
 
 function historyTool(route: Route): HistoryCall | null {
@@ -377,7 +406,7 @@ test.describe('SPA pagination races', () => {
 
     // 2) 刷新挂起期间把 older 加载到 100 条。
     await setScrollTop(page, 0);
-    await expect.poll(() => messageCount(page), { timeout: 20_000 }).toBe(100);
+    await expect.poll(() => loadedMessageCount(page), { timeout: 20_000 }).toBe(100);
     await page.waitForTimeout(150);
     const anchorBefore = await firstVisibleAnchor(page);
     expect(anchorBefore).not.toBeNull();
@@ -385,7 +414,7 @@ test.describe('SPA pagination races', () => {
     // 3) 释放刷新：必须并入当时的缓存，而不是覆盖。
     releaseRefresh!();
     await expect.poll(() => refreshFinished, { timeout: 10_000 }).toBe(true);
-    await expect.poll(() => messageCount(page), { timeout: 10_000 }).toBe(101);
+    await expect.poll(() => loadedMessageCount(page), { timeout: 10_000 }).toBe(101);
 
     const mergedIds = await messageIds(page);
     expect(new Set(mergedIds).size).toBe(mergedIds.length);
@@ -397,33 +426,36 @@ test.describe('SPA pagination races', () => {
     await expect(page.locator('#older')).toBeEnabled();
     await expect(page.locator('#older-status')).toHaveText('');
     await setScrollTop(page, 0);
-    await expect.poll(() => messageCount(page), { timeout: 20_000 }).toBe(151);
+    await expect.poll(() => loadedMessageCount(page), { timeout: 20_000 }).toBe(151);
     const cursors = (await cursorCalls(page)).map((call) => call.cursor);
     expect(cursors).toEqual([firstCursor, firstNextCursor]);
     const finalIds = await messageIds(page);
     expect(new Set(finalIds).size).toBe(finalIds.length);
   });
 
-  test('auto-loads older only at 10% of the scrollable range', async ({ page }) => {
+  test('auto-loads older only at the top of the loaded window', async ({ page }) => {
     await openRoom(page, mainRoomId);
     const range = await scrollRange(page);
     expect(range).toBeGreaterThan(0);
-    const ratio = LIMITS.webOlderAutoTopRatio;
 
-    for (const percent of [20, 50, 80]) {
+    for (const percent of [40, 60, 80]) {
       await setScrollTop(page, Math.floor(range * (percent / 100)));
       await page.waitForTimeout(300);
       expect(await cursorCalls(page), `${percent}% 不应触发加载更早`).toHaveLength(0);
     }
 
-    await setScrollTop(page, Math.floor(range * ratio));
+    // 虚拟路径以 startReached（顶部/overscan 边界）触发；DOM 路径仍是 10% 阈值。
+    const mode = await page.locator('#messages').getAttribute('data-timeline-mode');
+    const triggerTop =
+      mode === 'dom' ? Math.floor(range * LIMITS.webOlderAutoTopRatio) : 0;
+    await setScrollTop(page, triggerTop);
     await expect
       .poll(async () => (await cursorCalls(page)).length, { timeout: 5_000 })
       .toBe(1);
-    await expect.poll(() => messageCount(page), { timeout: 20_000 }).toBeGreaterThan(
+    await expect.poll(() => loadedMessageCount(page), { timeout: 20_000 }).toBeGreaterThan(
       LIMITS.historyPageDefault,
     );
-    // 加载后的锚点恢复不应落回阈值内，短列表也不能重复请求。
+    // 加载后的锚点恢复不应落回触发区，短列表也不能重复请求。
     await page.waitForTimeout(800);
     expect((await cursorCalls(page)).length).toBe(1);
     expect(await scrollRange(page)).toBeGreaterThan(0);
@@ -465,16 +497,16 @@ test.describe('SPA pagination races', () => {
       invoke: [],
       body: '分页反方向并发消息',
     });
-    await expect.poll(() => messageCount(page), { timeout: 20_000 }).toBe(51);
+    await expect.poll(() => loadedMessageCount(page), { timeout: 20_000 }).toBe(51);
 
     releaseOlder!();
-    await expect.poll(() => messageCount(page), { timeout: 20_000 }).toBe(101);
+    await expect.poll(() => loadedMessageCount(page), { timeout: 20_000 }).toBe(101);
     const mergedIds = await messageIds(page);
     expect(new Set(mergedIds).size).toBe(mergedIds.length);
     await expect(page.locator('#older')).toBeEnabled();
 
     await setScrollTop(page, 0);
-    await expect.poll(() => messageCount(page), { timeout: 20_000 }).toBeGreaterThan(101);
+    await expect.poll(() => loadedMessageCount(page), { timeout: 20_000 }).toBeGreaterThan(101);
     const cursors = (await cursorCalls(page)).map((call) => call.cursor);
     expect(cursors[0]).toBe(firstCursor);
     expect(cursors[1]).toBe(firstNextCursor);
@@ -528,7 +560,7 @@ test.describe('SPA pagination races', () => {
     });
 
     await setScrollTop(page, 0);
-    await expect.poll(() => messageCount(page), { timeout: 20_000 }).toBe(100);
+    await expect.poll(() => loadedMessageCount(page), { timeout: 20_000 }).toBe(100);
     expect((await cursorCalls(page)).length).toBe(1);
     await expect(page.locator('#older')).toBeDisabled();
     await expect(page.locator('#older-status')).toHaveText('已经到最早的消息了');
@@ -540,6 +572,38 @@ test.describe('SPA pagination races', () => {
     expect((await cursorCalls(page)).length).toBe(1);
     const ids = await messageIds(page);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  test.describe('dom rollback', () => {
+    test('renders the full first page from ?timeline=dom', async ({ page }) => {
+      await openRoom(page, mainRoomId, 'dom');
+      expect(await visibleMessageCount(page)).toBe(LIMITS.historyPageDefault);
+      expect(await loadedMessageCount(page)).toBe(LIMITS.historyPageDefault);
+    });
+
+    test('keeps the prepend anchor when loading older in DOM mode', async ({ page }) => {
+      await openRoom(page, mainRoomId, 'dom');
+      const trigger = Math.floor((await scrollRange(page)) * LIMITS.webOlderAutoTopRatio);
+      await setScrollTop(page, trigger);
+      const before = await firstVisibleAnchor(page);
+      expect(before).not.toBeNull();
+
+      await expect.poll(() => loadedMessageCount(page), { timeout: 20_000 }).toBe(100);
+      await page.waitForTimeout(150);
+      const after = await firstVisibleAnchor(page);
+      expect(after?.id).toBe(before?.id);
+      expect(Math.abs((after?.top ?? 0) - (before?.top ?? 0))).toBeLessThanOrEqual(4);
+      expect(await visibleMessageCount(page)).toBe(100);
+    });
+
+    test('returns to the latest message in DOM mode', async ({ page }) => {
+      await openRoom(page, mainRoomId, 'dom');
+      await setScrollTop(page, 0);
+      await expect(page.locator('#jump-latest')).toBeVisible();
+      await page.locator('#jump-latest').click();
+      await expect.poll(() => bottomGap(page), { timeout: 10_000 }).toBeLessThanOrEqual(2);
+      await expect(page.locator('#jump-latest')).toBeHidden();
+    });
   });
 
   test.describe('short list', () => {
@@ -554,7 +618,7 @@ test.describe('SPA pagination races', () => {
       expect(await cursorCalls(page)).toHaveLength(0);
 
       await page.evaluate(`document.getElementById('older').click()`);
-      await expect.poll(() => messageCount(page), { timeout: 20_000 }).toBe(51);
+      await expect.poll(() => loadedMessageCount(page), { timeout: 20_000 }).toBe(51);
       const loaded = await messageIds(page);
       expect(new Set(loaded).size).toBe(loaded.length);
 

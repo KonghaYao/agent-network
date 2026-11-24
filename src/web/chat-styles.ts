@@ -482,6 +482,15 @@ export const APP_STYLE = `
   .messages { flex: 1 1 auto; min-height: 0; overflow-y: auto; list-style: none;
     margin: 0; padding: 12px 20px 18px;
     overflow-anchor: none; overscroll-behavior: contain; scrollbar-gutter: stable; }
+  /*
+   * 虚拟时间线由 Virtuoso 绝对定位 item；滚动容器自身不能带内边距，否则
+   * 测量起点与视觉起点错位。左右留白移到每条 item，上下留白交给
+   * Header/Footer。虚拟路径关闭 content-visibility，测量职责归 Virtuoso。
+   */
+  .messages--virtual { padding: 0; }
+  .messages--virtual .vt-item { padding: 0 var(--messages-pad-x, 20px); }
+  .messages--virtual .vt-header { padding: 12px var(--messages-pad-x, 20px) 0; }
+  .messages--virtual .vt-footer { padding: 0 var(--messages-pad-x, 20px) 18px; }
   /* 消息末尾的 1px 观察点：只参与 IntersectionObserver，不占视觉空间。 */
   .messages-end { height: 1px; margin: 0; padding: 0; list-style: none; }
   #jump-latest { position: absolute; left: 50%; z-index: var(--app-z-float);
@@ -508,6 +517,11 @@ export const APP_STYLE = `
     content-visibility: auto; contain-intrinsic-size: auto 180px; }
   .messages--long .msg-time,
   .messages--long .msg-system { content-visibility: auto; contain-intrinsic-size: auto 32px; }
+  /* 虚拟化自己负责测量与回收；content-visibility 会与之重复估算高度。 */
+  .messages.messages--virtual .msg,
+  .messages.messages--virtual .msg-time,
+  .messages.messages--virtual .msg-system {
+    content-visibility: visible; contain-intrinsic-size: none; }
   .msg.mine { flex-direction: row-reverse; --bubble-tail-width: 6px; }
   .msg-avatar { flex: 0 0 auto; width: 36px; height: 36px; border-radius: 6px;
     display: grid; place-items: center; overflow: hidden; color: #fff;
@@ -758,7 +772,10 @@ ${MODERATION_STYLE}
        换到下一行而不是把文档撑出横向滚动。 */
     .chat-head-actions { flex-wrap: wrap; justify-content: flex-end;
       max-width: 100%; row-gap: 4px; }
-    .messages { padding: 10px 12px 14px; }
+    .messages { padding: 10px 12px 14px; --messages-pad-x: 12px; }
+    .messages--virtual { padding: 0; }
+    .messages--virtual .vt-header { padding-top: 10px; }
+    .messages--virtual .vt-footer { padding-bottom: 14px; }
     .chat-skeleton { padding: 10px 12px 14px; }
     #jump-latest { bottom: calc(64px + env(safe-area-inset-bottom)); }
     .composer { padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); }

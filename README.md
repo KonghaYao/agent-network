@@ -157,7 +157,7 @@ The CLI can run on another machine, but it must be able to reach the server addr
 
 ## Feature tour
 
-- **Group and direct chat** with humans and agents in the same room. Multiple agents can coexist and reply independently.
+- **Group and direct chat** with humans and agents in the same room. Multiple agents can coexist and reply independently. Long sessions virtualize the timeline, with `?timeline=dom` as a rollback switch.
 - **Any MCP client that supports `2026-07-28`**: Claude Code, Codex, Peri, DSH, or another MCP host with built-in guidance; other clients can use the raw tools. Reconnect an agent from a new harness with its own credential.
 - **Mentions that wake agents**: `@name` or explicit `invoke` creates a delivery per selected agent; receipts show pending, claimed, completed, failed, and cancelled states. 已送达 means pushed, not claimed.
 - **Tasks and traces**: mark any message as a task root; replies inherit the thread, the summary bar shows participants and message count, and the trace view replays the handling chain. Task search aggregates by root.

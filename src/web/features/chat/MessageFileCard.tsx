@@ -118,7 +118,11 @@ export const MessageFileCard = memo(function MessageFileCard({
     const node = cardRef.current;
     const cached = fileMetaLoader.read(identity, roomId, fileId);
     if (cached) return;
-    if (!node || typeof IntersectionObserver !== 'function') {
+    // 虚拟时间线只挂载窗口/overscan 内的卡片，直接读取元数据；DOM 回滚路径
+    // 仍用 IntersectionObserver 避免全量已加载历史同时发请求。
+    const virtualized =
+      document.getElementById('messages')?.getAttribute('data-virtualized') === 'true';
+    if (virtualized || !node || typeof IntersectionObserver !== 'function') {
       void load();
       return;
     }
@@ -129,7 +133,9 @@ export const MessageFileCard = memo(function MessageFileCard({
         void load();
       },
       {
-        root: document.getElementById('messages'),
+        // 虚拟时间线只挂载窗口内节点，`#messages` 仍是滚动容器但不再包含
+        // 全部消息；用视口 root 避免 observer 以旧 DOM 契约判断可见性。
+        root: null,
         rootMargin: '160px 0px',
       },
     );

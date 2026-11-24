@@ -26,6 +26,7 @@ import { ActorAvatar } from '../avatar/ActorAvatar';
 import { HumanBody } from './MessageBody';
 import { MarkdownIsland } from './MarkdownIsland';
 import { TaskSummaryBar } from '../tasks/TaskSummaryBar';
+import { scrollToMessage } from './scroll-to-message';
 
 /**
  * 文件卡片只在消息正文含同源 `/f/` 链接时才会第一次渲染，因此把元数据、
@@ -96,6 +97,52 @@ function enqueueAutoExpand(task: (release: () => void) => void): void {
   drainAutoExpandQueue();
 }
 
+interface CachedExpandedBody {
+  text: string;
+  expanded: boolean;
+  bytes: number;
+}
+
+/**
+ * 虚拟时间线会卸载窗口外的消息；全文与展开状态按 message_id 缓存，
+ * 回滚到可见位置时不再重新请求，也不会把已展开正文重新藏起来。
+ * 上限由 LIMITS.webExpandedBodyCache* 控制，超出按插入顺序淘汰。
+ */
+const expandedBodyCache = new Map<string, CachedExpandedBody>();
+let expandedBodyBytes = 0;
+
+function readExpandedBody(messageId: string): CachedExpandedBody | null {
+  return expandedBodyCache.get(messageId) ?? null;
+}
+
+function rememberExpandedBody(messageId: string, text: string, expanded: boolean): void {
+  const previous = expandedBodyCache.get(messageId);
+  if (previous) {
+    expandedBodyBytes -= previous.bytes;
+    expandedBodyCache.delete(messageId);
+  }
+  const bytes = new TextEncoder().encode(text).length;
+  if (bytes > LIMITS.webExpandedBodyCacheBytes) return;
+  while (
+    expandedBodyCache.size > 0 &&
+    (expandedBodyBytes + bytes > LIMITS.webExpandedBodyCacheBytes ||
+      expandedBodyCache.size >= LIMITS.webExpandedBodyCacheMax)
+  ) {
+    const oldest = expandedBodyCache.keys().next().value as string | undefined;
+    if (!oldest) break;
+    const entry = expandedBodyCache.get(oldest);
+    expandedBodyCache.delete(oldest);
+    if (entry) expandedBodyBytes -= entry.bytes;
+  }
+  expandedBodyCache.set(messageId, { text, expanded, bytes });
+  expandedBodyBytes += bytes;
+}
+
+function rememberExpandedState(messageId: string, expanded: boolean): void {
+  const entry = expandedBodyCache.get(messageId);
+  if (entry) entry.expanded = expanded;
+}
+
 function Receipt({
   item,
   members,
@@ -122,12 +169,13 @@ function Receipt({
       now - last >= LIMITS.claimedStaleMs,
   );
   return (
-    <li
+    <div
       className={`msg-system msg-receipt${stale ? ' stale' : ''}`}
       data-receipt-for={item.message_id}
+      role="note"
     >
       <span>{receiptText(item, members, identityId, now)}</span>
-    </li>
+    </div>
   );
 }
 
@@ -154,11 +202,7 @@ function ReplyReference({
     : fallback || '引用消息 · 查看上下文';
   const showTarget = () => {
     if (!item.reply_to) return;
-    for (const node of document.querySelectorAll<HTMLElement>('[data-message-id]')) {
-      if (node.dataset.messageId !== item.reply_to) continue;
-      node.scrollIntoView({ block: 'center' });
-      return;
-    }
+    if (scrollToMessage(item.reply_to)) return;
     if (fallback) return;
     void readFullMessage(item.reply_to)
       .then((text) => setFallback(`引用消息：${text.slice(0, 120)}`))
@@ -448,12 +492,13 @@ export const ChatMessage = memo(function ChatMessage({
   moderationBusy = false,
   onForward,
 }: ChatMessageProps) {
-  const [fullBody, setFullBody] = useState<string | null>(null);
+  const cachedBody = readExpandedBody(item.message_id);
+  const [fullBody, setFullBody] = useState<string | null>(cachedBody?.text ?? null);
   const [loadingFull, setLoadingFull] = useState(false);
   const [autoPending, setAutoPending] = useState(false);
-  const [longExpanded, setLongExpanded] = useState(false);
-  const rowRef = useRef<HTMLLIElement>(null);
-  const fullBodyRef = useRef<string | null>(null);
+  const [longExpanded, setLongExpanded] = useState(cachedBody?.expanded ?? false);
+  const rowRef = useRef<HTMLDivElement>(null);
+  const fullBodyRef = useRef<string | null>(cachedBody?.text ?? null);
   const loadingRef = useRef(false);
   const visibleRef = useRef(false);
   const autoRequestedRef = useRef(false);
@@ -484,6 +529,7 @@ export const ChatMessage = memo(function ChatMessage({
     try {
       const text = await readFullMessage(item.message_id);
       fullBodyRef.current = text;
+      rememberExpandedBody(item.message_id, text, true);
       setFullBody(text);
       // 读取全文就是用户显式展开：直接显示完整正文与「收起」。
       setLongExpanded(true);
@@ -521,6 +567,7 @@ export const ChatMessage = memo(function ChatMessage({
               const text = await readFullMessage(item.message_id, undefined, controller.signal);
               if (cancelled) return;
               fullBodyRef.current = text;
+              rememberExpandedBody(item.message_id, text, true);
               setFullBody(text);
               setLongExpanded(true);
             } catch {
@@ -555,7 +602,11 @@ export const ChatMessage = memo(function ChatMessage({
 
   if (item.body_bytes === 0) {
     const tombstone = (
-      <li className="msg-system msg-recalled" data-message-id={item.message_id}>
+      <div
+        className="msg-system msg-recalled"
+        data-message-id={item.message_id}
+        role="listitem"
+      >
         <span>此消息已撤回</span>
         {reeditBody ? (
           <Button
@@ -568,7 +619,7 @@ export const ChatMessage = memo(function ChatMessage({
             重新编辑
           </Button>
         ) : null}
-      </li>
+      </div>
     );
     if (!reeditBody) return tombstone;
     // 右键菜单只在本人且有本地原文时出现；与行内按钮共用同一动作。
@@ -607,7 +658,7 @@ export const ChatMessage = memo(function ChatMessage({
         onForward={onForward}
         memoryTarget={memoryTarget}
       >
-        <li
+        <div
           className={`msg${mine ? ' mine has-receipt' : ''}${searchActive ? ' search-active' : ''}${searchFlash ? ' search-flash' : ''}`}
           data-task-message={item.task_root_id ? 'true' : undefined}
           data-message-id={item.message_id}
@@ -615,6 +666,7 @@ export const ChatMessage = memo(function ChatMessage({
           data-sender-kind={agent ? 'agent' : 'human'}
           data-message-preview={item.preview}
           ref={rowRef}
+          role="listitem"
         >
           <ActorAvatar
             className="msg-avatar"
@@ -686,7 +738,13 @@ export const ChatMessage = memo(function ChatMessage({
                 type="button"
                 className="expand"
                 aria-expanded={longExpanded}
-                onClick={() => setLongExpanded((value) => !value)}
+                onClick={() =>
+                  setLongExpanded((value) => {
+                    const next = !value;
+                    rememberExpandedState(item.message_id, next);
+                    return next;
+                  })
+                }
               >
                 {longExpanded ? '收起' : '展开全文'}
               </Button>
@@ -709,7 +767,7 @@ export const ChatMessage = memo(function ChatMessage({
               />
             ) : null}
           </div>
-        </li>
+        </div>
       </MessageContextMenu>
       {mine ? <Receipt item={item} members={members} identityId={identityId} /> : null}
     </>

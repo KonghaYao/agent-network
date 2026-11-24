@@ -469,6 +469,13 @@ export const LIMITS = {
   webOutboxCommittedMs: 60_000,
   /** 网页消息区距底不超过该值时视为“跟随底部”。 */
   webScrollStickyPx: 80,
+  /**
+   * 主时间线默认虚拟化（react-virtuoso）。
+   * 运行时 `?timeline=dom` 可覆盖；置为 false 是发版级回滚开关。
+   */
+  webTimelineVirtual: true,
+  /** 虚拟时间线自动加载更早的最小间隔（毫秒）；一次手势最多一页。 */
+  webTimelineLoadCooldownMs: 400,
   /** 滚轮/触摸上翻意图的最小位移（像素）。 */
   webScrollIntentPx: 6,
   /** 用户上翻后的短窗口：期间异步高度与 scroll 事件都不得自动回底（毫秒）。 */

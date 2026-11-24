@@ -286,6 +286,13 @@ async function chatShiftSum(page: Page): Promise<number> {
   );
 }
 
+/** 已加载消息数不受虚拟列表只挂载可见项影响。 */
+async function loadedMessageCount(page: Page): Promise<number> {
+  return page.$eval('#messages', (node) =>
+    Number(node.getAttribute('data-loaded-message-count') ?? '0'),
+  );
+}
+
 async function chatHeadHeight(page: Page): Promise<number> {
   return page.locator('.chat-head').evaluate((element) => element.getBoundingClientRect().height);
 }
@@ -815,7 +822,7 @@ test.describe('SPA Chat', () => {
     await expect(page.locator('#composer')).toBeVisible();
     // 静态 composer 在首载时即可见，历史快照要等真实输入区启用后再计数。
     await expect(page.locator('#body')).toBeEnabled();
-    const before = await page.locator('#messages .msg.mine').count();
+    const before = await loadedMessageCount(page);
 
     await page.locator('#body').click();
     await page.evaluate(() => {
@@ -826,7 +833,10 @@ test.describe('SPA Chat', () => {
     await page.keyboard.type('组合输入');
     await page.keyboard.press('Enter');
     await page.waitForTimeout(250);
-    expect(await page.locator('#messages .msg.mine').count()).toBe(before);
+    expect(
+      await page.locator('#messages .msg.mine').filter({ hasText: '组合输入' }).count(),
+    ).toBe(0);
+    expect(await loadedMessageCount(page)).toBe(before);
     await expect(page.locator('#body')).toHaveValue(/组合输入/);
 
     // 组合结束后的 80ms 守卫：合成 keydown 与 compositionend 在同一任务内。
@@ -844,7 +854,10 @@ test.describe('SPA Chat', () => {
       );
     });
     await page.waitForTimeout(150);
-    expect(await page.locator('#messages .msg.mine').count()).toBe(before);
+    expect(
+      await page.locator('#messages .msg.mine').filter({ hasText: '组合输入' }).count(),
+    ).toBe(0);
+    expect(await loadedMessageCount(page)).toBe(before);
 
     await page.press('#body', 'Shift+Enter');
     expect(await page.locator('#body').inputValue()).toContain('\n');
@@ -949,10 +962,10 @@ test.describe('SPA Chat', () => {
     await page.goto(`${base}/c/${roomId}`);
     await expect(page.locator('#composer')).toBeVisible();
     await expect(page.locator('#history-pager')).toBeVisible();
-    const firstPage = await page.locator('#messages .msg').count();
+    const firstPage = await loadedMessageCount(page);
     expect(firstPage).toBeGreaterThanOrEqual(50);
     await page.locator('#older').click();
-    await expect.poll(() => page.locator('#messages .msg').count()).toBeGreaterThan(firstPage);
+    await expect.poll(() => loadedMessageCount(page)).toBeGreaterThan(firstPage);
     await expect(page.locator('#older-status')).toContainText('已经到最早的消息了');
   });
 

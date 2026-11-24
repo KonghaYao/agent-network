@@ -524,9 +524,28 @@ test.describe('会话历史搜索 UI', () => {
     await page.locator('#search-return-latest').click();
     await expect(page.locator('#search-navigation-bar')).toHaveCount(0);
     await expect(page.locator('#messages')).toHaveAttribute('data-search-anchored', 'false');
-    await expect(
-      page.locator('#messages [data-message-id]').filter({ hasText: token('livetarget') }),
-    ).toBeVisible();
+    if ((await page.locator('#messages').getAttribute('data-timeline-mode')) === 'dom') {
+      await expect(
+        page.locator('#messages [data-message-id]').filter({ hasText: token('livetarget') }),
+      ).toBeVisible();
+    } else {
+      // 虚拟路径只挂载底部窗口；返回最新应贴底，旧目标在已加载数据中但不一定挂载。
+      await expect
+        .poll(() =>
+          page.$eval(
+            '#messages',
+            (node) => node.scrollHeight - node.scrollTop - node.clientHeight,
+          ),
+        )
+        .toBeLessThanOrEqual(2);
+      await expect
+        .poll(() =>
+          page.$eval('#messages', (node) =>
+            Number(node.getAttribute('data-loaded-message-count') ?? '0'),
+          ),
+        )
+        .toBeGreaterThanOrEqual(50);
+    }
 
     // 订阅仍在：返回最新后新消息应实时出现。
     const live = token('afterreturn');
@@ -656,5 +675,32 @@ test.describe('会话历史搜索 UI', () => {
       .first()
       .evaluate((node) => getComputedStyle(node).backgroundColor);
     expect(markBackground).toMatch(/^rgb\(/u);
+  });
+
+  test('DOM 回滚：未渲染目标走锚点窗口并可返回最新', async ({ page }) => {
+    await page.goto(`${base}/c/${directRoomId}?timeline=dom`);
+    await expect(page.locator('#messages')).toHaveAttribute('data-timeline-mode', 'dom');
+    await expect(page.locator('#messages .msg[data-message-id]')).toHaveCount(50, {
+      timeout: 20_000,
+    });
+
+    await openSearch(page);
+    await searchNow(page, token('oldtarget'));
+    await expect(page.locator('#message-search-results .message-search-result')).toHaveCount(1, {
+      timeout: 10_000,
+    });
+    await page.locator('#message-search-results [data-search-locate]').click();
+    await expect(page.locator('#search-navigation-bar')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('#messages')).toHaveAttribute('data-search-anchored', 'true');
+    await expect(
+      page.locator('#messages [data-message-id]').filter({ hasText: token('oldtarget') }),
+    ).toBeVisible();
+
+    await page.locator('#search-return-latest').click();
+    await expect(page.locator('#search-navigation-bar')).toHaveCount(0);
+    await expect(page.locator('#messages')).toHaveAttribute('data-search-anchored', 'false');
+    await expect(
+      page.locator('#messages [data-message-id]').filter({ hasText: token('livetarget') }),
+    ).toBeVisible();
   });
 });

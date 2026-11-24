@@ -514,3 +514,14 @@ Playwright：
 ## 10. 一句话结论
 
 **先把“加载更早”的滚动补偿从“一次性的 `scrollHeight` 差值”改成“元素锚定的连续幂等校正”，并给图片/Markdown 行预留高度；虚拟化是下一步的选项，而不是第一步的解。**
+
+---
+
+## 11. 实施记录（C）
+
+- **依赖**：`react-virtuoso@4.18.24`（MIT，0 runtime deps）。主时间线默认 `TimelineVirtual`；`TimelineDom` 保留一个迭代。
+- **包体**：ChatPage 动态 chunk 从 66.00 kB gzip / 197.99 kB raw 增至 90.24 kB gzip / 267.70 kB raw（+24.24 kB gzip / +69.71 kB raw）。入口仍为 749,212 B（gzip 240.29 kB），未受影响。
+- **5k 实测**（`E2E_VIRTUAL_MESSAGES=5000`，本机 Chromium）：已加载 5,000 条时 DOM 节点 175 个、挂载消息 15 条；帧间隔 p50 16.7 ms、p95 16.8 ms、max 16.8 ms、>50 ms 长帧 0。加载全部 5,000 条耗时 12.8 s（含 100 次分页）。
+- **prepend 漂移**：加载更早时锚点瞬时最大位移 8 px，校正后 0 px，最终锚点回到 ≤2 px；`missed=false`。
+- **回滚开关**：URL `?timeline=dom` 优先于 `LIMITS.webTimelineVirtual`；置 `false` 需重新构建，属于发版级回滚。DOM 路径保留 `#messages` 全量渲染与 `scrollHeight` 差值补偿，并有独立 e2e 覆盖。
+- **已知边界**：浏览器 `Ctrl+F`、跨消息选中复制、打印与无障碍树只覆盖当前挂载窗口；帧率数据来自本机，低端 Android 需真机复测。

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, type Dispatch, type SetStateAction } fr
 import { navigate } from '../../app/router';
 import { useMessageSearchNavigation } from '../../hooks/useMessageSearchNavigation';
 import type { HistoryMessage } from '../../lib/chat';
+import { isMessageLoaded } from '../chat/scroll-to-message';
 import type {
   LocateResult,
   SearchNavigationTarget,
@@ -13,6 +14,11 @@ function renderedMessage(messageId: string): HTMLElement | null {
     if (node.dataset.messageId === messageId) return node;
   }
   return null;
+}
+
+/** 已加载但被虚拟化卸载的消息也能直接跳转，不必重新打开 anchor 窗口。 */
+function messageAvailable(messageId: string): boolean {
+  return renderedMessage(messageId) !== null || isMessageLoaded(messageId);
 }
 
 function dialogOpen(): boolean {
@@ -67,8 +73,8 @@ export function useChatSearchNavigation({
         navigate(`/c/${encodeURIComponent(target.room_id)}`);
         return { ok: true };
       }
-      // 当前会话且消息已渲染：直接滚动闪烁；全局搜索强制使用锚点窗口。
-      if (target.scope !== 'all' && renderedMessage(target.message_id)) {
+      // 当前会话且消息已加载/已渲染：直接滚动闪烁；全局搜索强制使用锚点窗口。
+      if (target.scope !== 'all' && messageAvailable(target.message_id)) {
         navigation.flashMessage(target);
         setSearchOpen(false);
         return { ok: true };

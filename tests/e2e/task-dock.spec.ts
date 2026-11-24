@@ -247,6 +247,37 @@ async function createTask(
   return messageId;
 }
 
+/**
+ * 虚拟时间线只挂载窗口内消息；向上滚动直到带 task bar 的根消息进入 DOM，
+ * 再把容器中心对齐到该消息（不对 item 调 scrollIntoView）。
+ */
+async function revealTaskBar(page: Page, rootId: string): Promise<Locator> {
+  const bar = page.locator(`.task-bar[data-task-root="${rootId}"]`);
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    if ((await bar.count()) > 0) {
+      await page.evaluate((id) => {
+        const list = document.getElementById('messages');
+        const node = document.querySelector(`.task-bar[data-task-root="${id}"]`);
+        if (!list || !node) return;
+        const rect = node.getBoundingClientRect();
+        const listRect = list.getBoundingClientRect();
+        list.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true }));
+        list.scrollTop += rect.top - listRect.top - listRect.height / 2 + rect.height / 2;
+      }, rootId);
+      await page.waitForTimeout(80);
+      if ((await bar.count()) > 0) return bar;
+    }
+    const scrollTop = await page.$eval('#messages', (node) => node.scrollTop);
+    if (scrollTop <= 0) break;
+    await page.$eval('#messages', (node) => {
+      node.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true }));
+      node.scrollTop = Math.max(0, node.scrollTop - 500);
+    });
+    await page.waitForTimeout(80);
+  }
+  return bar;
+}
+
 function itemLocator(page: Page, rootId: string) {
   return page.locator(`#task-dock .task-dock-item[data-task-root="${rootId}"]`);
 }
@@ -310,7 +341,7 @@ test.describe('浮动 Task dock', () => {
         await page.setViewportSize({ width, height: 844 });
         await page.emulateMedia({ colorScheme });
         await openRoom(page, base, fixture.owner.token, roomId);
-        const bar = page.locator(`.task-bar[data-task-root="${rootId}"]`);
+        const bar = await revealTaskBar(page, rootId);
         await expect(bar.locator('.task-bar-count')).toHaveText('3 消息');
         await expect(bar.getByText('3 消息', { exact: true })).toHaveCount(1);
         await expandDock(page);
@@ -352,7 +383,7 @@ test.describe('浮动 Task dock', () => {
           })).toBeGreaterThanOrEqual(44);
         }
         await expect(page.locator('#task-dock-count [data-lenso-slot="badge"]')).toHaveText('1');
-        const bar = page.locator(`.task-bar[data-task-root="${rootId}"]`);
+        const bar = await revealTaskBar(page, rootId);
         await expectNoHorizontalOverflow(bar);
         await bar.click();
         const trace = page.locator('#task-trace-drawer');
@@ -521,7 +552,7 @@ test.describe('浮动 Task dock', () => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.emulateMedia({ colorScheme: 'dark' });
     await openRoom(page, base, fixture.owner.token, fixture.roomId);
-    const bar = page.locator(`.task-bar[data-task-root="${rootId}"]`);
+    const bar = await revealTaskBar(page, rootId);
     const progress = page.locator('.msg-task-bar-slot [data-lenso-slot="progress-bar"]');
     const checkState = async (state: string, token: string) => {
       const badge = bar.locator(`[data-task-status="${state}"]`);
@@ -541,7 +572,8 @@ test.describe('浮动 Task dock', () => {
     const failedId = pending.items.find((item) => item.message_id === failedRoot)!.delivery_id;
     const failedClaim = await callTool<{ attempt: number; claim_id: string }>(base, fixture.agent.token, 'network_delivery_claim', { request_id: requestId('claim'), delivery_id: failedId });
     await callTool(base, fixture.agent.token, 'network_delivery_fail', { request_id: requestId('fail'), delivery_id: failedId, attempt: failedClaim.attempt, claim_id: failedClaim.claim_id, error: '验收失败状态' });
-    const failedBadge = page.locator(`.task-bar[data-task-root="${failedRoot}"] [data-task-status="failed"]`);
+    const failedBar = await revealTaskBar(page, failedRoot);
+    const failedBadge = failedBar.locator('[data-task-status="failed"]');
     await expect(failedBadge).toHaveCSS('color', await semanticColor(page, '--wx-danger-text', 'color'));
     await expect(failedBadge).toHaveCSS('background-color', await semanticColor(page, '--lenso-control-status-error-soft-fill'));
   });
@@ -793,7 +825,13 @@ test.describe('浮动 Task dock', () => {
     await openRoom(page, base, fixture.owner.token, fixture.roomId);
     await expect(page.locator('#task-dock-count')).toHaveText('18');
     const messages = page.locator('#messages');
-    await expect(page.locator('#messages .msg')).toHaveCount(18);
+    await expect
+      .poll(() =>
+        page.$eval('#messages', (node) =>
+          Number(node.getAttribute('data-loaded-message-count') ?? '0'),
+        ),
+      )
+      .toBe(18);
     // 等首屏 keepPinned 的 rAF 结束，避免它把列表重新拉回底部。
     await page.waitForTimeout(300);
     // 离开底部让「回到最新」出现，再展开 dock。

@@ -20,6 +20,7 @@ import { ChatHeader } from '../features/chat/ChatHeader';
 import { Composer, type ComposerReply, type ComposerRestoreDraft, type ComposerSendInput } from '../features/chat/Composer';
 import { PinnedMessagesBar } from '../features/chat/PinnedMessagesBar';
 import { Timeline } from '../features/chat/Timeline';
+import { scrollToMessage } from '../features/chat/scroll-to-message';
 import { AppSidebar } from '../features/layout/AppSidebar';
 import { FilesPaneFallback } from '../features/panels/FilesPaneFallback';
 import { LazyFilePreviewDialog } from '../features/panels/LazyFilePreviewDialog';
@@ -423,11 +424,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
       : null;
 
   const onJumpToMessage = useCallback((messageId: string) => {
-    for (const node of document.querySelectorAll<HTMLElement>('[data-message-id]')) {
-      if (node.dataset.messageId !== messageId) continue;
-      node.scrollIntoView({ block: 'center' });
-      return;
-    }
+    scrollToMessage(messageId);
   }, []);
 
   const onSend = useCallback(

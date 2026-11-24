@@ -18,8 +18,8 @@ export const MESSAGE_FILES_STYLE = `
   .msg-file.has-image { width: auto; flex: 1 1 150px; max-width: 240px; }
   .msg-file-thumb { flex: 1 0 100%; display: block; width: 100%; max-width: 100%;
     margin: 0; padding: 0; border: 0; border-radius: 8px; overflow: hidden;
-    background: var(--wx-search); cursor: zoom-in; }
-  .msg-file-thumb img { display: block; width: 100%; height: auto;
+    aspect-ratio: 4 / 3; background: var(--wx-search); cursor: zoom-in; }
+  .msg-file-thumb img { display: block; width: 100%; height: 100%;
     max-height: 220px; object-fit: cover; border-radius: 8px; }
   .msg-file-thumb:focus-visible { outline: 2px solid var(--wx-green); outline-offset: 2px; }
   .msg-file-kind { flex: 0 0 auto; width: 36px; height: 36px; border-radius: 8px;

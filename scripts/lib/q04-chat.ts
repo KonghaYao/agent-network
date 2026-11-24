@@ -134,7 +134,7 @@ export async function runChatAcceptance(state: Q04State, browser: Browser): Prom
     });
     await page.waitForFunction(
       `(() => {
-        const receipt = document.querySelector('#messages li.msg-receipt[data-receipt-for="${mentionMessage.message_id}"]');
+        const receipt = document.querySelector('#messages div.msg-receipt[data-receipt-for="${mentionMessage.message_id}"]');
         return Boolean(receipt && receipt.innerText.includes('已处理'));
       })()`,
     );

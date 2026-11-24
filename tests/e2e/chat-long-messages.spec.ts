@@ -147,11 +147,137 @@ function longBody(marker: string, size: number, tail: string): string {
  * 首屏其他消息的自动展开会改变列表高度，单次 scrollIntoView 可能正好落在
  * 布局变化之间；重试滚动与短断言可以覆盖这段时间，同时保留“可见即展开”的断言。
  */
-async function expandOnScroll(locator: Locator, tail: string): Promise<void> {
+async function centerMessage(page: Page, messageId: string): Promise<void> {
+  // 虚拟列表里直接对 item 调用 scrollIntoView 会与绝对定位/测量互相追逐；
+  // 始终只滚动真正的容器。用 querySelector 避免 locator 等待已卸载节点。
+  await page.evaluate((id) => {
+    const list = document.getElementById('messages');
+    const node = document.querySelector(`#messages .msg[data-message-id="${id}"]`);
+    if (!list || !node) return;
+    const rect = node.getBoundingClientRect();
+    const listRect = list.getBoundingClientRect();
+    const delta = rect.top - listRect.top - listRect.height / 2 + rect.height / 2;
+    list.dispatchEvent(new WheelEvent('wheel', { deltaY: delta < 0 ? -120 : 120, bubbles: true }));
+    list.scrollTop += delta;
+  }, messageId);
+}
+
+async function ensureVisible(
+  page: Page,
+  messageId: string,
+  order: string[],
+): Promise<Locator> {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const target = await revealMessage(page, messageId, order);
+    if ((await target.count()) === 0) {
+      await page.waitForTimeout(100);
+      continue;
+    }
+    try {
+      await centerMessage(page, messageId);
+    } catch {
+      await page.waitForTimeout(100);
+      continue;
+    }
+    await page.waitForTimeout(80);
+    if ((await target.count()) === 0) continue;
+    const visible = await page.evaluate((id) => {
+      const list = document.getElementById('messages');
+      const node = document.querySelector(`#messages .msg[data-message-id="${id}"]`);
+      if (!list || !node) return false;
+      const rect = node.getBoundingClientRect();
+      const listRect = list.getBoundingClientRect();
+      return rect.bottom > listRect.top + 2 && rect.top < listRect.bottom - 2;
+    }, messageId);
+    if (visible) return target;
+  }
+  return revealMessage(page, messageId, order);
+}
+
+async function expandOnScroll(
+  page: Page,
+  messageId: string,
+  order: string[],
+  tail: string,
+): Promise<Locator> {
   await expect(async () => {
-    await locator.scrollIntoViewIfNeeded();
-    await expect(locator).toContainText(tail, { timeout: 1_500 });
+    const target = await ensureVisible(page, messageId, order);
+    await expect(target).toContainText(tail, { timeout: 800 });
   }).toPass({ timeout: 30_000 });
+  return ensureVisible(page, messageId, order);
+}
+
+/** 虚拟时间线只挂载窗口内消息；按已知消息顺序把目标滚进真正的视口。 */
+async function revealMessage(
+  page: Page,
+  messageId: string,
+  order: string[],
+): Promise<Locator> {
+  const target = page.locator(`#messages .msg[data-message-id="${messageId}"]`);
+  const targetIndex = order.indexOf(messageId);
+  for (let attempt = 0; attempt < 160; attempt += 1) {
+    if ((await target.count()) > 0) {
+      const visible = await page.evaluate((id) => {
+        const list = document.getElementById('messages');
+        const node = document.querySelector(`#messages .msg[data-message-id="${id}"]`);
+        if (!list || !node) return false;
+        const rect = node.getBoundingClientRect();
+        const listRect = list.getBoundingClientRect();
+        return rect.bottom > listRect.top + 2 && rect.top < listRect.bottom - 2;
+      }, messageId);
+      if (visible) return target;
+      await centerMessage(page, messageId);
+      await page.waitForTimeout(80);
+      continue;
+    }
+    const state = await page.evaluate(() => {
+      const list = document.getElementById('messages');
+      if (!list) return null;
+      return {
+        scrollTop: list.scrollTop,
+        scrollHeight: list.scrollHeight,
+        clientHeight: list.clientHeight,
+        mounted: Array.from(list.querySelectorAll<HTMLElement>('.msg[data-message-id]')).map(
+          (node) => node.dataset.messageId ?? '',
+        ),
+      };
+    });
+    if (!state) break;
+    const mountedIndexes = state.mounted
+      .map((id) => order.indexOf(id))
+      .filter((index) => index >= 0);
+    let nextTop = state.scrollTop;
+    if (mountedIndexes.length > 0 && targetIndex < Math.min(...mountedIndexes)) {
+      nextTop = Math.max(0, state.scrollTop - 500);
+    } else if (mountedIndexes.length > 0 && targetIndex > Math.max(...mountedIndexes)) {
+      nextTop = Math.min(
+        state.scrollHeight - state.clientHeight,
+        state.scrollTop + 500,
+      );
+    } else if (targetIndex >= 0 && order.length > 1) {
+      nextTop = Math.min(
+        state.scrollHeight - state.clientHeight,
+        Math.max(0, (state.scrollHeight * targetIndex) / order.length - state.clientHeight / 2),
+      );
+    }
+    if (Math.abs(nextTop - state.scrollTop) < 1) break;
+    await page.$eval('#messages', (node, top) => {
+      const value = top as number;
+      node.dispatchEvent(
+        new WheelEvent('wheel', { deltaY: value < node.scrollTop ? -120 : 120, bubbles: true }),
+      );
+      node.scrollTop = value;
+    }, nextTop);
+    await page.waitForTimeout(80);
+  }
+  return target;
+}
+
+async function loadedMessageCount(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const node = document.getElementById('messages');
+    return Number(node?.getAttribute('data-loaded-message-count') ?? '0');
+  });
 }
 
 test.describe.configure({ mode: 'serial' });
@@ -161,6 +287,8 @@ test.describe('long agent messages', () => {
   let roomId = '';
   let agentName = '';
   let humanToken = '';
+  const messageOrder: string[] = [];
+  const markerIds: Record<string, string> = {};
   const marker = {
     auto2k: '自动展开 2KB 标记',
     auto2kTail: '自动展开 2KB 完整结尾',
@@ -227,22 +355,37 @@ test.describe('long agent messages', () => {
     }
 
     const send = async (body: string): Promise<void> => {
-      await callTool(base, agentToken, 'network_message_send', {
-        request_id: requestId('long_msg'),
-        client_message_id: crypto.randomUUID(),
-        room_id: roomId,
-        body,
-        invoke: [],
-      });
+      const result = await callTool<{ message: { message_id: string } }>(
+        base,
+        agentToken,
+        'network_message_send',
+        {
+          request_id: requestId('long_msg'),
+          client_message_id: crypto.randomUUID(),
+          room_id: roomId,
+          body,
+          invoke: [],
+        },
+      );
+      messageOrder.push(result.message.message_id);
+    };
+    const sendMarked = async (key: string, body: string): Promise<void> => {
+      const before = messageOrder.length;
+      await send(body);
+      markerIds[key] = messageOrder[before] ?? '';
     };
 
-    await send(`${marker.image}\n\n![架构图](https://example.com/topology.png)`);
-    await send(longBody(marker.auto2k, 2 * 1024, marker.auto2kTail));
-    await send(longBody(marker.low, 15 * 1024, marker.lowTail));
-    await send(longBody(marker.exact, 16 * 1024, marker.exactTail));
-    await send(longBody(marker.high, 17 * 1024, marker.highTail));
+    await sendMarked(
+      'image',
+      `${marker.image}\n\n![架构图](https://example.com/topology.png)`,
+    );
+    await sendMarked('auto2k', longBody(marker.auto2k, 2 * 1024, marker.auto2kTail));
+    await sendMarked('low', longBody(marker.low, 15 * 1024, marker.lowTail));
+    await sendMarked('exact', longBody(marker.exact, 16 * 1024, marker.exactTail));
+    await sendMarked('high', longBody(marker.high, 17 * 1024, marker.highTail));
     // 512B 切口落在表格与未闭合代码围栏中间：全文加载前应保持纯文本。
-    await send(
+    await sendMarked(
+      'manual',
       `| 列A | 列B |\n| --- | --- |\n| 单元格 | 内容 |\n\n\`\`\`text\n${longBody(
         marker.manual,
         40 * 1024,
@@ -276,9 +419,7 @@ test.describe('long agent messages', () => {
   test('auto-expands visible 2 KiB messages with bounded concurrency', async ({ page }) => {
     await page.goto(`${base}/c/${roomId}`);
     await expect(page.locator('#title')).toHaveText(agentName);
-    await expect(page.locator('#messages .msg[data-message-id]')).toHaveCount(14, {
-      timeout: 20_000,
-    });
+    await expect.poll(() => loadedMessageCount(page), { timeout: 20_000 }).toBe(14);
 
     // 最后 8 条并发消息位于底部首屏，自动展开应并行但不超过 3 条。
     await expect(
@@ -297,11 +438,12 @@ test.describe('long agent messages', () => {
     expect(concurrency.max).toBeLessThanOrEqual(3);
     expect(concurrency.max).toBeGreaterThanOrEqual(2);
 
-    const lazy = page
-      .locator('#messages .msg[data-message-id]')
-      .filter({ hasText: marker.auto2k });
-    await expect(lazy.locator('.expand')).toHaveText('查看全文');
-    await expandOnScroll(lazy, marker.auto2kTail);
+    const lazy = await expandOnScroll(
+      page,
+      markerIds.auto2k!,
+      messageOrder,
+      marker.auto2kTail,
+    );
     await expect(lazy.locator('.msg-plain-preview')).toHaveCount(0);
     await expect(lazy.locator('.expand')).toHaveCount(0);
   });
@@ -310,44 +452,47 @@ test.describe('long agent messages', () => {
     page,
   }) => {
     await page.goto(`${base}/c/${roomId}`);
-    await expect(page.locator('#messages .msg[data-message-id]')).toHaveCount(14, {
-      timeout: 20_000,
-    });
+    await expect.poll(() => loadedMessageCount(page), { timeout: 20_000 }).toBe(14);
 
-    const low = page
-      .locator('#messages .msg[data-message-id]')
-      .filter({ hasText: marker.low });
-    await expandOnScroll(low, marker.lowTail);
+    const low = await expandOnScroll(
+      page,
+      markerIds.low!,
+      messageOrder,
+      marker.lowTail,
+    );
     await expect(low.locator('.expand')).toHaveCount(0);
 
-    const exact = page
-      .locator('#messages .msg[data-message-id]')
-      .filter({ hasText: marker.exact });
-    await expandOnScroll(exact, marker.exactTail);
+    const exact = await expandOnScroll(
+      page,
+      markerIds.exact!,
+      messageOrder,
+      marker.exactTail,
+    );
     await expect(exact.locator('.expand')).toHaveText('收起');
 
-    const high = page
-      .locator('#messages .msg[data-message-id]')
-      .filter({ hasText: marker.high });
-    await expandOnScroll(high, marker.highTail);
+    const high = await expandOnScroll(
+      page,
+      markerIds.high!,
+      messageOrder,
+      marker.highTail,
+    );
     const toggle = high.locator('.expand');
     await expect(toggle).toHaveText('收起');
     await toggle.click();
     await expect(toggle).toHaveText('展开全文');
-    await toggle.click();
-    await expect(toggle).toHaveText('收起');
-    await expect(high).toContainText(marker.highTail);
+    // 收起后行高骤降，Virtuoso 会重新测量/调整窗口；等布局稳定后再展开。
+    const highAgain = await ensureVisible(page, markerIds.high!, messageOrder);
+    await page.waitForTimeout(500);
+    await highAgain.locator('.expand').click({ timeout: 5_000 });
+    await expect(highAgain.locator('.expand')).toHaveText('收起', { timeout: 5_000 });
+    const reopened = await ensureVisible(page, markerIds.high!, messageOrder);
+    await expect(reopened).toContainText(marker.highTail);
   });
 
   test('renders a truncated 512B preview as plain text until full load', async ({ page }) => {
     await page.goto(`${base}/c/${roomId}`);
-    await expect(page.locator('#messages .msg[data-message-id]')).toHaveCount(14, {
-      timeout: 20_000,
-    });
-    const message = page
-      .locator('#messages .msg[data-message-id]')
-      .filter({ hasText: marker.manual });
-    await message.scrollIntoViewIfNeeded();
+    await expect.poll(() => loadedMessageCount(page), { timeout: 20_000 }).toBe(14);
+    const message = await ensureVisible(page, markerIds.manual!, messageOrder);
 
     const preview = message.locator('.msg-plain-preview');
     await expect(preview).toBeVisible();
@@ -369,10 +514,8 @@ test.describe('long agent messages', () => {
 
   test('shows alt text placeholder instead of dropping markdown images', async ({ page }) => {
     await page.goto(`${base}/c/${roomId}`);
-    const message = page
-      .locator('#messages .msg[data-message-id]')
-      .filter({ hasText: marker.image });
-    await message.scrollIntoViewIfNeeded();
+    await expect.poll(() => loadedMessageCount(page), { timeout: 20_000 }).toBe(14);
+    const message = await ensureVisible(page, markerIds.image!, messageOrder);
     await expect(message.locator('.md-image-placeholder')).toHaveText('[图片] 架构图', {
       timeout: 20_000,
     });
