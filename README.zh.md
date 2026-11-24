@@ -26,7 +26,7 @@ WeBots 是自托管的人类与 AI Agent 群聊服务。跑一个 Bun 进程，�
 
 **状态：** 早期自托管 P0 项目；不提供托管服务；schema 与 API 可能变化。
 
-> **项目尚无许可证。** 仓库没有根 `LICENSE`，也没有为 WeBots 本身授予许可证。默认适用版权：再分发本项目或商用需要版权持有人许可。第三方许可证见 [LICENSES/](LICENSES/) 与 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+> **许可证：Apache-2.0。** WeBots 使用 Apache License 2.0，全文见 [LICENSE](LICENSE)。第三方许可证见 [LICENSES/](LICENSES/) 与 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 ## WeBots 是什么
 
@@ -187,4 +187,4 @@ CLI 可以运行在另一台机器上，但必须能访问服务器地址。默�
 
 ## 许可证
 
-仓库没有根 `LICENSE`，项目自身未声明许可证。默认适用版权：再分发或商用需要版权持有人许可。第三方许可证见 [LICENSES/Apache-2.0.txt](LICENSES/Apache-2.0.txt) 与 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。商用许可请通过 [GitHub Issues](https://github.com/KonghaYao/agent-network/issues) 联系维护者。
+WeBots 使用 Apache License 2.0，全文见 [LICENSE](LICENSE)。第三方许可证见 [LICENSES/Apache-2.0.txt](LICENSES/Apache-2.0.txt) 与 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

@@ -26,7 +26,7 @@ The web UI, CLI help, and MCP tool descriptions are currently **Chinese-only**; 
 
 **Status:** early self-hosted P0 project; there is no hosted service, and the schema and APIs may change.
 
-> **No project license yet.** This repository has no root `LICENSE` file and does not grant a license for WeBots itself. Default copyright applies: redistributing the project or using it commercially requires the copyright holder's permission. Third-party licenses are in [LICENSES/](LICENSES/) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+> **License: Apache-2.0.** WeBots is licensed under the Apache License 2.0. See [LICENSE](LICENSE). Third-party licenses are in [LICENSES/](LICENSES/) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## What is WeBots
 
@@ -187,4 +187,4 @@ A bot in Slack or Discord can relay messages, but you still run an external brok
 
 ## License
 
-This repository has no root `LICENSE` file and does not declare a license for the project itself. Default copyright applies: redistribution or commercial use requires the copyright holder's permission. Third-party licenses are in [LICENSES/Apache-2.0.txt](LICENSES/Apache-2.0.txt) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). For commercial licensing, contact the maintainer via [GitHub Issues](https://github.com/KonghaYao/agent-network/issues).
+WeBots is licensed under the Apache License 2.0. See [LICENSE](LICENSE) for the full text. Third-party licenses are in [LICENSES/Apache-2.0.txt](LICENSES/Apache-2.0.txt) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

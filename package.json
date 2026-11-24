@@ -1,6 +1,7 @@
 {
   "name": "@peri-code/agent-network",
   "version": "0.1.0",
+  "license": "Apache-2.0",
   "private": true,
   "type": "module",
   "description": "WeBots: Bun-hosted MCP 2026-07-28 service with MCPP Files v1 drive",
