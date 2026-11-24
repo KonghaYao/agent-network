@@ -526,3 +526,211 @@ Playwright：
 - **回滚开关**：URL `?timeline=dom` 优先于 `LIMITS.webTimelineVirtual`；置 `false` 需重新构建，属于发版级回滚。DOM 路径保留 `#messages` 全量渲染与 `scrollHeight` 差值补偿，并有独立 e2e 覆盖。
 - **实时追加与帧缺口**：房间消息是否创建 delivery 不影响网页实时可见性；`room.message` 提示统一失效当前房间 history，固定在底部时跟随，上翻时只显示「有新消息 · 回到最新」。服务端一帧最多 20 条/1 KiB，超出部分与背压队列丢弃只体现在信封的 `more`/`dropped`；客户端现在将其映射为 `stream.gap`，保守重读当前房间、会话列表与 Task 摘要。修复前这条路径只刷新侧栏，落在截断尾巴上的无 delivery 消息要等刷新/重新进房才出现。e2e：`tests/e2e/chat-live-agent-append.spec.ts`。
 - **已知边界**：浏览器 `Ctrl+F`、跨消息选中复制、打印与无障碍树只覆盖当前挂载窗口；帧率数据来自本机，低端 Android 需真机复测。
+
+---
+
+## 12. 贴底抖动修复（2026-11-04）
+
+### 12.1 复现
+
+隔离实例（Bun + 临时 SQLite，Playwright Chromium，1280×720）中创建 direct Agent 会话，
+消息由 Agent 发出以走 Markdown 岛，混排长 Markdown 表格/代码块、图片文件卡、`.md`
+文件卡与消息式 Task；另建 80 条轻内容会话用于“已加载窗口滚到底部”场景。
+`scrollTop` / `scrollHeight` / `gap` 同时按 rAF（绘制前）与 `setTimeout(0)`（绘制后）
+采样，回退一律相对“历史最高 `scrollTop`”计算。
+
+- **入口（240 条富内容，5/5 复现）**：从 `#messages` 出现的第一帧开始采样。基线
+  `a0586b7` 在首屏可见阶段 `scrollTop` 相对峰值回退 **197 px**，绘制后 `gap` 最大
+  **1,470 px**；可见阶段出现过 `data-virt-at-bottom` 从 `true` 翻回 `false`。
+- **到达底部（80 条轻内容，5/5 复现）**：用户上翻阅读时 Agent 发来一条中等高度的
+  Markdown 消息（14 行表格 + 10 条列表），该消息尚未挂载（高度仍是估算值）；一次
+  滚轮把窗口拖到底。以页面内第一帧 `gap≤2` 为到达起点，之后 500 ms 内基线绘制后
+  `gap` 最大 **74 px**、可见回退 **76 px**。
+- 此前记录中的 `806→90` 与 `215 px` 方向描述不可按原文复现（215 px 只在另一种
+  “到达瞬间恰好收到追加”的时序下出现过，且方向写反），已删除，不再作为基线。
+- **旧实现的成因**：`handleAtBottom` / `rangeChanged` 一到底就 `revealWhenSettled`，
+  把估算高度阶段的回退直接画给用户；`totalListHeightChanged` 只排 rAF 校正，
+  `ResizeObserver` 也只排 rAF，校正发生在绘制之后；方向判断把任何近期输入都当成
+  “用户离开底部”，向下滚动到达时高度一变就取消 pinned，校正被跳过。
+
+### 12.2 改法
+
+`src/web/features/chat/TimelineVirtual.tsx`：
+
+- **入口 settle**：`atBottom` / `rangeChanged` / 挂载兜底只启动 `watchInitialReveal`，
+  不再一到底就显示。隐藏期间逐帧同步贴底，连续 `webTimelineRevealStableFrames = 3`
+  帧高度不变且 `gap≤2` 才 reveal；没有异步正文时最多等
+  `webTimelineRevealMaxWaitMs = 300 ms`，超时必须显示，不能白屏。reveal 前再同步
+  贴一次真实底部。
+- **正文 pending 门控**：`body-pending.ts` 提供时间线级计数器，只统计当前挂载窗口
+  中正文未就绪的消息。`MarkdownIsland` 在挂载的 layout effect 里登记，Markdown 岛
+  同步挂载完成（或失败回退）后释放；文件卡的 lazy chunk fallback 与
+  `MessageFileCard` 元数据（决定缩略图、类型/大小/时间行与操作按钮的一次性高度）
+  同样登记，元数据 ready/error 后释放。`watchInitialReveal` 要求 `pending===0` 且
+  高度稳定才 reveal。有 pending 时隐藏上限放宽到
+  `webTimelineRevealPendingMaxWaitMs = 2 s`，避免资源挂住时长期白屏；超时后仍按
+  原有同步贴底显示。计数器随 Virtuoso 卸载释放，不累计整段历史。
+- **提交后贴底**：父级 `useLayoutEffect`（依赖 `items` / `pinned` / `ready`）在
+  `pinned`、非 anchor/恢复窗口且 `gap>2` 时于绘制前写 `scrollTop = scrollHeight`。
+  **不再有“reveal 后 300 ms 内跳过”的时间窗**：隐藏阶段与 reveal 后走同一条路径，
+  是否显示只由 `watchInitialReveal` 的 settle/pending 门控决定。该 effect 覆盖
+  Virtuoso 在本组件提交后按旧锚点写回、`totalListHeightChanged` 晚于绘制的路径。
+- **残差收口**：写完 `scrollTop = scrollHeight` 后，下一帧再读真实 gap；仍 >2 时
+  调用 `virtuosoRef.scrollToIndex({ index: last, align: 'end' })` 并重新写真实
+  `scrollHeight`，最多 2 次。它专门吸收 Virtuoso 尺寸缓存比真实内容短 18 px
+  （footer padding）导致的底部残留；预算耗尽后停止，不与测量循环无限互抢。
+- **同步校正**：`handleTotalListHeightChanged` 在 `pinned`、非 anchor/恢复窗口且
+  `gap>2` 时同步贴底；item list 的 `ResizeObserver` 同样在绘制前校正（rAF 仍作为
+  合并兜底），图片 `load` 捕获后下一帧再按真实高度贴一次。Markdown 岛是命令式
+  插进 DOM 的，不经过本组件提交，因此在 item list 上另挂 `MutationObserver`：
+  微任务里只写 `scrollTop`，不触发 `scrollToIndex`；reveal 后
+  `webTimelineMutationSettleMs = 120 ms` 内不介入，避开 Virtuoso 首轮测量重算
+  range 造成的已渲染高度收缩。reveal 后的程序化 scroll 事件也会在绘制前贴回底部。
+- **重试预算的边界**：ResizeObserver 的 rAF 重试最多 8 帧，只是合并同一轮高度
+  变化的兜底，**不保证**“直到 gap≤2”；真正兜底残差的是上面的 2 次
+  `scrollToIndex`。2 s 上限后的晚到内容仍由提交后贴底 / scroll / MO / 2 次
+  `scrollToIndex` 在绘制前吸收，不能再出现 4,568 px 的单帧 gap。
+- **方向化贴底**：只有近期“向上”手势（滚轮 `deltaY<0`、PageUp/ArrowUp/Home、
+  触摸/指针按原语义）才在 `atBottom=false` 时取消 pinned；向下滚轮会清除向上意图。
+  向下手势一旦落到 `gap≤2` 就立即 `setPin(true)`，不等 Virtuoso 的 `atBottom` 回调；
+  超高消息测量可能持续数百毫秒。到达瞬间还用“刚在底部 + 正在向下滚”的短窗口
+  继续校正，reveal 后 500 ms 内保留贴底宽限，让首轮图片/Markdown 长高也能同一帧校正。
+  搜索/引用/Task 跳转后的 600 ms 内禁止入口 settle 贴底，避免把定位拉回底部。
+- `initialSettled` 只在 reveal 时置位，避免隐藏期 `scrollTop=0` 触发 `onScroll`
+  的“到顶即取消贴底”，把入口校正挡掉。
+- 保留 `followOutput` 对新数据的跟随、anchor/search/restoring 抑制与
+  `?timeline=dom` 回滚路径；已读水位语义不变。
+
+### 12.3 A/B 实测
+
+同夹具、同内容，本机 headless Chromium。基线为 `a0586b7` 的只读 worktree
+（`/tmp/agentnet-baseline-a0586b7`，独立 `dist/web` 与隔离服务），测试用 HEAD 的
+同一份 e2e，通过 `E2E_BASE_URL` 指向基线服务。
+
+| 场景 | 基线 `a0586b7` | 修复后 |
+| --- | --- | --- |
+| 入口 `maxBackward`（相对峰值，5 次） | **197 px**（5/5 >20） | **0 px**（5/5） |
+| 入口绘制后 `maxGap` | **1,470 px** | **0 px** |
+| 到达底部可见回退（5 次） | **76 px**（5/5 >20） | **0 px**（5/5） |
+| 到达底部绘制后 `maxGap` | **74 px** | **0 px** |
+| 到底静止 2 s `scrollTop` range / `scroll` 事件 | 0 px / 0 | **0 px / 0** |
+| 5k 已加载：DOM 节点 / 挂载消息 | 175 / 15 | **175 / 15** |
+| 5k 帧间隔 p95 / 长帧 | 16.7 ms / 0 | **16.7 ms / 0** |
+| 5k prepend 最大漂移 / 校正后 / missed | 8 / 0 / false | **8 / 0 / false** |
+
+入口 `maxBackward` 是 rAF（绘制前）采样值；`maxGap` 取绘制后采样，代表用户真正看到的
+“最新消息被推离底部”。底部高度补偿造成的 `scrollTop` 回退如果 `gap` 仍为 0，画面
+锚在内容底部，不计入可见回退；新增用例里的 `maxVisibleBackwardPainted` 只在
+`gap>2` 的绘制后帧上统计回退，`maxBackwardPainted` 仍保留为诊断值。
+
+**慢 Markdown 资源（`/assets/chat-markdown.js` 延迟）**
+
+隔离实例、同一份 e2e，对照 `d9aa96e` 的只读 worktree（独立 `dist/web`）。房间为
+32 条 Agent Markdown（无文件卡），从 `#messages` 第一帧起采样 900 ms：
+
+| 场景 | `d9aa96e` | 修复后 |
+| --- | --- | --- |
+| 100 ms 延迟：首帧可见 | 126–179 ms | 291–300 ms |
+| 100 ms 延迟：首帧已挂载 Markdown 字符 | **0**（3/3） | **1,700**（3/3） |
+| 100 ms 延迟：绘制后 `maxGap` | 0 或 **4,551 px**（时序相关） | **0 px** |
+| 100 ms 延迟：可见回退 | 0 或 **4,551 px** | **0 px** |
+| 300 ms 延迟：首帧可见 | 121–137 ms | 407–412 ms |
+| 300 ms 延迟：首帧已挂载 Markdown 字符 | **0**（3/3） | **5,600**（3/3） |
+| 300 ms 延迟：绘制后 `maxGap` | 0 或 **4,551 px**（时序相关） | **0 px** |
+| 300 ms 延迟：可见回退 | 0 或 **4,551 px** | **0 px** |
+
+旧实现在这两档都可能在 reveal 后由同帧 ResizeObserver 补上，因此“绘制后 gap”偶发为
+0；确定性的差异是 **reveal 时正文尚未挂载**（`firstVisibleMarkdownChars=0`），
+新用例把它设为硬断言，`d9aa96e` 上 100 ms / 300 ms 各 3/3 失败，修复后各 3/3 通过。
+
+**240 条富内容 + 文件卡元数据（独立夹具，`416b414` → 本次修复）**
+
+240 条混排长 Markdown、图片文件卡、`.md` 文件卡与 Task，Markdown 资源延迟 100 ms。
+文件卡元数据决定缩略图与“类型 · 大小 · 时间”行；旧实现只等 Markdown，卡片会在
+reveal 后从 244 px 长到 420 px。
+
+| 场景 | `416b414` | 本次修复 |
+| --- | --- | --- |
+| 绘制后 `maxGap`（3 次） | **149 px**（2/3） | **0 px**（3/3） |
+| `maxBackwardRaf` | **189 px** | **0 px** |
+| 最终 gap | 0 | **0** |
+| 首帧仍有 `data-loading="1"` 文件卡（e2e，元数据延迟 400 ms） | **2–3 张**（3/3） | **0 张**（3/3） |
+
+e2e 用 400 ms 文件卡元数据延迟固定“元数据晚于旧实现 reveal（约 250–320 ms）”的
+时序。旧版 `maxVisibleBackwardPainted` 在本机 e2e 环境偶尔仍为 0（同帧 RO 补上），
+因此用例同时断言首帧不能有正在读取的文件卡，旧版 3/3 失败、新版 3/3 通过。
+
+**2 s 兜底与 3 s / 5 s 挂起（32 条纯 Markdown）**
+
+| 场景 | `416b414` | 本次修复 |
+| --- | --- | --- |
+| 3 s 延迟首帧可见 | 2.01–2.02 s | **2.02 s** |
+| 3 s 延迟内容到达后 `maxGap` | **4,551 px** | **0 px** |
+| 3 s 延迟可见回退 `maxVisibleBackwardPainted` | **4,551 px** | **0 px** |
+| 3 s 延迟最终 gap | 旧版 6 s 观测 **18 px**；内容到达后 1.2 s 采样时仍不稳定 | **0** |
+| 5 s 延迟 `maxGap` / `maxVisibleBackwardPainted` | **4,551 px** / **4,551 px** | **0 px** / **0 px** |
+| 5 s 延迟最终 gap | **4,551 px**（内容到达后 1.2 s 采样） | **0** |
+
+240 条富内容、Markdown 延迟 2,000 ms 的独立采样：旧版 `maxGapPainted=40 px`、
+`maxBackwardPainted=423 px`；本次修复 `maxGapPainted=0`、`maxBackwardPainted=0`、
+`maxBackwardRaf=36 px`（gap=0 的底部高度补偿）、最终 gap 0。3 s/5 s 用例里
+`maxBackwardPainted` 仍会记录到 296–3,711 px 的 scrollTop 下降，但这些帧的 gap=0
+（内容整体收缩、底部锚点不变），`maxVisibleBackwardPainted` 为 0；两个指标不能混读。
+
+### 12.4 新增 e2e
+
+`tests/e2e/chat-virtual-timeline.spec.ts` 的 `virtual timeline bottom stability`：
+
+- `enters the room without a visible backward jump`：`addInitScript` 在导航前安装采样器，
+  从 `#messages` 第一帧开始，记录 rAF 与绘制后两套样本约 900 ms。断言
+  `maxBackward ≤ 20`、绘制后 `maxGap ≤ 20`、首次可见 ≤400 ms、最终 gap ≤2、
+  显示后 `data-virt-at-bottom` 不再翻转。基线 5/5 失败（197 px），HEAD 5/5 通过。
+- `stays pinned after scrolling the loaded window to the bottom`：80 条轻内容加载完后
+  滚到顶部，Agent 发一条 14 行表格 + 10 条列表的 Markdown 消息（尚在估算高度），
+  再一次性滚轮拖到底；以页面内第一帧 `gap≤2` 为到达起点，观察 500 ms 的绘制后样本。
+  断言 `maxGapAfterArrival ≤ 20`、`maxVisibleBackwardAfterArrival ≤ 20`、最终 gap ≤2。
+  基线 5/5 失败（74/76 px），HEAD 10/10 通过。
+- `reveals after slow Markdown (100ms|300ms) without a visible jump`：`page.route`
+  把 `/assets/chat-markdown.js` 延迟 100/300 ms，进入 32 条 Agent Markdown 的小房间，
+  从 `#messages` 第一帧起完整采样 900 ms。断言首帧可见时
+  `firstVisibleMarkdownChars>0`（不能先画空气泡）、rAF `maxBackward≤20`、
+  `maxVisibleBackwardPainted≤20`、绘制后 `maxGap≤20`、最终 gap≤2。`d9aa96e`
+  100/300 ms 各 3/3 失败（首帧正文为 0，部分轮次 gap 4,551 px），HEAD 各 3/3 通过
+  （0 px）。
+- `reveals 240 rich messages after slow Markdown without a visible jump`：240 条富内容
+  房间，Markdown 延迟 100 ms、`network_room_file_get` 延迟 400 ms；断言首帧
+  `firstVisibleFileLoading=0`（文件卡元数据/缩略图已就位）、
+  `maxVisibleBackwardPainted≤20`、`maxGap≤20`、最终 gap≤2。`416b414` 上首帧仍有
+  2–3 张读取中的文件卡，3/3 失败；修复后 3/3 通过（全部 0 px）。
+- `absorbs late Markdown after the 3000ms|5000ms stall`：同一 32 条房间，Markdown
+  延迟 3 s / 5 s；入口在 2 s 上限显示，继续采样到内容到达后 1.2 s。断言首帧可见
+  ≤2.5 s、内容确实挂载（`markdownChars>0`）、绘制后 `maxGap≤20`、最终 gap≤2。
+  `416b414` 上 `maxGap=4,551 px`，3/3 失败；修复后为 0，3/3 通过。
+- `follows a long append without bouncing back` 由“`maxGap>50` 证明发生了高度变化”
+  改为“`heightGrowth>50` 证明追加真实长高，同时 `maxGap≤2`”。旧断言依赖
+  “绘制前贴底不完整”，修复后 gap 被完全吸收，继续要求 >50 会与目标相反；回退
+  `maxBackward≤2` 与 `range>0` 保留。
+
+### 12.5 回滚与边界
+
+- `?timeline=dom` 完全绕过本文件，不获得本次入口 settle 与同步校正；DOM 路径现有
+  e2e 只覆盖分页与搜索锚点两个场景。群消息管控与 Task dock 的 e2e 走默认虚拟时间线，
+  不是 DOM 回滚，不能用来证明 DOM 路径。
+- 本机 headless Chromium 无法模拟 Safari 的橡皮筋回弹；修复只保证程序化校正在绘制前
+  完成，不与橡皮筋争抢。
+- 剩余边界：
+  - pending 只统计**当前挂载窗口**的 Markdown 岛、文件卡 lazy fallback 与文件卡
+    元数据；reveal 之后才挂载的窗口外消息、缩略图字节解码等仍依赖 item list
+    ResizeObserver、`totalListHeightChanged`、MutationObserver 与 2 次
+    `scrollToIndex` 预算。本机入口/2 s/3 s/5 s 采样为 0 px，但低端设备/慢图片
+    仍需真机复核。
+  - 单条超高消息首次测量仍可能有一次向下的高度修正（估算切真实值）；提交后
+    layout effect 会在绘制前贴底，2 次 `scrollToIndex` 只吸收底部残差，不改变
+    消息自身的真实高度。
+  - 正文 pending 的上限是 2 s：资源挂住时最多多等 2 s 再显示。显示后晚到的
+    Markdown/文件卡由提交后贴底、scroll 事件、MutationObserver（reveal 后
+    120 ms 起）与最多 2 次 `scrollToIndex` 吸收；实测 3 s/5 s 挂起的绘制后
+    `maxGap=0`、最终 gap 0，不再出现旧版的 4,568 px 单帧与 18 px 残留。
+  - `maxBackwardPainted` 与 `maxVisibleBackwardPainted` 必须分开读：前者包含
+    “高度整体收缩、scrollTop 随之下移但 gap 仍为 0”的底部补偿（3 s/5 s 实测
+    296–3,711 px），后者只在 `gap>2` 时统计，才是用户可见的回退。

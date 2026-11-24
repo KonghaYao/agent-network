@@ -1,10 +1,7 @@
 import { Button } from '../../app/lenso-controls';
 import { Tooltip } from '../../app/lenso-tooltip';
 import {
-  createContext,
-  forwardRef,
   useCallback,
-  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -12,22 +9,17 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import {
-  Virtuoso,
-  type ListRange,
-  type ScrollerProps,
-  type VirtuosoHandle,
-} from 'react-virtuoso';
+import { Virtuoso, type ListRange, type VirtuosoHandle } from 'react-virtuoso';
 
 import { LIMITS } from '../../../contracts/limits';
 import {
   historyItemKey,
-  renderedWatermark,
   timelineTimestamp,
   type HistoryItem,
   type HistoryMessage,
 } from '../../lib/chat';
 import { outboxPreview } from '../../lib/outbox';
+import { BodyPendingContext, createBodyPendingRegistry } from './body-pending';
 import { ChatMessage } from './ChatMessage';
 import {
   registerLoadedMessageTest,
@@ -40,13 +32,16 @@ import {
   timelineTimeGap,
   type TimelineProps,
 } from './timeline-shared';
+import { ScrollerContext, TimelineJumpLatest, TimelineScroller } from './timeline-virtual-scroller';
+import { useTimelineBottomFollow } from './use-timeline-bottom-follow';
 
 /**
  * 虚拟时间线。
  *
  * Virtuoso 负责动态高度测量、prepend 锚定与贴底；`firstItemIndex` 只随
  * “更早页”递减，实时追加不移动既有索引。旧的 scrollHeight 差值补偿不
- * 进入本路径。
+ * 进入本路径。贴底/入口 reveal 由 `useTimelineBottomFollow` 负责，scroller
+ * 与按钮等纯视图在 `timeline-virtual-scroller`。
  */
 
 /** 初始绝对索引；只为 prepend 预留，业务上无意义。 */
@@ -78,39 +73,6 @@ function nextIndexState(previous: IndexState, items: HistoryItem[]): IndexState 
   // 窗口被替换（搜索 anchor、切房或恢复重建）：重新给一个靠前的绝对区间。
   return { items, firstItemIndex: Math.max(1, FIRST_ITEM_INDEX_BASE - items.length) };
 }
-
-interface ScrollerContextValue {
-  long: boolean;
-  anchored: boolean;
-  hidden: boolean;
-}
-
-const ScrollerContext = createContext<ScrollerContextValue>({
-  long: false,
-  anchored: false,
-  hidden: false,
-});
-
-const TimelineScroller = forwardRef<HTMLDivElement, ScrollerProps>(function TimelineScroller(
-  props,
-  ref,
-) {
-  const { long, anchored, hidden } = useContext(ScrollerContext);
-  return (
-    <div
-      ref={ref}
-      {...props}
-      id="messages"
-      className={`messages messages--virtual${long ? ' messages--long' : ''}`}
-      style={{ ...props.style, visibility: hidden ? 'hidden' : undefined }}
-      role="log"
-      aria-live="polite"
-      data-search-anchored={anchored ? 'true' : 'false'}
-      data-timeline-mode="virtual"
-      data-virtualized="true"
-    />
-  );
-});
 
 export function TimelineVirtual({
   items,
@@ -158,11 +120,6 @@ export function TimelineVirtual({
       node.setAttribute('data-loaded-ready', 'false');
     }
   }, []);
-  const pinnedRef = useRef(true);
-  const [pinned, setPinned] = useState(true);
-  const [hasNew, setHasNew] = useState(false);
-  const [ready, setReady] = useState(false);
-  const readyRef = useRef(false);
   const [flashId, setFlashId] = useState<string | null>(null);
   const lastKeyRef = useRef<string | null>(null);
   const lastForceRef = useRef(forcePinToken);
@@ -172,18 +129,15 @@ export function TimelineVirtual({
   const resetPending = scrollResetToken !== appliedResetToken;
   const lastJumpRef = useRef(searchNavigation?.jumpToken ?? -1);
   const anchored = searchNavigation?.anchored === true;
-  const anchoredRef = useRef(anchored);
-  const restoringRef = useRef(restoring);
   const loadingRef = useRef(false);
   const startLatchRef = useRef(false);
   const lastLoadAtRef = useRef(0);
-  const initialSettledRef = useRef(false);
-  const atBottomRef = useRef(false);
-  const visibleEndRef = useRef(0);
-  const lastUserInputRef = useRef(0);
-  const markReadTimerRef = useRef<number | null>(null);
-  anchoredRef.current = anchored;
-  restoringRef.current = restoring;
+  // 只统计当前挂载窗口的正文就绪情况；入口 reveal 在 count()===0 前不显示。
+  const [bodyPending] = useState(() =>
+    createBodyPendingRegistry((count) => {
+      scrollerRef.current?.setAttribute('data-body-pending', String(count));
+    }),
+  );
 
   const [indexState, setIndexState] = useState<IndexState>(() => ({
     items,
@@ -204,6 +158,35 @@ export function TimelineVirtual({
     [messages],
   );
 
+  const {
+    pinned,
+    pinnedRef,
+    anchoredRef,
+    hasNew,
+    ready,
+    suppressFollowUntilRef,
+    initialSettledRef,
+    visibleEndRef,
+    setPin,
+    setHasNew,
+    followOutput,
+    revealWhenSettled,
+    watchInitialReveal,
+    scheduleMarkRead,
+    handleAtBottom,
+    handleTotalListHeightChanged,
+    snapPinnedToBottom,
+  } = useTimelineBottomFollow({
+    virtuosoRef,
+    scrollerRef,
+    scrollerNode,
+    items,
+    bodyPending,
+    anchored,
+    restoring,
+    onMarkRead,
+  });
+
   const anchorTargetId = anchored ? (searchNavigation?.activeMessageId ?? null) : null;
   const anchorIndex =
     anchorTargetId === null
@@ -221,13 +204,6 @@ export function TimelineVirtual({
   // anchor 窗口整体替换数据；换 key 让 Virtuoso 用初始索引定位，避免旧窗口
   // 的测量与滚动位置污染新窗口。实时窗口保持同一实例以持续跟随底部。
   const timelineKey = anchorTargetId ? `anchor:${anchorTargetId}` : `live:${room.room_id}`;
-
-  const setPin = useCallback((value: boolean) => {
-    pinnedRef.current = value;
-    scrollerRef.current?.setAttribute('data-virt-pinned', String(value));
-    setPinned(value);
-    if (value) setHasNew(false);
-  }, []);
 
   const jumpToLatest = useCallback(
     (smooth = false) => {
@@ -252,150 +228,18 @@ export function TimelineVirtual({
       const handle = virtuosoRef.current;
       if (!handle) return false;
       setPin(false);
+      suppressFollowUntilRef.current = Date.now() + 600;
       handle.scrollToIndex({ index, align: 'center' });
+      // 搜索/引用跳转发生在首屏 settle 期间时，立即结束入口遮罩，
+      // 否则随后的逐帧贴底会把用户刚定位的消息带回底部。
+      revealWhenSettled();
       return true;
     },
-    [indexState.items, setPin],
+    [indexState.items, revealWhenSettled, setPin],
   );
 
   useEffect(() => registerScrollToMessage(jumpToMessage), [jumpToMessage]);
   useEffect(() => registerLoadedMessageTest((messageId) => messageIds.has(messageId)), [messageIds]);
-
-  useEffect(
-    () => () => {
-      if (markReadTimerRef.current !== null) window.clearTimeout(markReadTimerRef.current);
-    },
-    [],
-  );
-
-  // 已读水位：只推进到当前可见的最后一条消息；anchor/恢复期间不推进。
-  const scheduleMarkRead = useCallback(
-    (endIndex: number) => {
-      if (anchoredRef.current || restoringRef.current || !atBottomRef.current) return;
-      const through = renderedWatermark(items.slice(0, Math.max(0, endIndex) + 1));
-      if (!through) return;
-      if (markReadTimerRef.current !== null) window.clearTimeout(markReadTimerRef.current);
-      markReadTimerRef.current = window.setTimeout(() => {
-        markReadTimerRef.current = null;
-        if (anchoredRef.current || restoringRef.current || !atBottomRef.current) return;
-        onMarkRead(through);
-      }, LIMITS.webScrollMarkReadDelayMs);
-    },
-    [items, onMarkRead],
-  );
-
-  const revealWhenSettled = useCallback(() => {
-    if (readyRef.current) return;
-    readyRef.current = true;
-    setReady(true);
-  }, []);
-
-  const handleAtBottom = useCallback(
-    (value: boolean) => {
-      atBottomRef.current = value;
-      const scrollTop = scrollerRef.current?.scrollTop ?? 0;
-      scrollerRef.current?.setAttribute('data-virt-at-bottom', String(value));
-      scrollerRef.current?.setAttribute('data-virt-scroll-top', String(Math.round(scrollTop)));
-      if (value) {
-        initialSettledRef.current = true;
-        revealWhenSettled();
-        if (anchoredRef.current) {
-          setPin(false);
-          return;
-        }
-        setPin(true);
-        scheduleMarkRead(visibleEndRef.current);
-        return;
-      }
-      if (!pinnedRef.current || anchoredRef.current) return;
-      // 只有近期真实用户输入才取消贴底；图片/Markdown/文件卡异步长高
-      // 造成的离底保持 pinned，由 ResizeObserver 反复贴回底部。
-      if (Date.now() - lastUserInputRef.current < 500) setPin(false);
-    },
-    [revealWhenSettled, scheduleMarkRead, setPin],
-  );
-
-  useEffect(() => {
-    const node = scrollerNode;
-    if (!node) return undefined;
-    const mark = (event: Event) => {
-      lastUserInputRef.current = Date.now();
-      if (event.type === 'wheel' && (event as WheelEvent).deltaY < 0) {
-        setPin(false);
-      } else if (event.type === 'keydown') {
-        const key = (event as KeyboardEvent).key;
-        if (key === 'PageUp' || key === 'ArrowUp' || key === 'Home') setPin(false);
-      }
-    };
-    const onScroll = () => {
-      // 程序化/测试滚动到顶部也视为离开底部；初始定位完成前忽略。
-      // 用真实可滚动高度判断，避免 atBottom 回调晚于 scroll 事件时误判。
-      if (
-        initialSettledRef.current &&
-        node.scrollTop <= 2 &&
-        node.scrollHeight > node.clientHeight + LIMITS.webScrollStickyPx
-      ) {
-        setPin(false);
-      }
-    };
-    node.addEventListener('wheel', mark, { passive: true });
-    node.addEventListener('touchstart', mark, { passive: true });
-    node.addEventListener('touchmove', mark, { passive: true });
-    node.addEventListener('pointerdown', mark, { passive: true });
-    node.addEventListener('keydown', mark);
-    node.addEventListener('scroll', onScroll, { passive: true });
-    return () => {
-      node.removeEventListener('wheel', mark);
-      node.removeEventListener('touchstart', mark);
-      node.removeEventListener('touchmove', mark);
-      node.removeEventListener('pointerdown', mark);
-      node.removeEventListener('keydown', mark);
-      node.removeEventListener('scroll', onScroll);
-    };
-  }, [scrollerNode, setPin]);
-
-  // 内容异步长高（Markdown 岛、图片、文件卡）时保持贴底；虚拟化后
-  // Virtuoso 只在追加数据时 followOutput，不会自动跟随单条 item 的高度变化。
-  useEffect(() => {
-    const node = scrollerNode;
-    if (!node) return undefined;
-    let frame = 0;
-    const keepPinned = () => {
-      if (!pinnedRef.current || anchoredRef.current || restoringRef.current) return;
-      if (frame) cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
-        // 调度后到执行前用户可能已上翻，必须在帧内再次确认。
-        if (!pinnedRef.current || anchoredRef.current || restoringRef.current) return;
-        const node = scrollerRef.current;
-        // Virtuoso 的尺寸缓存可能仍按估算高度计算底部；直接贴到真实
-        // scrollHeight，连续测量帧会继续把随后长高的内容纳入底部。
-        if (node) node.scrollTop = node.scrollHeight;
-        else {
-          const lastIndex = Math.max(0, items.length - 1);
-          virtuosoRef.current?.scrollToIndex({ index: lastIndex, align: 'end' });
-        }
-      });
-    };
-    let resizeObserver: ResizeObserver | null = null;
-    const observeContent = () => {
-      const list = node.querySelector('[data-testid="virtuoso-item-list"]');
-      if (!list) return;
-      resizeObserver?.disconnect();
-      resizeObserver = new ResizeObserver(keepPinned);
-      resizeObserver.observe(list);
-    };
-    observeContent();
-    const mutations = new MutationObserver(() => {
-      observeContent();
-      keepPinned();
-    });
-    mutations.observe(node, { childList: true, subtree: true, characterData: true });
-    return () => {
-      resizeObserver?.disconnect();
-      mutations.disconnect();
-      if (frame) cancelAnimationFrame(frame);
-    };
-  }, [items.length, scrollerNode]);
 
   const handleRangeChanged = useCallback(
     (range: ListRange) => {
@@ -406,14 +250,14 @@ export function TimelineVirtual({
       const clampedEnd = Math.min(items.length - 1, Math.max(0, end));
       visibleEndRef.current = clampedEnd;
       // 初次定位到底部后 range 才可信；避免启动阶段的探测渲染触发补页。
-      if (!initialSettledRef.current && clampedEnd >= items.length - 3) {
-        initialSettledRef.current = true;
-        revealWhenSettled();
-      }
+      // 此时高度可能仍是估算值，只启动 settle 观察，不立刻显示。
+      if (clampedEnd >= items.length - 3) watchInitialReveal();
       // anchor 窗口以目标为中心，range 不一定到底；首帧测量后即可显示。
       if (anchoredRef.current) {
         initialSettledRef.current = true;
         revealWhenSettled();
+      } else {
+        watchInitialReveal();
       }
       if (start > 0) startLatchRef.current = false;
       if (items.length > 0 && end >= start) {
@@ -425,7 +269,16 @@ export function TimelineVirtual({
       );
       scheduleMarkRead(clampedEnd);
     },
-    [items.length, revealWhenSettled, scheduleMarkRead],
+    [
+      anchoredRef,
+      initialSettledRef,
+      items.length,
+      revealWhenSettled,
+      scheduleMarkRead,
+      scrollerRef,
+      visibleEndRef,
+      watchInitialReveal,
+    ],
   );
 
   const handleStartReached = useCallback(() => {
@@ -445,15 +298,7 @@ export function TimelineVirtual({
     void onLoadOlder().finally(() => {
       loadingRef.current = false;
     });
-  }, [hasOlder, olderLoading, onLoadOlder]);
-
-  const followOutput = useCallback(
-    (isAtBottom: boolean) => {
-      if (!isAtBottom || anchoredRef.current || restoringRef.current) return false as const;
-      return 'auto' as const;
-    },
-    [],
-  );
+  }, [hasOlder, initialSettledRef, olderLoading, onLoadOlder, scrollerRef]);
 
   useLayoutEffect(() => {
     if (!resetPending) return undefined;
@@ -473,6 +318,18 @@ export function TimelineVirtual({
   useEffect(() => {
     if (anchored) setPin(false);
   }, [anchored, setPin]);
+
+  // 相关提交（items/pinned/ready）后、浏览器绘制前再贴一次底。Virtuoso 的
+  // 异步测量/内部滚动状态可能在本组件提交之后才按旧锚点写回 scrollTop；
+  // ResizeObserver 与 totalListHeightChanged 都是“事件驱动”的兜底，覆盖不了
+  // 这种提交后的写回。只在 pinned 且非 anchor/恢复窗口时执行；gap 已 ≤2 时
+  // no-op，同一帧多次提交也只有第一次真正写 scrollTop（幂等合并）。
+  // 入口隐藏阶段与 reveal 后走同一条路径：是否显示由 watchInitialReveal 的
+  // settle/pending 门控决定，这里不再按“reveal 后 N ms”跳过。
+  // 绝不在用户上翻/搜索定位时抢滚动。
+  useLayoutEffect(() => {
+    snapPinnedToBottom();
+  }, [snapPinnedToBottom]);
 
   const lastItem: HistoryItem | undefined = items[items.length - 1];
   const lastKey = lastItem ? historyItemKey(lastItem) : null;
@@ -706,49 +563,47 @@ export function TimelineVirtual({
           </Button>
         </div>
       ) : null}
-      <ScrollerContext.Provider value={scrollerContext}>
-        <Virtuoso<HistoryItem>
-          key={timelineKey}
-          ref={virtuosoRef}
-          data={items}
-          computeItemKey={(_, item) => historyItemKey(item)}
-          firstItemIndex={indexState.firstItemIndex}
-          initialTopMostItemIndex={initialTopMostItemIndex}
-          defaultItemHeight={96}
-          initialItemCount={Math.min(30, items.length)}
-          followOutput={followOutput}
-          startReached={handleStartReached}
-          atBottomStateChange={handleAtBottom}
-          atBottomThreshold={LIMITS.webScrollStickyPx}
-          rangeChanged={handleRangeChanged}
-          increaseViewportBy={{ top: 1_200, bottom: 1_200 }}
-          scrollerRef={(node) => {
-            if (node instanceof HTMLDivElement) {
-              attachScroller(node);
-              node.setAttribute('data-loaded-count', String(items.length));
-              node.setAttribute('data-loaded-message-count', String(messages.length));
-            } else {
-              attachScroller(null);
-            }
-          }}
-          components={components}
-          itemContent={renderItem}
-        />
-      </ScrollerContext.Provider>
-      <Button
-        id="jump-latest"
-        className="jump-latest"
-        type="button"
-        variant="bordered"
-        size="sm"
-        hidden={pinned || anchored}
-        onClick={() => {
+      <BodyPendingContext.Provider value={bodyPending}>
+        <ScrollerContext.Provider value={scrollerContext}>
+          <Virtuoso<HistoryItem>
+            key={timelineKey}
+            ref={virtuosoRef}
+            data={items}
+            computeItemKey={(_, item) => historyItemKey(item)}
+            firstItemIndex={indexState.firstItemIndex}
+            initialTopMostItemIndex={initialTopMostItemIndex}
+            defaultItemHeight={96}
+            initialItemCount={Math.min(30, items.length)}
+            followOutput={followOutput}
+            startReached={handleStartReached}
+            atBottomStateChange={handleAtBottom}
+            atBottomThreshold={LIMITS.webScrollStickyPx}
+            rangeChanged={handleRangeChanged}
+            increaseViewportBy={{ top: 1_200, bottom: 1_200 }}
+            totalListHeightChanged={handleTotalListHeightChanged}
+            scrollerRef={(node) => {
+              if (node instanceof HTMLDivElement) {
+                attachScroller(node);
+                node.setAttribute('data-loaded-count', String(items.length));
+                node.setAttribute('data-loaded-message-count', String(messages.length));
+              } else {
+                attachScroller(null);
+              }
+            }}
+            components={components}
+            itemContent={renderItem}
+          />
+        </ScrollerContext.Provider>
+      </BodyPendingContext.Provider>
+      <TimelineJumpLatest
+        pinned={pinned}
+        anchored={anchored}
+        hasNew={hasNew}
+        onJumpLatest={() => {
           setPin(true);
           jumpToLatest(true);
         }}
-      >
-        <span id="jump-latest-label">{hasNew ? '有新消息 · 回到最新' : '回到最新'}</span>
-      </Button>
+      />
     </div>
   );
 }

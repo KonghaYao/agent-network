@@ -420,6 +420,100 @@ async function openAgedRoom(
   return { ...opened, ...probe };
 }
 
+/**
+ * reveal 后的初始定位窗口：Virtuoso 仍会把 `initialTopMostItemIndex` 的
+ * align=end 写入 scroller（本机实测 reveal 后第 4 帧才落账）。如果测试在
+ * 第一帧就把用户滚到顶部，这次迟到的 scrollTo 会把位置改回底部附近，
+ * 断言读到的 before 与实际用户位置不一致。
+ *
+ * 这里按 rAF 采样“已 reveal + 贴底”的连续帧数，而不是固定 sleep；条件
+ * 不满足会一直等到 15s。10 帧给初始定位队列留出余量（实测 4 帧）。
+ */
+const REVEAL_BOTTOM_STABLE_FRAMES = 10;
+const TOP_STABLE_FRAMES = 10;
+
+async function waitForTimelineRevealAtBottom(page: Page): Promise<void> {
+  await page.evaluate(
+    (stableFrames) =>
+      new Promise<void>((resolve, reject) => {
+        const deadline = performance.now() + 15_000;
+        let streak = 0;
+        const tick = () => {
+          const node = document.getElementById('messages');
+          const atBottom =
+            node !== null &&
+            node.getAttribute('data-timeline-mode') === 'virtual' &&
+            node.getAttribute('data-virt-at-bottom') === 'true' &&
+            node.getAttribute('data-loaded-ready') === 'true' &&
+            document.querySelector('#history-catchup[data-catchup-active="1"]') === null &&
+            getComputedStyle(node).visibility !== 'hidden' &&
+            node.scrollHeight - node.scrollTop - node.clientHeight <= 2;
+          streak = atBottom ? streak + 1 : 0;
+          if (streak >= stableFrames) {
+            resolve();
+            return;
+          }
+          if (performance.now() > deadline) {
+            reject(new Error('虚拟时间线未在 15s 内 reveal 并稳定贴底'));
+            return;
+          }
+          requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      }),
+    REVEAL_BOTTOM_STABLE_FRAMES,
+  );
+}
+
+/**
+ * 把时间线滚到顶部并确认它真的停住。初始定位队列可能晚于第一次
+ * scrollTop=0 落账；未停住时重新离底，最多 3 次。只有稳定后才返回
+ * `before`，后续置顶/撤回断言才是在验证“用户已离开底部”的行为。
+ */
+async function leaveTimelineBottom(page: Page): Promise<number> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await page.locator('#messages').evaluate((element) => {
+      element.scrollTop = 0;
+      element.dispatchEvent(new Event('scroll'));
+    });
+    const stable = await page.evaluate(
+      (stableFrames) =>
+        new Promise<boolean>((resolve) => {
+          const deadline = performance.now() + 5_000;
+          let streak = 0;
+          const tick = () => {
+            const node = document.getElementById('messages');
+            // 迟到的初始定位把位置拉离顶部：立即交给外层重试，不在这里空等。
+            if (node !== null && node.scrollTop > 2) {
+              resolve(false);
+              return;
+            }
+            const atTop =
+              node !== null &&
+              node.getAttribute('data-virt-pinned') === 'false' &&
+              node.scrollTop <= 2;
+            streak = atTop ? streak + 1 : 0;
+            if (streak >= stableFrames) {
+              resolve(true);
+              return;
+            }
+            if (performance.now() > deadline) {
+              resolve(false);
+              return;
+            }
+            requestAnimationFrame(tick);
+          };
+          requestAnimationFrame(tick);
+        }),
+      TOP_STABLE_FRAMES,
+    );
+    if (stable) {
+      return page.locator('#messages').evaluate((element) => element.scrollTop);
+    }
+  }
+  throw new Error('无法在 3 次内把虚拟时间线稳定停在顶部');
+}
+
 test.describe.serial('群主消息管理前端', () => {
   let base = '';
 
@@ -574,12 +668,11 @@ test.describe.serial('群主消息管理前端', () => {
     }
     const { page, close } = await openRoom(browser, base, room.tokenMember, room.roomId);
     try {
-      // 等虚拟时间线完成首屏贴底后再离开底部。
-      await page.waitForTimeout(300);
-      await page.locator('#messages').evaluate((element) => {
-        element.scrollTop = 0;
-      });
-      const before = await page.locator('#messages').evaluate((element) => element.scrollTop);
+      // 等虚拟时间线完成入口 reveal、贴底并越过初始定位窗口后再离开底部。
+      // 固定 300ms 在负载较高时可能早于 reveal；只看首帧 gap 又可能撞上
+      // Virtuoso reveal 后迟到的 align=end（见辅助函数注释）。
+      await waitForTimelineRevealAtBottom(page);
+      const before = await leaveTimelineBottom(page);
 
       await pinMessage(base, room.tokenOwner, room.roomId, pinned);
       await expect(page.locator(`[data-pinned-unpin-id="${pinned}"]`)).toHaveCount(0);

@@ -1,9 +1,19 @@
 import { Tooltip } from '../../app/lenso-tooltip';
 import { Button } from '../../app/lenso-controls';
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  memo,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 import { LIMITS } from '../../../contracts/limits';
 import { formatDisplayTime, mimeFriendlyName } from '../../lib/display-format';
+import { BodyPendingContext } from './body-pending';
 import {
   fileDownloadUrl,
   fileIconLabel,
@@ -75,6 +85,25 @@ export const MessageFileCard = memo(function MessageFileCard({
   const [thumbRetrying, setThumbRetrying] = useState(false);
   const [actionError, setActionError] = useState('');
   const [state, setState] = useState<MetaState>(() => fromCache(identity, roomId, fileId));
+  const pendingRegistry = useContext(BodyPendingContext);
+  const releasePendingRef = useRef<(() => void) | null>(null);
+
+  // 元数据决定卡片最终高度：图片缩略图（4:3 占位）与“类型 · 大小 · 时间”
+  // 都在 ready 的同一次提交里出现。入口隐藏阶段让 pending 覆盖这段等待，
+  // 避免 reveal 后卡片从 244px 长到 420px 把底部顶开一帧。只登记当前挂载
+  // 的卡片；Virtuoso 卸载时释放，不累计整段历史。
+  useLayoutEffect(() => {
+    if (state.status === 'loading' && releasePendingRef.current === null) {
+      releasePendingRef.current = pendingRegistry?.begin() ?? null;
+    } else if (state.status !== 'loading' && releasePendingRef.current !== null) {
+      releasePendingRef.current();
+      releasePendingRef.current = null;
+    }
+    return () => {
+      releasePendingRef.current?.();
+      releasePendingRef.current = null;
+    };
+  }, [pendingRegistry, state.status]);
 
   useEffect(() => {
     mountedRef.current = true;

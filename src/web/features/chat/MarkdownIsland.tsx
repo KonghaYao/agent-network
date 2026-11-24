@@ -1,7 +1,8 @@
 import { Button } from '../../app/lenso-controls';
-import { useEffect, useRef, useState } from 'react';
+import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import { requestSafeUpdate, useUpdateState } from '../../pwa/update-store';
+import { BodyPendingContext } from './body-pending';
 
 /**
  * AI 消息 Markdown 岛：复用 legacy `/assets/chat-markdown.js`。
@@ -72,6 +73,7 @@ export function MarkdownIsland({
   const optionsRef = useRef({ mentions, preview });
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const pendingRegistry = useContext(BodyPendingContext);
   const update = useUpdateState();
   const online = typeof navigator === 'undefined' || navigator.onLine !== false;
   const canUpdate =
@@ -79,28 +81,46 @@ export function MarkdownIsland({
   textRef.current = text;
   optionsRef.current = { mentions, preview };
 
-  useEffect(() => {
+  // 注册必须发生在绘制前：入口 reveal 的 rAF 采样在同一帧读取计数，
+  // 若用 passive effect 注册会留下一帧“已挂载但计数为 0”的窗口。
+  useLayoutEffect(() => {
     let cancelled = false;
+    const releasePending = pendingRegistry?.begin();
+    let released = false;
+    const finishPending = () => {
+      if (released) return;
+      released = true;
+      releasePending?.();
+    };
     void loadMarkdown(attempt > 0).then((module) => {
-      if (cancelled || !hostRef.current) return;
+      if (cancelled || !hostRef.current) {
+        finishPending();
+        return;
+      }
       if (!module) {
         setFailed(true);
+        finishPending();
         return;
       }
       const handle = module.mountMarkdown(hostRef.current, textRef.current, optionsRef.current);
       if (!handle) {
         setFailed(true);
+        finishPending();
         return;
       }
       setFailed(false);
       handleRef.current = handle;
+      // Markdown 已同步挂载到 DOM；高度测量与贴底交给 ResizeObserver
+      // 和 layout effect，pending 只表示“正文尚未出现”。
+      finishPending();
     });
     return () => {
       cancelled = true;
       handleRef.current?.destroy();
       handleRef.current = null;
+      finishPending();
     };
-  }, [attempt]);
+  }, [attempt, pendingRegistry]);
 
   useEffect(() => {
     handleRef.current?.update(text, { mentions, preview });
