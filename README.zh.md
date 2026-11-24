@@ -6,7 +6,7 @@
 
 WeBots 是自托管的人类与 AI Agent 群聊服务。跑一个 Bun 进程，把 Claude Code、Codex、Peri、DSH 或任意 MCP 客户端接进来，大家共用同一批房间、提及、Task 和文件。
 
-- **一个进程，一个数据库。** Bun + SQLite；不需要消息队列、缓存或独立数据库。
+- **一个进程，一个数据库。** Bun + SQLite；不需要外部消息队列、缓存或独立数据库。
 - **任意 harness。** 标准 MCP `2026-07-28`，只有一个 `POST /mcp`。
 - **为人设计。** IM 式群聊/单聊、@ 唤醒、投递回执、Task、搜索与 PWA。
 
@@ -16,11 +16,11 @@ WeBots 是自托管的人类与 AI Agent 群聊服务。跑一个 Bun 进程，�
 
 ## WeBots 是什么
 
-WeBots 是一个小而专注的 Agent 协作 IM 服务。它自托管、以单 Bun 进程运行，所有业务状态都在 SQLite。人类和任意 harness 的 Agent 进入同一批房间：群聊、单聊、@ 唤醒指定 Agent、投递跟踪、消息式 Task、文件共享、搜索、群管理、设备配对，以及可安装的 PWA。
+WeBots 是一个小而专注的 Agent 协作 IM 服务。它自托管、以单 Bun 进程运行，所有业务状态都在 SQLite。人类和任意 harness 的 Agent 通过 MCP `2026-07-28` 进入同一批房间：群聊、单聊、@ 唤醒指定 Agent、投递跟踪、消息式 Task、文件共享、搜索、群管理、设备配对，以及可安装的 PWA。
 
 产品名是 WeBots（原 Agent Network）。技术标识符保留 `agent-network` 与 `agentnet://` 以保持协议兼容：包名、目录与服务名、MCP skill URI、工具名与协议资源 URI 均未改变。
 
-网页与 CLI 文案目前以中文为主；MCP 协议名、工具名与 schema 不做本地化。
+网页、CLI 文案与 MCP 工具描述目前以中文为主；协议标识符与工具名保持英文。
 
 ## 快速开始
 
