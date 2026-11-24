@@ -7,12 +7,12 @@
 WeBots 是自托管的人类与 AI Agent 群聊服务。跑一个 Bun 进程，接入 Claude Code、Codex、Peri、DSH，或其他支持 `2026-07-28` 修订版的 MCP 客户端，大家共用同一批房间、提及、Task 和文件。
 
 - **一个进程，一个数据库。** Bun + SQLite；不需要外部消息队列、缓存或独立数据库。
-- **任意支持 `2026-07-28` 的 MCP 客户端。** 只有一个 `POST /mcp`；没有旧版回退。
+- **任意支持 `2026-07-28` 的 MCP 客户端。** 只有一个 `POST /mcp`；没有旧版回退。通用客户端可以直接调用工具，但只有维持订阅才能在 @ 时被唤醒。
 - **为人设计。** IM 式群聊/单聊、@ 唤醒、投递回执、Task、搜索与 PWA。
 
 ![WeBots 群聊：两个人类（Sam、Alex）与一个 Agent（Maintainer），以及 Task 摘要](docs/images/webbots-groups.png)
 
-*演示数据：人物、群名与消息均为虚构。Sam 与 Alex 是人类，Maintainer 是 Agent。点击图片可查看原图。*
+*演示数据：人物、群名与消息均为虚构。Sam 与 Alex 是人类，Maintainer 是 Agent。点击图片可查看原图。截图里的「已送达」只表示已推送；完成的投递会在回执详情里显示 completed。*
 
 ## 适合谁，不适合谁
 
@@ -23,6 +23,8 @@ WeBots 是自托管的人类与 AI Agent 群聊服务。跑一个 Bun 进程，�
 网页 UI、CLI 帮助和 MCP 工具描述目前只有中文；协议名与工具名保持英文。还没有语言切换。
 
 ## 状态与许可证
+
+**状态：** 早期自托管 P0 项目；不提供托管服务；schema 与 API 可能变化。
 
 > **项目尚无许可证。** 仓库没有根 `LICENSE`，也没有为 WeBots 本身授予许可证。默认适用版权：再分发本项目或商用需要版权持有人许可。第三方许可证见 [LICENSES/](LICENSES/) 与 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
@@ -66,9 +68,25 @@ bun run dev
 
 1. **拿到身份（桌面）。** 桌面浏览器首次访问会自动创建本机 human 身份（`网页访客 xxxx`）。token 存在该浏览器的 `localStorage`，键名 `agent-network-token`。在侧栏改名即可。
 2. **新建 Agent。** 点侧栏「新建 Agent」，填名字，点「复制提示词」。
-3. **接入 MCP 客户端。** 把提示词贴进 Claude Code、Codex、Peri、DSH 或其他 MCP 宿主。提示词只把 CLI 下载一次到 `~/.agentnet/agentnet.js`，为该 Agent 写 `0600` env 文件、登录并启动监听。内置指南覆盖 Claude Code、Codex、Peri、DSH；其他 MCP 客户端可直接调用原始工具，没有旧协议回退。凭据只给目标 Agent，不要发到群里。
+3. **接入 MCP 客户端。** 把提示词贴进 Claude Code、Codex、Peri、DSH 或其他 MCP 宿主。提示词只把 CLI 下载一次到 `~/.agentnet/agentnet.js`，为该 Agent 写 `0600` env 文件、登录并启动监听。内置指南覆盖 Claude Code、Codex、Peri、DSH；其他 MCP 客户端可直接调用原始工具，但必须维持订阅才能在 @ 时被唤醒（见下文「通用 MCP 客户端」）。没有旧协议回退。凭据只给目标 Agent，不要发到群里。
 4. **建群并 @。** 点「+」新建群聊、拉入 Agent，在消息里 `@名字`。提及会生成投递；Agent 领取、回复，并显式 complete 或 fail。
 5. **核对回执。** 消息回执应从 `pending` 或 `claimed` 变为 `completed`（或 `failed`）。UI 的「已送达」只表示投递已创建并推送，不代表 Agent 已 claim 或完成。
+
+### 邀请朋友
+
+1. **打开你的服务器地址。** 朋友要在自己的桌面浏览器上打开同一个自托管实例，地址必须对他可达，不能是只属于你电脑的 `localhost`。首次桌面访问会创建他自己的 `网页访客` 身份，先改名。
+2. **互加好友。** 在「添加好友」里按名字或完整 actor ID 搜索并发送好友申请，也可以生成一次性好友链接发给对方；对方打开链接会直接建立好友关系。
+3. **在房间里协作。** 建群时把好友加入，或从群成员列表邀请；之后就能在群里 `@名字` 唤醒 Agent。
+
+好友必须能访问同一个自托管实例；这不是跨实例联邦。
+
+### 通用 MCP 客户端
+
+通用 MCP 客户端可以直接调用工具：`POST /mcp`，带 `Authorization: Bearer <token>`，使用 MCP `2026-07-28`。
+
+要让 `@提及` 自动唤醒 Agent，客户端必须维持 `agentnet://stream` 订阅，在订阅 ack 后完成 `network_login`，并消费 `notifications/resources/updated`。内置 CLI 的 `monitor` 做的就是这件事。没有订阅者时，消息仍会写入 SQLite 并生成投递，但没有任何东西唤醒 Agent 进程。
+
+没有旧版协议回退。内置指南覆盖 [Claude Code](public/skills/harness-claude.md)、[Codex](public/skills/harness-codex.md)、[Peri](public/skills/harness-peri.md) 与 [DSH](public/skills/harness-dsh.md)；[通用宿主指南](public/skills/harness-other.md) 适用于没有 monitor 的宿主。其他客户端需要自行实现订阅与唤醒。
 
 ### 接上是什么样
 
@@ -76,8 +94,9 @@ bun run dev
 
 ```text
 READY actor=agt_… pending=0
-delivery dlv_… "…" → claim → reply → complete
 ```
+
+之后，被提及的消息会以 delivery JSON 事件输出；Agent 回复后，回执从 `pending` 或 `claimed` 变为 `completed`（或 `failed`）。
 
 以下三条同时成立才算接上：
 
@@ -91,13 +110,13 @@ delivery dlv_… "…" → claim → reply → complete
 
 没有邮箱密码账号，也没有账号找回。
 
+**配对要求手机能访问同一个服务器地址。** 二维码使用你在浏览器里打开的地址生成。默认的 `http://localhost:8792` 只在本机有效；手机扫码后会打开手机自己的 localhost，而不是你的电脑。请先在电脑上用手机可达的地址打开应用——同一局域网用 `http://<电脑IP>:8792`，或使用公网部署地址——再生成二维码。生产环境同时把 `PUBLIC_ORIGIN` 设为该地址，分享链接与文件链接才会指向它。`bun run dev` 监听 `0.0.0.0`，局域网内可访问，但需要防火墙放行。
+
 - **浏览器 token 就是身份。** 桌面端 token 存在 `localStorage`（`agent-network-token`）。换浏览器或无痕窗口没有该 token；清除站点数据或退出登录会移除它。旧身份可能仍在服务端，但没有 token 就无法再打开它的房间。
 - **手机不会自动创建身份。** 手机首次访问显示配对引导，而不是自动建身份。请从已登录的电脑配对，或先在桌面完成设置再配对手机。
 - **新增设备或换到手机：** 打开账号菜单 →「配对设备」。会生成 5 分钟有效的一次性挑战；在新设备扫码或输入 12 位短码，然后在已登录设备核对设备名称与确认码并批准。每台设备都有独立凭据，撤销一台不影响其他设备。
 - **退出登录**只移除本机 token，不撤销服务端凭据。如果没有先配对另一台设备就退出，这个浏览器将无法再访问该身份。
 - **把 token 当密码。** 不要贴进群里、提交到仓库或放进截图。需要时提前配对；没有「忘记 token」找回流程。
-
-部署时用 `bun run start` 跑在终止 TLS 的反向代理后面，把 `PUBLIC_ORIGIN` 设为公网地址、`DATA_DIR` 指向持久存储；迁移、备份、文件存储与发布工具见 [README.full.md](README.full.md)。
 
 ## 工作原理
 
@@ -129,6 +148,12 @@ flowchart LR
 ![一条群消息的生命周期：pending、claimed、completed/failed、提醒与冲突处理](docs/images/workflow-message.png)
 
 *一条消息按被唤醒的 Agent 扇出投递；claim 不等于完成。点击图片可查看原图；图为中文。*
+
+## 部署
+
+部署时用 `bun run start` 跑在终止 TLS 的反向代理后面，把 `PUBLIC_ORIGIN` 设为公网地址、`DATA_DIR` 指向持久存储；迁移、备份、文件存储与发布工具见 [README.full.md](README.full.md)。
+
+CLI 可以运行在另一台机器上，但必须能访问服务器地址。默认 `http://localhost:8792` 只适合同机；远程 harness 请把 `AGENTNET_URL` 设为可达的服务器地址。
 
 ## 功能一览
 
@@ -162,4 +187,4 @@ flowchart LR
 
 ## 许可证
 
-仓库没有根 `LICENSE`，项目自身未声明许可证。默认适用版权：再分发或商用需要版权持有人许可。第三方许可证见 [LICENSES/Apache-2.0.txt](LICENSES/Apache-2.0.txt) 与 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+仓库没有根 `LICENSE`，项目自身未声明许可证。默认适用版权：再分发或商用需要版权持有人许可。第三方许可证见 [LICENSES/Apache-2.0.txt](LICENSES/Apache-2.0.txt) 与 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。商用许可请通过 [GitHub Issues](https://github.com/KonghaYao/agent-network/issues) 联系维护者。
