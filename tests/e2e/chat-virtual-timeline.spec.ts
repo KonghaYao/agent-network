@@ -241,33 +241,69 @@ interface BottomProbeReport {
   maxGap: number;
   finalGap: number;
   maxBackward: number;
+  /** 相对历史最高 scrollTop 的最大回退；向下滚动本身不计入。 */
+  maxBackwardFromPeak: number;
+  /** 首次到达底部之后的最大回退；-1 表示采样期间没有到达底部。 */
+  maxBackwardAfterArrival: number;
+  maxVisibleBackwardAfterArrival: number;
+  /** 首次到达底部之后的最大 gap。 */
+  maxGapAfterArrival: number;
 }
 
-async function startBottomProbe(page: Page): Promise<void> {
-  await page.evaluate(() => {
+interface BottomProbeState {
+  frames: BottomFrame[];
+  scrollEvents: number;
+  stopped: boolean;
+  onScroll: (() => void) | null;
+  arrivalIndex: number;
+  arrivalAt: number;
+}
+
+async function startBottomProbe(page: Page, painted = false): Promise<void> {
+  await page.evaluate((sampleAfterPaint) => {
     const node = document.getElementById('messages') as HTMLElement;
-    const state = {
-      frames: [] as BottomFrame[],
+    const state: BottomProbeState = {
+      frames: [],
       scrollEvents: 0,
       stopped: false,
-      onScroll: null as (() => void) | null,
+      onScroll: null,
+      arrivalIndex: -1,
+      arrivalAt: -1,
     };
-    (window as unknown as { __bottomProbe: typeof state }).__bottomProbe = state;
+    (window as unknown as { __bottomProbe: BottomProbeState }).__bottomProbe = state;
     state.onScroll = () => {
       state.scrollEvents += 1;
     };
     node.addEventListener('scroll', state.onScroll, { passive: true });
-    const tick = () => {
-      if (state.stopped) return;
+    const sample = () => {
+      const gap = node.scrollHeight - node.scrollTop - node.clientHeight;
+      if (state.arrivalIndex < 0 && node.scrollTop > 0 && gap <= 2) {
+        state.arrivalIndex = state.frames.length;
+        state.arrivalAt = performance.now();
+      }
       state.frames.push({
         top: node.scrollTop,
         height: node.scrollHeight,
-        gap: node.scrollHeight - node.scrollTop - node.clientHeight,
+        gap,
       });
+    };
+    const tick = () => {
+      if (state.stopped) return;
+      if (sampleAfterPaint) {
+        // setTimeout(0) 在上一帧绘制之后运行：只记录真正画到屏幕上的状态，
+        // 不把绘制前被同步校正掉的瞬态算成可见回退。
+        setTimeout(() => {
+          if (state.stopped) return;
+          sample();
+          requestAnimationFrame(tick);
+        }, 0);
+        return;
+      }
+      sample();
       requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
-  });
+  }, painted);
 }
 
 async function stopBottomProbe(page: Page): Promise<BottomProbeReport> {
@@ -279,6 +315,7 @@ async function stopBottomProbe(page: Page): Promise<BottomProbeReport> {
         scrollEvents: number;
         stopped: boolean;
         onScroll: (() => void) | null;
+        arrivalIndex: number;
       };
     }).__bottomProbe;
     state.stopped = true;
@@ -289,7 +326,38 @@ async function stopBottomProbe(page: Page): Promise<BottomProbeReport> {
     for (let index = 1; index < frames.length; index += 1) {
       maxBackward = Math.max(maxBackward, frames[index - 1]!.top - frames[index]!.top);
     }
+    let peak = -1;
+    let maxBackwardFromPeak = 0;
+    for (const top of tops) {
+      peak = Math.max(peak, top);
+      maxBackwardFromPeak = Math.max(maxBackwardFromPeak, peak - top);
+    }
     const gaps = frames.map((frame) => frame.gap);
+    const arrivalFrames =
+      state.arrivalIndex >= 0 ? frames.slice(state.arrivalIndex) : [];
+    const arrivalTops = arrivalFrames.map((frame) => frame.top);
+    let arrivalPeak = -1;
+    let maxBackwardAfterArrival = 0;
+    for (const top of arrivalTops) {
+      arrivalPeak = Math.max(arrivalPeak, top);
+      maxBackwardAfterArrival = Math.max(
+        maxBackwardAfterArrival,
+        arrivalPeak - top,
+      );
+    }
+    // 只有 gap > 2 才代表“最新消息已经被推离底部”。到底后高度测量引起的
+    // scrollTop 回退如果 gap 仍为 0，画面锚在内容底部，用户看不到位移。
+    let runningPeak = -1;
+    let maxVisibleBackwardAfterArrival = 0;
+    frames.forEach((frame, index) => {
+      runningPeak = Math.max(runningPeak, frame.top);
+      if (index >= state.arrivalIndex && frame.gap > 2) {
+        maxVisibleBackwardAfterArrival = Math.max(
+          maxVisibleBackwardAfterArrival,
+          runningPeak - frame.top,
+        );
+      }
+    });
     return {
       frames: frames.length,
       minTop: Math.min(...tops),
@@ -301,6 +369,163 @@ async function stopBottomProbe(page: Page): Promise<BottomProbeReport> {
         (node.scrollHeight - node.scrollTop - node.clientHeight).toFixed(2),
       ),
       maxBackward: Math.round(maxBackward * 100) / 100,
+      maxBackwardFromPeak: Math.round(maxBackwardFromPeak * 100) / 100,
+      maxBackwardAfterArrival:
+        arrivalFrames.length > 0
+          ? Math.round(maxBackwardAfterArrival * 100) / 100
+          : -1,
+      maxVisibleBackwardAfterArrival:
+        arrivalFrames.length > 0
+          ? Math.round(maxVisibleBackwardAfterArrival * 100) / 100
+          : -1,
+      maxGapAfterArrival:
+        arrivalFrames.length > 0
+          ? Math.round(Math.max(...arrivalFrames.map((frame) => frame.gap)) * 100) / 100
+          : -1,
+    };
+  });
+}
+
+interface EntryFrame {
+  t: number;
+  top: number;
+  height: number;
+  gap: number;
+  visible: boolean;
+}
+
+interface EntryProbeReport {
+  frames: number;
+  visibleFrames: number;
+  firstVisibleAt: number;
+  /** rAF 采样（绘制前）的相对峰值回退，任务要求的门禁指标。 */
+  maxBackward: number;
+  /** 绘制后采样的最大回退；底部高度补偿可能产生 gap=0 的 scrollTop 回退。 */
+  maxBackwardPainted: number;
+  maxBackwardAllFrames: number;
+  /** 绘制后可见的最大 gap（真正画到屏幕上的“离底”）。 */
+  maxGap: number;
+  paintedFrames: number;
+  /** rAF 采样（绘制前）的最大 gap，仅用于诊断。 */
+  maxGapRaf: number;
+  maxGapAllFrames: number;
+  atBottomSequence: string[];
+  flipsAfterFirstTrue: number;
+  finalGap: number;
+  finalAtBottom: string | null;
+}
+
+/**
+ * 从 `#messages` 出现的第一帧开始逐帧采样。测试不能先等页面/数据就绪再采样，
+ * 否则会跳过真正会发生回退的进入窗口。
+ */
+async function installEntryProbe(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const state = {
+      frames: [] as EntryFrame[],
+      painted: [] as EntryFrame[],
+      stopped: false,
+      atBottom: [] as string[],
+      firstVisibleAt: -1,
+    };
+    (window as unknown as { __entryProbe: typeof state }).__entryProbe = state;
+    const begin = () => {
+      const node = document.getElementById('messages') as HTMLElement | null;
+      if (!node) {
+        requestAnimationFrame(begin);
+        return;
+      }
+      const startedAt = performance.now();
+      const tick = () => {
+        if (state.stopped) return;
+        const t = performance.now() - startedAt;
+        const visible = window.getComputedStyle(node).visibility !== 'hidden';
+        if (visible && state.firstVisibleAt < 0) state.firstVisibleAt = t;
+        state.frames.push({
+          t,
+          top: node.scrollTop,
+          height: node.scrollHeight,
+          gap: node.scrollHeight - node.scrollTop - node.clientHeight,
+          visible,
+        });
+        // 绘制后的状态：只有它代表用户真正看到的画面。
+        setTimeout(() => {
+          if (state.stopped) return;
+          state.painted.push({
+            t: performance.now() - startedAt,
+            top: node.scrollTop,
+            height: node.scrollHeight,
+            gap: node.scrollHeight - node.scrollTop - node.clientHeight,
+            visible: window.getComputedStyle(node).visibility !== 'hidden',
+          });
+        }, 0);
+        const atBottom = node.getAttribute('data-virt-at-bottom');
+        // 只统计显示后的翻转；隐藏阶段的测量回调用户看不到。
+        if (
+          visible &&
+          atBottom !== null &&
+          state.atBottom[state.atBottom.length - 1] !== atBottom
+        ) {
+          state.atBottom.push(atBottom);
+        }
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(begin);
+  });
+}
+
+async function stopEntryProbe(page: Page): Promise<EntryProbeReport> {
+  return page.evaluate(() => {
+    const node = document.getElementById('messages') as HTMLElement;
+    const state = (window as unknown as {
+      __entryProbe: {
+        frames: EntryFrame[];
+        painted: EntryFrame[];
+        stopped: boolean;
+        atBottom: string[];
+        firstVisibleAt: number;
+      };
+    }).__entryProbe;
+    state.stopped = true;
+    const frames = state.frames;
+    const visible = frames.filter((frame) => frame.visible);
+    const paintedVisible = state.painted.filter((frame) => frame.visible);
+    const peakBackward = (list: EntryFrame[]): number => {
+      let peak = -1;
+      let backward = 0;
+      for (const frame of list) {
+        peak = Math.max(peak, frame.top);
+        backward = Math.max(backward, peak - frame.top);
+      }
+      return backward;
+    };
+    const maxGap = (list: EntryFrame[]): number =>
+      list.length ? Math.max(...list.map((frame) => frame.gap)) : 0;
+    const firstTrue = state.atBottom.indexOf('true');
+    return {
+      frames: frames.length,
+      visibleFrames: visible.length,
+      firstVisibleAt: Math.round(state.firstVisibleAt * 100) / 100,
+      maxBackward: Math.round(peakBackward(visible) * 100) / 100,
+      maxBackwardAllFrames:
+        Math.round(peakBackward(frames) * 100) / 100,
+      maxBackwardPainted:
+        Math.round(peakBackward(paintedVisible) * 100) / 100,
+      maxGap: Math.round(maxGap(paintedVisible) * 100) / 100,
+      paintedFrames: paintedVisible.length,
+      maxGapRaf: Math.round(maxGap(visible) * 100) / 100,
+      maxGapAllFrames: Math.round(maxGap(frames) * 100) / 100,
+      atBottomSequence: state.atBottom,
+      flipsAfterFirstTrue:
+        firstTrue < 0
+          ? -1
+          : state.atBottom.slice(firstTrue).filter((value) => value === 'false').length,
+      finalGap: Number(
+        (node.scrollHeight - node.scrollTop - node.clientHeight).toFixed(2),
+      ),
+      finalAtBottom: node.getAttribute('data-virt-at-bottom'),
     };
   });
 }
@@ -705,17 +930,20 @@ test.describe('virtual chat timeline', () => {
 
 /**
  * 贴底稳定性：真实「Peri 维护」会话包含大量 Agent 长 Markdown、图片、文件卡
- * 与 Task。旧实现用整棵 scroller 的 MutationObserver + 每次变化强制
- * `scrollTop = scrollHeight`，在隔离夹具的进入/贴底阶段记录到 806px 回跳。
- * 这两条用例固化静止与追加时的位置不变量，不依赖帧率。
+ * 与 Task。旧实现在第一帧 atBottom 就 reveal，且只用 rAF 校正，入口阶段
+ * 可复现 197px 回退（基线 5/5）；到达底部可复现 56/76px 的可见回退。
+ * 这里固化入口、到达、静止与追加时的位置不变量，不依赖帧率。
  */
 test.describe('virtual timeline bottom stability', () => {
   const RICH_TOTAL = 240;
   const LOADED_TARGET = 220;
+  const LIGHT_TOTAL = 80;
   let base = '';
   let ownerToken = '';
   let agentToken = '';
   let roomId = '';
+  let lightRoomId = '';
+  let lightAgentToken = '';
   let imageUrl = '';
   let documentUrl = '';
 
@@ -742,6 +970,25 @@ test.describe('virtual timeline bottom stability', () => {
       },
     );
     roomId = created.room.room_id;
+    const lightAgent = await callTool<{ actor_id: string; token: string }>(
+      base,
+      ownerToken,
+      'network_agent_create',
+      { request_id: requestId('virt_light_agent'), name: `轻量时间线 ${suffix}` },
+    );
+    const lightRoom = await callTool<{ room: { room_id: string } }>(
+      base,
+      ownerToken,
+      'network_room_create',
+      {
+        request_id: requestId('virt_light_room'),
+        kind: 'direct',
+        members: [lightAgent.actor_id],
+      },
+    );
+    lightRoomId = lightRoom.room.room_id;
+    lightAgentToken = lightAgent.token;
+    await seedMessages(base, lightAgent.token, lightRoomId, LIGHT_TOTAL);
     const image = await uploadRoomFile(
       base,
       ownerToken,
@@ -772,6 +1019,94 @@ test.describe('virtual timeline bottom stability', () => {
         // 存储不可用时由页面错误态兜底。
       }
     }, ownerToken);
+  });
+
+  test('enters the room without a visible backward jump', async ({ page }) => {
+    // 采样从 #messages 出现的第一帧开始，不等待数据/首轮测量完成。
+    await installEntryProbe(page);
+    const origin = await baseUrl();
+    await page.goto(`${origin}/c/${roomId}`);
+    await expect(page.locator('body[data-spa-route="room"]')).toBeVisible();
+    await page.waitForTimeout(900);
+    const report = await stopEntryProbe(page);
+    console.log(`VIRTUAL_BOTTOM_ENTRY ${JSON.stringify(report)}`);
+
+    // 至少覆盖进入后的稳定窗口；可见帧过少说明采样起点失效。
+    expect(report.visibleFrames).toBeGreaterThan(10);
+    expect(report.paintedFrames).toBeGreaterThan(5);
+    expect(report.firstVisibleAt).toBeLessThanOrEqual(400);
+    expect(report.maxBackward).toBeLessThanOrEqual(20);
+    // 绘制后的 gap 才是用户看到的“最新消息被推离底部”。
+    expect(report.maxGap).toBeLessThanOrEqual(20);
+    expect(report.finalGap).toBeLessThanOrEqual(2);
+    expect(report.finalAtBottom).toBe('true');
+    // 到达底部后不得再反复翻转 data-virt-at-bottom。
+    expect(report.flipsAfterFirstTrue).toBe(0);
+  });
+
+  test('stays pinned after scrolling the loaded window to the bottom', async ({ page }) => {
+    await openRoom(page, lightRoomId);
+    await loadOlderUntil(page, LIGHT_TOTAL);
+    await scrollToTop(page);
+    await page.waitForTimeout(300);
+
+    // 用户上翻阅读时到达一条中等高度的 Markdown 消息（表格 + 列表）。它
+    // 此时不在已挂载窗口里，滚到底部才首次渲染并测量真实高度。
+    await callTool(base, lightAgentToken, 'network_message_send', {
+      request_id: requestId('virt_manual_live'),
+      client_message_id: crypto.randomUUID(),
+      room_id: lightRoomId,
+      invoke: [],
+      body: [
+        '## 上翻时到达的表格消息',
+        '',
+        '| 项 | 状态 | 备注 |',
+        '| --- | --- | --- |',
+        ...Array.from(
+          { length: 14 },
+          (_, index) => `| 检查 ${index + 1} | 通过 | 到达底部后首次渲染 |`,
+        ),
+        '',
+        ...Array.from(
+          { length: 10 },
+          (_, index) => `- 到达底部后展开的第 ${index + 1} 条说明，用于增加真实高度。`,
+        ),
+      ].join('\n'),
+    });
+    await expect.poll(() => loadedCount(page), { timeout: 15_000 }).toBeGreaterThan(LIGHT_TOTAL);
+    await page.waitForTimeout(300);
+
+    await startBottomProbe(page, true);
+    const box = await page.locator('#messages').boundingBox();
+    expect(box).not.toBeNull();
+    if (!box) return;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    // 一次滚轮手势直接拖到底：新消息首次挂载，Markdown 真实高度随后才测量。
+    // 逐段滚轮会让底部条目提前测好，掩盖到达瞬间的缺陷。
+    await page.mouse.wheel(0, 200_000);
+    // 以页面内第一帧 gap≤2 为到达起点，再完整观察 500ms；外部轮询会
+    // 晚几十毫秒，正好跳过到达瞬间的回退。
+    await page.waitForFunction(
+      () => {
+        const state = (window as unknown as { __bottomProbe?: BottomProbeState })
+          .__bottomProbe;
+        return (
+          state !== undefined &&
+          state.arrivalIndex >= 0 &&
+          performance.now() - state.arrivalAt >= 500
+        );
+      },
+      undefined,
+      { timeout: 10_000, polling: 'raf' },
+    );
+    const report = await stopBottomProbe(page);
+    console.log(`VIRTUAL_BOTTOM_MANUAL ${JSON.stringify(report)}`);
+
+    expect(report.maxGapAfterArrival).toBeGreaterThanOrEqual(0);
+    expect(report.maxGapAfterArrival).toBeLessThanOrEqual(20);
+    expect(report.maxVisibleBackwardAfterArrival).toBeLessThanOrEqual(20);
+    expect(report.finalGap).toBeLessThanOrEqual(2);
+    expect(await page.locator('#messages').getAttribute('data-virt-at-bottom')).toBe('true');
   });
 
   test('keeps scrollTop stable for 2s after reaching the bottom', async ({ page }) => {

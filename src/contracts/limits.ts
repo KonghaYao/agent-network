@@ -476,6 +476,13 @@ export const LIMITS = {
   webTimelineVirtual: true,
   /** 虚拟时间线自动加载更早的最小间隔（毫秒）；一次手势最多一页。 */
   webTimelineLoadCooldownMs: 400,
+  /**
+   * 虚拟时间线首次进入：高度连续稳定达到该帧数且已贴底后才显示，
+   * 避免把估算高度阶段的回退画给用户。
+   */
+  webTimelineRevealStableFrames: 3,
+  /** 虚拟时间线首次进入的最长隐藏时间（毫秒）；超时后必须显示，不能白屏。 */
+  webTimelineRevealMaxWaitMs: 300,
   /** 滚轮/触摸上翻意图的最小位移（像素）。 */
   webScrollIntentPx: 6,
   /** 用户上翻后的短窗口：期间异步高度与 scroll 事件都不得自动回底（毫秒）。 */

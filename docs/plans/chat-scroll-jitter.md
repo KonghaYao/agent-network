@@ -534,60 +534,90 @@ Playwright：
 
 隔离实例（Bun + 临时 SQLite，Playwright Chromium，1280×720）中创建 direct Agent 会话，
 消息由 Agent 发出以走 Markdown 岛，混排长 Markdown 表格/代码块、图片文件卡、`.md`
-文件卡与消息式 Task；`network_message_read` 人为延迟 250 ms，模拟真实展开时序。
-测量每帧 `scrollTop` / `scrollHeight` / `gap`、`scroll` 事件与 DOM mutation。
+文件卡与消息式 Task；另建 80 条轻内容会话用于“已加载窗口滚到底部”场景。
+`scrollTop` / `scrollHeight` / `gap` 同时按 rAF（绘制前）与 `setTimeout(0)`（绘制后）
+采样，回退一律相对“历史最高 `scrollTop`”计算。
 
-- **修复前**：进入会话并落到底部时，`scrollTop` 先冲到 `12497`，随后在 16 ms 内回跳到
-  `11691`（**806 px**），再继续向下测量；另一次 80 条夹具中记录到 `5517→5732`
-  （215 px）的同类回跳。回跳期间 `data-virt-at-bottom` 在 `true/false` 间切换。
-- **静止后**：两种实现都能在约 0.2–1 s 内稳定；稳定后 2–3 s 内 `scrollTop` range 为
-  **0 px**、`scroll` 事件 0、mutation 0。也就是说，用户看到的“抖”是**到底/异步长高
-  的收敛过程**，不是静止后的无限循环。
-- **旧实现的成因**：整棵 scroller 的 `MutationObserver{childList,subtree,characterData}`
-  把 Virtuoso 挂载/卸载条目、替换文本都当成“内容长高”，每次 mutation 都在 rAF 里
-  强制 `scrollTop = scrollHeight`；同时 `atBottomStateChange` 与 range 重算又触发新一轮
-  挂载。两者对 `scrollTop` 的写入互相抢，造成冲过头再回跳。
+- **入口（240 条富内容，5/5 复现）**：从 `#messages` 出现的第一帧开始采样。基线
+  `a0586b7` 在首屏可见阶段 `scrollTop` 相对峰值回退 **197 px**，绘制后 `gap` 最大
+  **1,470 px**；可见阶段出现过 `data-virt-at-bottom` 从 `true` 翻回 `false`。
+- **到达底部（80 条轻内容，5/5 复现）**：用户上翻阅读时 Agent 发来一条中等高度的
+  Markdown 消息（14 行表格 + 10 条列表），该消息尚未挂载（高度仍是估算值）；一次
+  滚轮把窗口拖到底。以页面内第一帧 `gap≤2` 为到达起点，之后 500 ms 内基线绘制后
+  `gap` 最大 **74 px**、可见回退 **76 px**。
+- 此前记录中的 `806→90` 与 `215 px` 方向描述不可按原文复现（215 px 只在另一种
+  “到达瞬间恰好收到追加”的时序下出现过，且方向写反），已删除，不再作为基线。
+- **旧实现的成因**：`handleAtBottom` / `rangeChanged` 一到底就 `revealWhenSettled`，
+  把估算高度阶段的回退直接画给用户；`totalListHeightChanged` 只排 rAF 校正，
+  `ResizeObserver` 也只排 rAF，校正发生在绘制之后；方向判断把任何近期输入都当成
+  “用户离开底部”，向下滚动到达时高度一变就取消 pinned，校正被跳过。
 
 ### 12.2 改法
 
 `src/web/features/chat/TimelineVirtual.tsx`：
 
-- 删除整棵 scroller 的 `MutationObserver`。只保留
-  `[data-testid="virtuoso-item-list"]` 的 `ResizeObserver`，并接入 Virtuoso 的
-  `totalListHeightChanged`（覆盖 header/footer，例如 outbox 行）。两个信号合并到
-  同一帧，只执行一次校正。
-- 校正前检查 `pinned && !anchored && !restoring`，且真实
-  `scrollHeight - scrollTop - clientHeight > 2`；已经在底部时 no-op，不写
-  `scrollTop`、不制造额外 `scroll` 事件与 range 重算。
-- `handleAtBottom` 在已经 pinned 时不重复 `setPin(true)`；`scheduleMarkRead` 对同一个
-  待落已读水位不重复清/设定时器，已读延迟与 atBottom 语义不变。
-- 保留 `followOutput` 对新数据的跟随、anchor/search/restoring 抑制与 `?timeline=dom`
-  回滚路径。
+- **入口 settle**：`atBottom` / `rangeChanged` / 挂载兜底只启动 `watchInitialReveal`，
+  不再一到底就显示。隐藏期间逐帧同步贴底，连续 `webTimelineRevealStableFrames = 3`
+  帧高度不变且 `gap≤2` 才 reveal；最多等 `webTimelineRevealMaxWaitMs = 300 ms`，
+  超时必须显示，不能白屏。reveal 前再同步贴一次真实底部。
+- **同步校正**：`handleTotalListHeightChanged` 在 `pinned`、非 anchor/恢复窗口且
+  `gap>2` 时同步贴底；item list 的 `ResizeObserver` 同样在绘制前校正（rAF 仍作为
+  合并兜底），图片 `load` 捕获后下一帧再按真实高度贴一次。校正优先调用 Virtuoso 的
+  `autoscrollToBottom()` 更新其内部滚动状态，再兜底写 `scrollTop = scrollHeight`。
+  Virtuoso 可能在同帧末尾按旧锚点把 `scrollTop` 写回，因此一次高度变化后最多重试
+  8 帧，直到 `gap≤2`；预算有限，不会退化成旧的无限 MutationObserver 互抢。
+- **方向化贴底**：只有近期“向上”手势（滚轮 `deltaY<0`、PageUp/ArrowUp/Home、
+  触摸/指针按原语义）才在 `atBottom=false` 时取消 pinned；向下滚轮会清除向上意图。
+  向下手势一旦落到 `gap≤2` 就立即 `setPin(true)`，不等 Virtuoso 的 `atBottom` 回调；
+  超高消息测量可能持续数百毫秒。到达瞬间还用“刚在底部 + 正在向下滚”的短窗口
+  继续校正，reveal 后 500 ms 内保留贴底宽限，让首轮图片/Markdown 长高也能同一帧校正。
+  搜索/引用/Task 跳转后的 600 ms 内禁止入口 settle 贴底，避免把定位拉回底部。
+- `initialSettled` 只在 reveal 时置位，避免隐藏期 `scrollTop=0` 触发 `onScroll`
+  的“到顶即取消贴底”，把入口校正挡掉。
+- 保留 `followOutput` 对新数据的跟随、anchor/search/restoring 抑制与
+  `?timeline=dom` 回滚路径；已读水位语义不变。
 
-### 12.3 修复后数据
+### 12.3 A/B 实测
 
-同夹具、同内容 A/B：
+同夹具、同内容，本机 headless Chromium。基线为 `a0586b7` 的只读 worktree
+（`/tmp/agentnet-baseline-a0586b7`，独立 `dist/web` 与隔离服务），测试用 HEAD 的
+同一份 e2e，通过 `E2E_BASE_URL` 指向基线服务。
 
-| 场景 | 修复前 | 修复后 |
+| 场景 | 基线 `a0586b7` | 修复后 |
 | --- | --- | --- |
-| 进入会话贴底最大回跳 | 806 px（另一次 215 px） | 90 px（高度测量的浏览器 clamp） |
-| 贴底收敛时间 | 约 0.18–0.33 s | 约 0.20 s |
-| 到底静止 2 s `scrollTop` range | 0 px | **0 px** |
-| 到底静止 2 s `scroll` 事件 | 0 | **0** |
-| 底部追加长 Markdown 后 | 最终 gap 0，无回弹 | 最终 gap 0，`maxBackward` **0 px** |
+| 入口 `maxBackward`（相对峰值，5 次） | **197 px**（5/5 >20） | **0 px**（5/5） |
+| 入口绘制后 `maxGap` | **1,470 px** | **0 px** |
+| 到达底部可见回退（5 次） | **76 px**（5/5 >20） | **0 px**（5/5） |
+| 到达底部绘制后 `maxGap` | **74 px** | **0 px** |
+| 到底静止 2 s `scrollTop` range / `scroll` 事件 | 0 px / 0 | **0 px / 0** |
+| 5k 已加载：DOM 节点 / 挂载消息 | 175 / 15 | **175 / 15** |
+| 5k 帧间隔 p95 / 长帧 | 16.7 ms / 0 | **16.7 ms / 0** |
+| 5k prepend 最大漂移 / 校正后 / missed | 8 / 0 / false | **8 / 0 / false** |
 
-新增 e2e（`tests/e2e/chat-virtual-timeline.spec.ts`）：
+入口 `maxBackward` 是 rAF（绘制前）采样值；`maxGap` 取绘制后采样，代表用户真正看到的
+“最新消息被推离底部”。底部高度补偿造成的 `scrollTop` 回退如果 `gap` 仍为 0，画面
+锚在内容底部，不计入可见回退。
 
-- `keeps scrollTop stable for 2s after reaching the bottom`：加载 220 条富内容后到底，
-  等首轮挂载完成，2 s 内 `range ≤ 1 px`、`scroll` 事件 0、`maxBackward ≤ 1 px`。
-- `follows a long append without bouncing back`：底部追加长 Markdown + 图片卡，
-  最终 gap ≤ 2 px，`maxBackward ≤ 1 px`，结束时 `data-virt-at-bottom=true`。
+### 12.4 新增 e2e
 
-### 12.4 回滚与边界
+`tests/e2e/chat-virtual-timeline.spec.ts` 的 `virtual timeline bottom stability`：
 
-- `?timeline=dom` 不经过本文件，DOM 路径的 3 个关键场景（分页、搜索、群消息管控）
-  仍由既有 e2e 覆盖。
-- 本机 headless Chromium 无法模拟 Safari 的橡皮筋回弹；修复只保证程序化校正不再
-  在底部写入 `scrollTop`，因此也不会与橡皮筋争抢。
-- 剩余边界：极端内容（超高单条消息）首次测量仍会有一次向下的高度修正；这是
-  Virtuoso 从估算高度切到真实高度的固有行为，不是来回抖动。
+- `enters the room without a visible backward jump`：`addInitScript` 在导航前安装采样器，
+  从 `#messages` 第一帧开始，记录 rAF 与绘制后两套样本约 900 ms。断言
+  `maxBackward ≤ 20`、绘制后 `maxGap ≤ 20`、首次可见 ≤400 ms、最终 gap ≤2、
+  显示后 `data-virt-at-bottom` 不再翻转。基线 5/5 失败（197 px），HEAD 5/5 通过。
+- `stays pinned after scrolling the loaded window to the bottom`：80 条轻内容加载完后
+  滚到顶部，Agent 发一条 14 行表格 + 10 条列表的 Markdown 消息（尚在估算高度），
+  再一次性滚轮拖到底；以页面内第一帧 `gap≤2` 为到达起点，观察 500 ms 的绘制后样本。
+  断言 `maxGapAfterArrival ≤ 20`、`maxVisibleBackwardAfterArrival ≤ 20`、最终 gap ≤2。
+  基线 5/5 失败（74/76 px），HEAD 10/10 通过。
+
+### 12.5 回滚与边界
+
+- `?timeline=dom` 完全绕过本文件，不获得本次入口 settle 与同步校正；DOM 路径现有
+  e2e 只覆盖分页与搜索锚点两个场景。群消息管控与 Task dock 的 e2e 走默认虚拟时间线，
+  不是 DOM 回滚，不能用来证明 DOM 路径。
+- 本机 headless Chromium 无法模拟 Safari 的橡皮筋回弹；修复只保证程序化校正在绘制前
+  完成，不与橡皮筋争抢。
+- 剩余边界：单条超高消息首次测量仍可能有一次向下的高度修正（估算切真实值）；
+  入口最多隐藏 300 ms，慢设备上 reveal 与首轮长高可能同帧，由同步校正吸收。
