@@ -1,6 +1,6 @@
 # WeBots 代码索引
 
-状态：P0（WeBots 2026-11-04 集成）已实现并验证。覆盖身份/设备配对与撤销、好友关系与拉黑、群角色/邀请/邀请链接/群主转让/退群移除解散归档、消息/结构化提及/可靠补读、房间文件与私有成果保留、消息式 Task（起点标记、摘要行、Trace、按起点聚合搜索）、Agent 认领/管理/委托/停用/归档/管理权交接；同时包含微信风双栏首页/聊天、会话搜索、消息回执、Agent 全局改名、本人改名、问题反馈、网页监控、右侧文件/监控面板、输入框 `+` 附件菜单与 Fabric 画板、Agent 品牌头像、暗色与移动端单栏。P1（A02/A04/G04/M01/M04/M05/M06/M08/M09/Q03/Q06）未实现；跨设备消息原文交接、搜索、收藏、通话与外部业务回写不在本波次，撤回与撤回后本地重新编辑已实现（本地原文仅网页端、仅本机 sessionStorage）。使用说明见 [README](../README.md)，功能映射与 P1 缺口见 [feature-matrix](feature-matrix.md)，历史契约基线见 [CONTRACT_BASELINE](../reports/CONTRACT_BASELINE.md)。本地与远程协议/端到端验收通过；生产负载、限流与远程运营仍未验证。
+状态：P0（WeBots 2026-11-04 集成）已实现并验证。覆盖身份/设备配对与撤销、好友关系与拉黑、群角色/邀请/邀请链接/群主转让/退群移除解散归档、消息/结构化提及/可靠补读、房间文件与私有成果保留、消息式 Task（起点标记、摘要行、Trace、按起点聚合搜索）、Agent 认领/管理/委托/停用/归档/管理权交接；同时包含微信风双栏首页/聊天、会话搜索、消息回执、Agent 全局改名、本人改名、问题反馈、网页监控、右侧文件/监控面板、输入框 `+` 附件菜单与 Fabric 画板、Agent 品牌头像、暗色与移动端单栏。P1（A02/A04/G04/M01/M04/M05/M06/M08/M09/Q03/Q06）未实现；跨设备消息原文交接、搜索、收藏、通话与外部业务回写不在本波次，撤回与撤回后本地重新编辑已实现（本地原文仅网页端、仅本机 sessionStorage）。使用说明见 [README](../README.full.md)，功能映射与 P1 缺口见 [feature-matrix](feature-matrix.md)，历史契约基线见 [CONTRACT_BASELINE](../reports/CONTRACT_BASELINE.md)。本地与远程协议/端到端验收通过；生产负载、限流与远程运营仍未验证。
 
 ## 边界与数据流
 
@@ -168,7 +168,7 @@ Agent 归档：`migrations/0005_agent_archive.sql` 给 `actors` 增加可空 `ar
 | actor presence 与订阅广播 | `src/realtime/hub.ts`、`src/realtime/presence.ts` |
 | 留存与新序号下界 | `src/maintenance.ts` |
 | SQLite schema | `migrations/`（0001–0012、0017–0047，共 43 个；0013–0016 历史上未使用）。关键迁移：`0017_task_workflow.sql`、`0029_task_progress.sql`、`0032_task_submission_sources.sql`、`0033_task_review_acceptance.sql`、`0034_task_handoff_packs.sql`、`0035_task_recovery.sql`、`0036_device_pairing_sync.sql`、`0037_room_lifecycle.sql`、`0038_ownerless_room_guard.sql`、`0041_message_task_trace.sql`、`0042_drop_legacy_tasks.sql`、`0043_group_history_full_backfill.sql`、`0044_files_public_backfill.sql`、`0045_memory_ledger.sql`、`0046_memory_experience_catchup.sql`、`0047_message_search_fts.sql` |
-| 部署（Bun + 反向代理） | `README.md` |
+| 部署（Bun + 反向代理） | `README.full.md` |
 | 协议验收 | `scripts/verify-protocol.ts` |
 | Harness 静态断言（200/Markdown/关键标记/相对链接/无凭据） | `scripts/verify-protocol.ts` |
 | 端到端验收 | `scripts/acceptance.ts` |

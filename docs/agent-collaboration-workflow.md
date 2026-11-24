@@ -89,7 +89,7 @@
 ### 为什么这样设计
 
 - **发布是“指针切换”，不是“覆盖文件”。** 候选构建和全资产校验通过后才切 `current`；旧资源仍在共享根里，回滚只需切指针，不用重新构建。
-- **一次只跑一个发布。** 发布锁 + 单进程部署让“同时两个 release 在切”变成不可能；代价是发布必须排队，且有 1–2 秒重启窗口，SSE 会断开重连（`README.md:803-866`）。
+- **一次只跑一个发布。** 发布锁 + 单进程部署让“同时两个 release 在切”变成不可能；代价是发布必须排队，且有 1–2 秒重启窗口，SSE 会断开重连（`README.full.md` 的「部署（Bun 自托管）」一节）。
 - **数据库不参与回滚。** 部署脚本明确不执行 `db:migrate`（`scripts/deploy-web-release.sh:8-9`）；迁移由 `src/bun/migrate.ts` 顺序应用并记录在 `schema_migrations`，没有 down migration（`src/bun/migrate.ts:7-35`）。所以迁移必须按“先兼容、再发布、最后清理”的单向节奏做，发布前备份 SQLite 与文件目录。
 
 ### 优点 / 代价
@@ -317,7 +317,7 @@ worktree 只隔离工作区：两个人可以在不同目录、不同分支上�
 | 只有需要行动的事件会告警 | `client/monitor/alerts.ts:24-48` |
 | 部署五步：拉取/安装/候选构建/切指针/重启/健康/冒烟 | `scripts/deploy-web-release.sh:146-199` |
 | 切指针后失败会回滚、重启、复测 | `scripts/deploy-web-release.sh:97-122`、`:167-199` |
-| 部署脚本不执行 `db:migrate` | `scripts/deploy-web-release.sh:8-9`、`README.md:846` |
+| 部署脚本不执行 `db:migrate` | `scripts/deploy-web-release.sh:8-9`、`README.full.md` 的「部署（Bun 自托管）」 |
 | 迁移顺序应用、记录在 `schema_migrations`、无 down | `src/bun/migrate.ts:7-35` |
 | 发布与清理共用目录锁 | `scripts/lib/web-release.ts:105-135` |
 | 客户端契约不兼容时拦截写工具 | `src/web/pwa/update-write-guard.ts:1-80`、`src/web/lib/mcp-client.ts:159-166` |

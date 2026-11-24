@@ -9,7 +9,7 @@
 - **domain/权限**：领域实现与关键授权边界；所有写路径经 `runIdempotent` + `db.batch()` 与闸门表。
 - **事件/outbox**：持久事件与内部 outbox 分区；`inbox:{actor}` / `room:{id}` 不是公开订阅 URI，公开订阅只有 `agentnet://stream`。
 - **CLI/技能**：`client/cli.ts`（构建为 `/skills/agentnet.js`）、`src/mcp/skill.ts` 或静态技能/ Harness 指南。
-- **验收**：专项脚本与测试编号；全量门禁见 `README.md` 与本表末节。
+- **验收**：专项脚本与测试编号；全量门禁见 `README.full.md` 与本表末节。
 
 ## 1. 身份、设备与凭据
 
