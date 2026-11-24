@@ -61,6 +61,17 @@ export function markPendingRefresh(
     pending.contactBadge = true;
     return;
   }
+  // 服务端截断（20 条/1 KiB）或背压队列丢弃时，信封只带 `more`/`dropped`，
+  // 不保证留下当前房间的定位字段。缺了哪条变更不可知，必须保守重读
+  // 当前房间，否则无 delivery 的普通消息会一直停在旧窗口直到刷新。
+  if (source === 'stream.gap' || kind === 'gap') {
+    pending.rooms = true;
+    pending.detail = true;
+    pending.history = true;
+    pending.tasks = true;
+    pending.taskSummaries = true;
+    return;
+  }
   if (!roomId) {
     pending.rooms = true;
     return;

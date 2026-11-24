@@ -41,7 +41,11 @@ function isAck(message: unknown): boolean {
   return Array.isArray(subscriptions) && subscriptions.includes(ACTOR_STREAM_URI);
 }
 
-function notificationItems(message: unknown): unknown[] | null {
+function notificationItems(message: unknown): {
+  items: unknown[];
+  more: boolean;
+  dropped: number;
+} | null {
   if (!message || typeof message !== 'object') return null;
   const value = message as {
     method?: unknown;
@@ -52,8 +56,36 @@ function notificationItems(message: unknown): unknown[] | null {
   }
   const envelope = value.params._meta?.[EVENT_META_KEY];
   if (typeof envelope !== 'object') return null;
-  const items = (envelope as { items?: unknown } | null)?.items;
-  return Array.isArray(items) ? items : [];
+  const record = (envelope ?? {}) as {
+    items?: unknown;
+    more?: unknown;
+    dropped?: unknown;
+  };
+  return {
+    items: Array.isArray(record.items) ? record.items : [],
+    more: record.more === true,
+    dropped:
+      typeof record.dropped === 'number' && Number.isFinite(record.dropped) && record.dropped > 0
+        ? Math.floor(record.dropped)
+        : 0,
+  };
+}
+
+/**
+ * 服务端一帧最多携带 20 条/1 KiB；超出部分不会补发，背压队列也会丢弃
+ * 旧业务帧。`more` / `dropped` 因此表示“有一部分变更没有到达客户端”，
+ * 必须让当前房间保守重读，不能只刷新侧栏。
+ */
+function streamGap(): ActorNotification {
+  return {
+    type: 'event',
+    source: 'stream.gap',
+    kind: 'gap',
+    roomId: null,
+    messageId: null,
+    change: null,
+    attention: 'informational',
+  };
 }
 
 /** 只取定位和刷新所需字段，消息正文由查询重读。 */
@@ -101,12 +133,15 @@ export async function* readActorStream(body: ReadableStream<Uint8Array>): AsyncG
       yield { type: 'ack' };
       continue;
     }
-    const items = notificationItems(message);
-    if (items === null) continue;
-    const events = notificationEvents(items);
+    const notification = notificationItems(message);
+    if (notification === null) continue;
+    const events = notificationEvents(notification.items);
     if (events.length > 0) {
       yield* events;
-    } else {
+    }
+    if (notification.more || notification.dropped > 0) {
+      yield streamGap();
+    } else if (events.length === 0) {
       yield {
         type: 'event',
         source: '',

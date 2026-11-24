@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 
 import { ACTOR_STREAM_URI, readActorStream } from '../src/web/lib/actor-stream';
+import { emptyPendingRefresh, markPendingRefresh } from '../src/web/lib/room-stream-refresh';
 import { summarizeRoomPages, type RawRoom } from '../src/web/lib/rooms';
 
 const ack = {
@@ -65,4 +66,72 @@ test('room pagination keeps server order and the first summary from overlapping 
     page([room('b', 'older'), room('c', 'c')]),
   ]);
   expect(rooms.map(({room_id, name}) => [room_id, name])).toEqual([['b', 'first'], ['a', 'a'], ['c', 'c']]);
+});
+
+test('stream truncation emits a gap so the open room is refreshed', async () => {
+  const item = { source: 'room.message', kind: 'message', room_id: 'rm_open', message_id: 'm1' };
+  const frame = {
+    method: 'notifications/resources/updated',
+    params: {
+      uri: ACTOR_STREAM_URI,
+      _meta: {
+        'io.agent-network/event': { items: [item], more: true, dropped: 1 },
+      },
+    },
+  };
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('data: ' + JSON.stringify(frame) + '\n\n'));
+      controller.close();
+    },
+  });
+  const frames = [];
+  for await (const frame of readActorStream(stream)) frames.push(frame);
+  expect(frames).toEqual([
+    {
+      type: 'event',
+      source: 'room.message',
+      kind: 'message',
+      roomId: 'rm_open',
+      messageId: 'm1',
+      change: null,
+      attention: null,
+    },
+    {
+      type: 'event',
+      source: 'stream.gap',
+      kind: 'gap',
+      roomId: null,
+      messageId: null,
+      change: null,
+      attention: 'informational',
+    },
+  ]);
+});
+
+test('a dropped-only frame still refreshes current-room history', async () => {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const gap = {
+        method: 'notifications/resources/updated',
+        params: {
+          uri: ACTOR_STREAM_URI,
+          _meta: {
+            'io.agent-network/event': { items: [], more: true, dropped: 2 },
+          },
+        },
+      };
+      controller.enqueue(new TextEncoder().encode('data: ' + JSON.stringify(gap) + '\n\n'));
+      controller.close();
+    },
+  });
+  const pending = emptyPendingRefresh();
+  for await (const frame of readActorStream(stream)) {
+    if (frame.type !== 'event') continue;
+    markPendingRefresh(pending, frame, 'rm_open', true);
+  }
+  expect(pending.rooms).toBe(true);
+  expect(pending.detail).toBe(true);
+  expect(pending.history).toBe(true);
+  expect(pending.tasks).toBe(true);
 });

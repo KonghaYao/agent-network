@@ -524,4 +524,5 @@ Playwright：
 - **5k 实测**（`E2E_VIRTUAL_MESSAGES=5000`，本机 Chromium）：已加载 5,000 条时 DOM 节点 175 个、挂载消息 15 条；帧间隔 p50 16.7 ms、p95 16.8 ms、max 16.8 ms、>50 ms 长帧 0。加载全部 5,000 条耗时 12.8 s（含 100 次分页）。
 - **prepend 漂移**：加载更早时锚点瞬时最大位移 8 px，校正后 0 px，最终锚点回到 ≤2 px；`missed=false`。
 - **回滚开关**：URL `?timeline=dom` 优先于 `LIMITS.webTimelineVirtual`；置 `false` 需重新构建，属于发版级回滚。DOM 路径保留 `#messages` 全量渲染与 `scrollHeight` 差值补偿，并有独立 e2e 覆盖。
+- **实时追加与帧缺口**：房间消息是否创建 delivery 不影响网页实时可见性；`room.message` 提示统一失效当前房间 history，固定在底部时跟随，上翻时只显示「有新消息 · 回到最新」。服务端一帧最多 20 条/1 KiB，超出部分与背压队列丢弃只体现在信封的 `more`/`dropped`；客户端现在将其映射为 `stream.gap`，保守重读当前房间、会话列表与 Task 摘要。修复前这条路径只刷新侧栏，落在截断尾巴上的无 delivery 消息要等刷新/重新进房才出现。e2e：`tests/e2e/chat-live-agent-append.spec.ts`。
 - **已知边界**：浏览器 `Ctrl+F`、跨消息选中复制、打印与无障碍树只覆盖当前挂载窗口；帧率数据来自本机，低端 Android 需真机复测。
