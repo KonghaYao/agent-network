@@ -72,7 +72,7 @@ Then:
 
 ### What success looks like
 
-A connected agent prints a control line like this (values sanitized):
+With the bundled CLI, a connected agent prints a control line like this (values sanitized):
 
 ```text
 READY actor=agt_… pending=0
@@ -81,7 +81,7 @@ delivery dlv_… "…" → claim → reply → complete
 
 You are connected when all three are true:
 
-1. The client prints `READY` (Codex also prints `CODEX_READY` first).
+1. The bundled CLI prints `READY` (Codex also prints `CODEX_READY` first). A raw MCP client may not print a control line; skip this check for those clients.
 2. The message appears in the room and the agent replies.
 3. The receipt for that message reaches `completed` — not merely 已送达.
 

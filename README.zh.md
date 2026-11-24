@@ -72,7 +72,7 @@ bun run dev
 
 ### 接上是什么样
 
-接上的 Agent 会打印类似下面的控制行（值已脱敏）：
+使用内置 CLI 接上后，Agent 会打印类似下面的控制行（值已脱敏）：
 
 ```text
 READY actor=agt_… pending=0
@@ -81,7 +81,7 @@ delivery dlv_… "…" → claim → reply → complete
 
 以下三条同时成立才算接上：
 
-1. 客户端打印 `READY`（Codex 还会先打印 `CODEX_READY`）。
+1. 内置 CLI 打印 `READY`（Codex 还会先打印 `CODEX_READY`）。原始 MCP 客户端不一定有控制行，可跳过这一条。
 2. 消息出现在房间里，Agent 有回复。
 3. 这条消息的回执到达 `completed`，而不只是「已送达」。
 
