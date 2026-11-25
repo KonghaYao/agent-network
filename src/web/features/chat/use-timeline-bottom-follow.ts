@@ -80,8 +80,18 @@ export function useTimelineBottomFollow({
   const lastInteractionAtRef = useRef(0);
   const touchActiveRef = useRef(false);
   const pointerActiveRef = useRef(false);
+  const lastTouchAtRef = useRef(0);
+  const lastWheelAtRef = useRef(0);
   const touchYRef = useRef<number | null>(null);
   const touchDyRef = useRef(0);
+  // 门控结束后的复核：手势/惯性/布局变化的最后一次 scroll 可能落在 250ms
+  // 门控内被跳过，之后不会再有事件触发贴底判定。这里统一安排一次延迟复核。
+  const pinRecheckTimerRef = useRef<number | null>(null);
+  const recheckFollowRef = useRef<() => void>(() => {});
+  const lastScrollTopRef = useRef(0);
+  // 最近一次真实 gap：窗口/键盘 resize 在布局之后才派发事件，只能依赖
+  // resize 前的采样判断“收缩前是否真实贴底”。
+  const lastGapRef = useRef(Number.POSITIVE_INFINITY);
   const suppressFollowUntilRef = useRef(0);
   const markReadTimerRef = useRef<number | null>(null);
   const pendingReadThroughRef = useRef<string | null>(null);
@@ -102,6 +112,16 @@ export function useTimelineBottomFollow({
     if (value) setHasNew(false);
   }, [scrollerRef]);
 
+  // 延迟复核只保留最后一次安排：滚动/布局事件连续到达时重置计时器，
+  // 在最后一次事件约 webScrollSuppressPinMs 后执行。
+  const schedulePinRecheck = useCallback((delay: number = LIMITS.webScrollSuppressPinMs) => {
+    if (pinRecheckTimerRef.current !== null) window.clearTimeout(pinRecheckTimerRef.current);
+    pinRecheckTimerRef.current = window.setTimeout(() => {
+      pinRecheckTimerRef.current = null;
+      recheckFollowRef.current();
+    }, Math.max(0, delay));
+  }, []);
+
   const revealWhenSettled = useCallback(() => {
     if (readyRef.current) return;
     readyRef.current = true;
@@ -114,6 +134,7 @@ export function useTimelineBottomFollow({
   useEffect(
     () => () => {
       if (markReadTimerRef.current !== null) window.clearTimeout(markReadTimerRef.current);
+      if (pinRecheckTimerRef.current !== null) window.clearTimeout(pinRecheckTimerRef.current);
       if (revealWatchRef.current !== 0) cancelAnimationFrame(revealWatchRef.current);
     },
     [],
@@ -140,14 +161,24 @@ export function useTimelineBottomFollow({
     [items, onMarkRead],
   );
 
+  // 手势是否仍被按住。触摸端可能丢失 touchend（合成手势、系统中断），
+  // 单靠 touchActive 布尔会让门控永久卡住；超过一个门控窗口没有新的
+  // touch 事件就不再视为按住。
+  const gestureHeld = useCallback(
+    () =>
+      pointerActiveRef.current ||
+      (touchActiveRef.current &&
+        Date.now() - lastTouchAtRef.current < LIMITS.webScrollSuppressPinMs),
+    [],
+  );
+
   // 手势期间（含松手短窗口）一律暂停自动贴底。触摸用 touchActive，鼠标拖
   // 滚动条用 pointerActive，滚轮/键盘用时间戳窗口，三者合并成一个判断。
   const gestureActive = useCallback(
     () =>
-      touchActiveRef.current ||
-      pointerActiveRef.current ||
+      gestureHeld() ||
       Date.now() - lastInteractionAtRef.current < LIMITS.webScrollSuppressPinMs,
-    [],
+    [gestureHeld],
   );
 
   // 是否应跟随底部：pinned；首次显示前默认为真；或用户刚从底部向下滚、
@@ -237,12 +268,16 @@ export function useTimelineBottomFollow({
   // 重算 range 并缩掉已渲染高度）。残差交给下一帧的 scroll/layout 校验。
   const snapBottom = useCallback(() => {
     if (anchoredRef.current || restoringRef.current) return;
-    if (!wantsBottom()) return;
+    if (!wantsBottom()) {
+      // 门控期间追加的内容不能立刻贴底，但门控结束后必须补一次判定。
+      if (gestureActive() && pinnedRef.current) schedulePinRecheck();
+      return;
+    }
     const scroller = scrollerRef.current;
     if (!scroller) return;
     if (scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 2) return;
     scroller.scrollTop = scroller.scrollHeight;
-  }, [scrollerRef, wantsBottom]);
+  }, [gestureActive, schedulePinRecheck, scrollerRef, wantsBottom]);
 
   // 只用于“已经在贴底”的同步修正：pinned 且非 anchor/恢复窗口，且真实
   // 离底超过 2px。直接写 scrollTop 发生在同一帧内（totalListHeightChanged
@@ -251,7 +286,12 @@ export function useTimelineBottomFollow({
     if (anchoredRef.current || restoringRef.current) return;
     // 首次显示前还没有用户手势可尊重：无条件贴底，保证 reveal 的第一帧
     // 就在真实底部。显示后只跟随 pinned / 到达中的向下手势。
-    if (!wantsBottom()) return;
+    if (!wantsBottom()) {
+      // 手势门控压住了这次贴底：门控结束后重新判定，避免布局变化/追加
+      // 内容永久留下空隙。
+      if (gestureActive() && pinnedRef.current) schedulePinRecheck();
+      return;
+    }
     const scroller = scrollerRef.current;
     if (!scroller) return;
     if (scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 2) {
@@ -260,7 +300,43 @@ export function useTimelineBottomFollow({
     }
     scroller.scrollTop = scroller.scrollHeight;
     scheduleBottomRetry();
-  }, [cancelBottomRetry, scheduleBottomRetry, scrollerRef, wantsBottom]);
+  }, [
+    cancelBottomRetry,
+    gestureActive,
+    scheduleBottomRetry,
+    schedulePinRecheck,
+    scrollerRef,
+    wantsBottom,
+  ]);
+
+  // 门控结束后的统一复核：fling 惯性结束、滚动条松手或键盘收缩都可能把
+  // 最后一次布局 scroll 落在 250ms 门控内。此时：
+  // - pinned：补一次贴底（门控期间追加的内容）；
+  // - unpinned 但真实贴底（≤2px）且无上翻意图：重新 pinned；
+  // - 停在半路：保持 unpinned 与「回到最新」。
+  const recheckFollow = useCallback(() => {
+    if (gestureHeld()) return;
+    if (anchoredRef.current || restoringRef.current) return;
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    const gap = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+    lastGapRef.current = gap;
+    if (pinnedRef.current) {
+      if (gap > 2) {
+        scroller.scrollTop = scroller.scrollHeight;
+        scheduleBottomRetry();
+      }
+      return;
+    }
+    if (!readyRef.current) return;
+    if (gap > 2) return;
+    if (Date.now() - lastUpwardInputRef.current < LIMITS.webScrollSuppressPinMs) return;
+    // 只有真实贴底才恢复跟随；3–80px 的 Virtuoso 阈值不算。
+    setPin(true);
+    if (gap > 0) scroller.scrollTop = scroller.scrollHeight;
+    scheduleBottomRetry();
+  }, [gestureHeld, scheduleBottomRetry, scrollerRef, setPin]);
+  recheckFollowRef.current = recheckFollow;
 
   // 进入房间时高度先按估算值布局，随后 Markdown/图片/文件卡才给出真实高度。
   // 不能“一次 atBottom 就显示”：那会把估算阶段的回退画给用户。这里在隐藏
@@ -340,7 +416,12 @@ export function useTimelineBottomFollow({
         // “到底”。只有手指不在屏幕上、且真正贴底（≤2px）或刚在向下滚时
         // 才恢复跟随；否则保持 unpinned，交给「回到最新」。
         if (!pinnedRef.current) {
-          if (touchActiveRef.current || pointerActiveRef.current) return;
+          if (gestureHeld()) {
+            // 手指/指针仍在屏幕上时不能立刻 pin（可能只是路过底部），
+            // 但必须安排松手后的复核，否则会永久停在 unpinned。
+            schedulePinRecheck();
+            return;
+          }
           const scroller = scrollerRef.current;
           const gap = scroller
             ? scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight
@@ -357,7 +438,14 @@ export function useTimelineBottomFollow({
       // touchmove 的位移判定，不能一律当成上翻。
       if (Date.now() - lastUpwardInputRef.current < 500) setPin(false);
     },
-    [scheduleMarkRead, scrollerRef, setPin, watchInitialReveal],
+    [
+      gestureHeld,
+      scheduleMarkRead,
+      schedulePinRecheck,
+      scrollerRef,
+      setPin,
+      watchInitialReveal,
+    ],
   );
 
   useEffect(() => {
@@ -367,6 +455,7 @@ export function useTimelineBottomFollow({
       const now = Date.now();
       if (event.type === 'wheel') {
         lastInteractionAtRef.current = now;
+        lastWheelAtRef.current = now;
         const delta = (event as WheelEvent).deltaY;
         if (delta < 0) {
           lastUpwardInputRef.current = now;
@@ -389,6 +478,10 @@ export function useTimelineBottomFollow({
         return;
       }
       if (event.type === 'pointerdown') {
+        // 只有滚动容器内的指针（含容器自身的滚动条）才算手势；输入框、
+        // 页面其他区域的 tap 不能打开门控，否则随后的布局 scroll 会被
+        // 误判成用户离开底部。
+        if (!(event.target instanceof Node) || !node.contains(event.target)) return;
         pointerActiveRef.current = true;
         lastInteractionAtRef.current = now;
         // 只门控、不立即 unpin：点消息/长按不代表要离开底部。真正的滚动
@@ -396,7 +489,9 @@ export function useTimelineBottomFollow({
         return;
       }
       if (event.type === 'touchstart') {
+        if (!(event.target instanceof Node) || !node.contains(event.target)) return;
         touchActiveRef.current = true;
+        lastTouchAtRef.current = now;
         touchYRef.current = (event as TouchEvent).touches?.[0]?.clientY ?? null;
         touchDyRef.current = 0;
         lastInteractionAtRef.current = now;
@@ -404,6 +499,7 @@ export function useTimelineBottomFollow({
       }
       if (event.type === 'touchmove') {
         lastInteractionAtRef.current = now;
+        lastTouchAtRef.current = now;
         const y = (event as TouchEvent).touches?.[0]?.clientY ?? null;
         if (y !== null && touchYRef.current !== null) {
           // 手指下移 = 内容上移 = 上翻；手指上移 = 滚向底部。逐段累计，
@@ -426,34 +522,34 @@ export function useTimelineBottomFollow({
       }
       if (event.type === 'touchend' || event.type === 'touchcancel') {
         touchActiveRef.current = false;
+        lastTouchAtRef.current = now;
         touchYRef.current = null;
         touchDyRef.current = 0;
         lastInteractionAtRef.current = now;
-        // 松手时已经在真实底部才恢复跟随；停在半路则保留「回到最新」。
-        const scroller = scrollerRef.current;
-        if (
-          scroller &&
-          scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 2
-        ) {
-          setPin(true);
-        }
+        // 不在松手瞬间判定：fling 惯性可能还要几百毫秒才停。门控结束、
+        // scrollend 或最后一次 scroll 后的复核会覆盖惯性终点；停在半路
+        // 则保持 unpinned，交给「回到最新」。
+        schedulePinRecheck();
         return;
-      }
-      if (event.type === 'pointerup' || event.type === 'pointercancel') {
-        pointerActiveRef.current = false;
-        lastInteractionAtRef.current = now;
       }
     };
     const onScroll = () => {
-      const gap = node.scrollHeight - node.scrollTop - node.clientHeight;
+      const top = node.scrollTop;
+      // 只有 scrollTop 真的向上移动才算“用户离开底部”。视口/键盘收缩
+      // 会改变 clientHeight（gap 变大）而 scrollTop 不变，不能被当成手势。
+      const movedUp = top < lastScrollTopRef.current - 0.5;
+      lastScrollTopRef.current = top;
+      const gap = node.scrollHeight - top - node.clientHeight;
+      lastGapRef.current = gap;
       if (gap <= LIMITS.webScrollStickyPx) lastAtBottomAtRef.current = Date.now();
-      // 手势期间只要真的离开了底部，就交还控制权（触摸/拖滚动条都算）。
+      // 手势期间只要真的上移离开了底部，就交还控制权（触摸/拖滚动条都算）。
       // 这比等 Virtuoso 的 atBottom 回调更早，避免先被贴底写回。
       if (
         gestureActive() &&
+        movedUp &&
         !anchoredRef.current &&
         !restoringRef.current &&
-        node.scrollTop > LIMITS.webScrollStickyPx &&
+        top > LIMITS.webScrollStickyPx &&
         gap > 2
       ) {
         setPin(false);
@@ -472,17 +568,19 @@ export function useTimelineBottomFollow({
       ) {
         settleBottom();
       }
-      // 向下手势真正到达底部时立即 pinned，不等 Virtuoso 的 atBottom 回调。
-      // 超高消息测量可能持续几百毫秒，回调晚到时不能用 500ms 输入窗口兜底。
-      // 手势期间不在这里 pin：手指仍按在屏幕上，可能只是路过底部继续上翻。
+      // 真实到达底部（≤2px）且没有近期上翻意图时立即 pinned，不等 Virtuoso
+      // 的 atBottom 回调。超高消息测量可能持续几百毫秒，回调晚到时不能用
+      // 500ms 输入窗口兜底。手势期间也允许：到真实底部后继续上翻会被
+      // touchmove/scroll 的向上位移立刻取消。
       if (
         !pinnedRef.current &&
         !anchoredRef.current &&
         !restoringRef.current &&
-        !gestureActive() &&
         gap <= 2 &&
-        Date.now() - lastDownwardInputRef.current < 500 &&
-        Date.now() - lastUpwardInputRef.current >= 500
+        Date.now() - lastUpwardInputRef.current >= 500 &&
+        // 滚轮滚动仍在自己 250ms 门控内时不要中途 pin：测量补偿会把
+        // scrollTop 短暂上移，提前 pin 会打断仍在进行的滚轮滚动。
+        Date.now() - lastWheelAtRef.current >= LIMITS.webScrollSuppressPinMs
       ) {
         setPin(true);
       }
@@ -497,6 +595,15 @@ export function useTimelineBottomFollow({
         lastUpwardInputRef.current = Date.now();
         setPin(false);
       }
+      // 最后一次 scroll 可能落在门控/惯性窗口内：约 webScrollSuppressPinMs
+      // 后复核一次，覆盖 fling 终点、滚动条拖到底与布局变化留下的 gap。
+      if (
+        !anchoredRef.current &&
+        !restoringRef.current &&
+        (!pinnedRef.current || gestureActive())
+      ) {
+        schedulePinRecheck();
+      }
     };
     node.addEventListener('wheel', mark, { passive: true });
     node.addEventListener('touchstart', mark, { passive: true });
@@ -506,14 +613,53 @@ export function useTimelineBottomFollow({
     node.addEventListener('pointerdown', mark, { passive: true });
     node.addEventListener('keydown', mark);
     node.addEventListener('scroll', onScroll, { passive: true });
+    // scrollend 是惯性/滚动真正停止的明确信号：此时再判定一次，比只等
+    // 250ms 定时器更快恢复跟随（定时器仍作不支持该事件时的兜底）。
+    const onScrollEnd = () => {
+      if (gestureHeld()) return;
+      schedulePinRecheck(0);
+    };
+    node.addEventListener('scrollend', onScrollEnd, { passive: true });
     // 指针可能在滚动容器外释放（鼠标拖滚动条、触摸被系统取消）；在 window
     // 上兜底解除门控，避免 pointerActive 卡住导致永久停止跟随。
     const releasePointer = () => {
+      // 外部 tap（输入框、页面其他区域）从未进入 pointerActive，不能因此
+      // 打开门控或解除 pinned。
+      if (!pointerActiveRef.current) return;
       pointerActiveRef.current = false;
       lastInteractionAtRef.current = Date.now();
+      // 拖滚动条松手后立即复核（真实贴底才恢复），惯性/后续布局由延迟
+      // 复核兜底。
+      recheckFollowRef.current();
+      schedulePinRecheck();
     };
     window.addEventListener('pointerup', releasePointer, { passive: true });
     window.addEventListener('pointercancel', releasePointer, { passive: true });
+    // 键盘/窗口尺寸变化：收缩前是 pinned 或真实贴底时才重新贴底；用户已
+    // 上翻时保持原位。rAF 合并连续的 resize，避免逐帧写 scrollTop。
+    let resizeFrame = 0;
+    const onViewportResize = () => {
+      if (resizeFrame !== 0 || !readyRef.current) return;
+      resizeFrame = requestAnimationFrame(() => {
+        resizeFrame = 0;
+        if (gestureHeld()) return;
+        if (anchoredRef.current || restoringRef.current) return;
+        const scroller = scrollerRef.current;
+        if (!scroller) return;
+        if (!pinnedRef.current) {
+          // resize 事件在布局之后才到；用 resize 前的采样判断是否真实贴底。
+          if (lastGapRef.current > 2) return;
+          if (Date.now() - lastUpwardInputRef.current < LIMITS.webScrollSuppressPinMs) return;
+          setPin(true);
+        }
+        if (scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight > 2) {
+          scroller.scrollTop = scroller.scrollHeight;
+          scheduleBottomRetry();
+        }
+      });
+    };
+    window.addEventListener('resize', onViewportResize);
+    window.visualViewport?.addEventListener('resize', onViewportResize);
     // 图片解码完成到布局长高之间没有 ResizeObserver 可达的同步点；
     // 在 load 捕获后下一帧按真实高度贴底，避免图片加载留下的一帧空隙。
     const onImageLoad = (event: Event) => {
@@ -531,12 +677,25 @@ export function useTimelineBottomFollow({
       node.removeEventListener('touchcancel', mark);
       window.removeEventListener('pointerup', releasePointer);
       window.removeEventListener('pointercancel', releasePointer);
+      window.removeEventListener('resize', onViewportResize);
+      window.visualViewport?.removeEventListener('resize', onViewportResize);
+      if (resizeFrame !== 0) cancelAnimationFrame(resizeFrame);
       node.removeEventListener('pointerdown', mark);
       node.removeEventListener('keydown', mark);
       node.removeEventListener('scroll', onScroll);
+      node.removeEventListener('scrollend', onScrollEnd);
       node.removeEventListener('load', onImageLoad, true);
     };
-  }, [gestureActive, scrollerNode, scrollerRef, setPin, settleBottom]);
+  }, [
+    gestureActive,
+    gestureHeld,
+    scheduleBottomRetry,
+    schedulePinRecheck,
+    scrollerNode,
+    scrollerRef,
+    setPin,
+    settleBottom,
+  ]);
 
   // 内容异步长高（Markdown 岛、图片、文件卡）时保持贴底；虚拟化后
   // Virtuoso 只在追加数据时 followOutput，不会自动跟随单条 item 的高度变化。
@@ -691,6 +850,7 @@ export function useTimelineBottomFollow({
     if (gestureActive()) {
       // 手势期间不要留有排队的残差校正，否则松手瞬间会补一次跳底。
       cancelBottomRetry();
+      if (pinnedRef.current) schedulePinRecheck();
       return;
     }
     if (!pinnedRef.current || anchoredRef.current || restoringRef.current) return;
@@ -709,6 +869,7 @@ export function useTimelineBottomFollow({
     pinned,
     ready,
     scheduleBottomRetry,
+    schedulePinRecheck,
     scrollerRef,
   ]);
 
@@ -722,6 +883,11 @@ export function useTimelineBottomFollow({
     lastInteractionAtRef.current = 0;
     lastUpwardInputRef.current = 0;
     lastDownwardInputRef.current = Date.now();
+    // 旧的 unpinned 复核不能打断平滑滚动/贴底。
+    if (pinRecheckTimerRef.current !== null) {
+      window.clearTimeout(pinRecheckTimerRef.current);
+      pinRecheckTimerRef.current = null;
+    }
     setPin(true);
   }, [setPin]);
 

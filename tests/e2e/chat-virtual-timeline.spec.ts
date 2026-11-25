@@ -1467,6 +1467,75 @@ test.describe('virtual timeline bottom stability', () => {
     expect(await page.locator('#messages').getAttribute('data-virt-at-bottom')).toBe('true');
   });
 
+  test('re-pins after dragging the scrollbar to the bottom', async ({ page }) => {
+    await openRoom(page, roomId);
+    await loadOlderUntil(page, LOADED_TARGET);
+    await scrollToTop(page);
+    await expect.poll(async () => (await messageBox(page)).pinned, { timeout: 5_000 }).toBe('false');
+    // 让程序化到顶的“向上意图”窗口过去，避免把 re-pin 误判成用户仍在阅读。
+    await page.waitForTimeout(400);
+
+    // Windows/Linux 经典滚动条的模拟路径：指针按下在滚动容器上，拖到真实
+    // 底部后于 window 松手。原生 overlay 滚动条未必派发 pointerdown，这里
+    // 直接派发 PointerEvent 覆盖处理路径；程序化 scrollTop 触发真实 scroll。
+    await page.evaluate(() => {
+      const node = document.getElementById('messages');
+      if (!node) throw new Error('缺少 #messages');
+      node.dispatchEvent(
+        new PointerEvent('pointerdown', {
+          bubbles: true,
+          cancelable: true,
+          pointerId: 1,
+          pointerType: 'mouse',
+          buttons: 1,
+        }),
+      );
+      node.scrollTop = node.scrollHeight;
+    });
+    await page.waitForTimeout(300);
+    // 首次写到底后，底部内容可能仍在测量长高；再写一次到达新的真实底部
+    // （等价于用户把滚动条继续拖到最底），让复核对准 gap≤2。
+    await page.evaluate(() => {
+      const node = document.getElementById('messages');
+      if (!node) throw new Error('缺少 #messages');
+      node.scrollTop = node.scrollHeight;
+    });
+    await expect.poll(() => bottomGap(page), { timeout: 10_000 }).toBeLessThanOrEqual(2);
+    await page.waitForTimeout(100);
+    await page.evaluate(() => {
+      window.dispatchEvent(
+        new PointerEvent('pointerup', {
+          bubbles: true,
+          cancelable: true,
+          pointerId: 1,
+          pointerType: 'mouse',
+        }),
+      );
+    });
+
+    // 松手后必须重新 pinned，否则下一条新消息不会跟随。
+    await expect
+      .poll(async () => (await messageBox(page)).pinned, { timeout: 5_000 })
+      .toBe('true');
+    expect((await messageBox(page)).jumpHidden).toBe(true);
+    const sent = await callTool<{ message: { message_id: string } }>(
+      base,
+      agentToken,
+      'network_message_send',
+      {
+        request_id: requestId('virt_scrollbar_live'),
+        client_message_id: crypto.randomUUID(),
+        room_id: roomId,
+        invoke: [],
+        body: `滚动条拖到底后到达的消息 ${crypto.randomUUID().slice(0, 8)}`,
+      },
+    );
+    await expect(
+      page.locator(`#messages .msg[data-message-id="${sent.message.message_id}"]`),
+    ).toBeVisible({ timeout: 15_000 });
+    await expect.poll(() => bottomGap(page), { timeout: 15_000 }).toBeLessThanOrEqual(2);
+  });
+
   test('keeps scrollTop stable for 2s after reaching the bottom', async ({ page }) => {
     await openRoom(page, roomId);
     await loadOlderUntil(page, LOADED_TARGET);
@@ -1668,6 +1737,52 @@ test.describe('mobile touch bottom follow', () => {
     expect(box.lastVisible).toBe(true);
   });
 
+  test('keeps the bottom when the keyboard opens from a pinned timeline', async ({ page }) => {
+    // 底部点输入框后视口收缩：门控曾把布局 scroll 当成用户离开底部，导致
+    // 最新消息移出视口、后续消息不再跟随。重复 3 次覆盖手势时间戳抖动。
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await openRoom(page, roomId);
+      const start = await messageBox(page);
+      expect(start.gap).toBeLessThanOrEqual(2);
+      // 初始 pinned 由 React 状态默认为 true，属性只在首次 setPin 后写入。
+      expect(start.pinned).not.toBe('false');
+
+      await page.locator('#composer textarea').tap();
+      // 无头环境没有软键盘：用更矮的视口模拟 visualViewport 收缩。
+      await page.setViewportSize({ width: 390, height: 520 });
+      await expect
+        .poll(async () => (await messageBox(page)).gap, { timeout: 5_000 })
+        .toBeLessThanOrEqual(2);
+      const shrunk = await messageBox(page);
+      expect(shrunk.pinned).not.toBe('false');
+      expect(shrunk.jumpHidden).toBe(true);
+      expect(shrunk.lastVisible).toBe(true);
+
+      // 不只是“凑巧可见”：键盘打开后到达的新消息也必须继续跟随。
+      const sent = await callTool<{ message: { message_id: string } }>(
+        base,
+        agentToken,
+        'network_message_send',
+        {
+          request_id: requestId('virt_mobile_keyboard_live'),
+          client_message_id: crypto.randomUUID(),
+          room_id: roomId,
+          invoke: [],
+          body: `键盘弹出后到达的消息 ${attempt + 1}`,
+        },
+      );
+      await expect(
+        page.locator(`#messages .msg[data-message-id="${sent.message.message_id}"]`),
+      ).toBeVisible({ timeout: 15_000 });
+      await expect.poll(() => bottomGap(page), { timeout: 15_000 }).toBeLessThanOrEqual(2);
+      const followed = await messageBox(page);
+      expect(followed.pinned).not.toBe('false');
+      expect(followed.lastVisible).toBe(true);
+
+      await page.setViewportSize({ width: 390, height: 844 });
+    }
+  });
+
   test('keyboard viewport shrink neither yanks nor blocks the bottom', async ({ page }) => {
     await openRoom(page, roomId);
     await touchScroll(page, 1_200);
@@ -1683,10 +1798,36 @@ test.describe('mobile touch bottom follow', () => {
     expect(Math.abs(shrunk.top - before.top)).toBeLessThanOrEqual(2);
     expect(shrunk.jumpHidden).toBe(false);
 
-    // 键盘打开时仍然可以滚到底。
+    // 键盘打开时仍然可以滚到底，并且 fling 惯性结束后必须真正恢复跟随
+    // （只看松手瞬间或 lastVisible 会漏掉 pinned=false 的回归）。
     await touchScroll(page, -20_000, 6_000);
     await expect.poll(() => bottomGap(page), { timeout: 10_000 }).toBeLessThanOrEqual(2);
-    expect((await messageBox(page)).lastVisible).toBe(true);
+    const arrived = await messageBox(page);
+    expect(arrived.lastVisible).toBe(true);
+    expect(arrived.jumpHidden).toBe(true);
+    await expect
+      .poll(async () => (await messageBox(page)).pinned, { timeout: 10_000 })
+      .toBe('true');
+
+    const sent = await callTool<{ message: { message_id: string } }>(
+      base,
+      agentToken,
+      'network_message_send',
+      {
+        request_id: requestId('virt_mobile_keyboard_bottom'),
+        client_message_id: crypto.randomUUID(),
+        room_id: roomId,
+        invoke: [],
+        body: '键盘打开时 fling 到底后到达的消息',
+      },
+    );
+    await expect(
+      page.locator(`#messages .msg[data-message-id="${sent.message.message_id}"]`),
+    ).toBeVisible({ timeout: 15_000 });
+    await expect.poll(() => bottomGap(page), { timeout: 15_000 }).toBeLessThanOrEqual(2);
+    const followed = await messageBox(page);
+    expect(followed.pinned).toBe('true');
+    expect(followed.lastVisible).toBe(true);
     await page.setViewportSize({ width: 390, height: 844 });
   });
 
