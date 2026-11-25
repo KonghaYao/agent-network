@@ -919,4 +919,59 @@ test.describe('SPA Chat file cards', () => {
     await expect(chipThumb).toBeVisible({ timeout: 10_000 });
     await expect.poll(() => naturalWidth(chipThumb), { timeout: 10_000 }).toBeGreaterThan(0);
   });
+
+  test('filters room files by name and kind without reading contents', async ({ page }) => {
+    const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+    const imageName = `搜索图片-${suffix}.png`;
+    const documentName = `搜索报告-${suffix}.pdf`;
+    const textName = `搜索笔记-${suffix}.txt`;
+    await seedRoomFile(base, humanToken, directRoomId, {
+      name: imageName,
+      mimeType: 'image/png',
+      body: PIXEL_PNG,
+    });
+    await seedRoomFile(base, humanToken, directRoomId, {
+      name: documentName,
+      mimeType: 'application/pdf',
+      body: Buffer.from('%PDF-1.4\n搜索文件\n'),
+    });
+    await seedRoomFile(base, humanToken, directRoomId, {
+      name: textName,
+      mimeType: 'text/plain',
+      body: Buffer.from('文件筛选测试\n'),
+    });
+
+    await page.goto(`${base}/c/${directRoomId}`);
+    await expect(page.locator('#composer')).toBeVisible();
+    const toggle = page.locator('#files-toggle');
+    if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+    const pane = page.locator('#files-pane');
+    await expect(pane).toBeVisible();
+
+    const list = page.locator('#files-list');
+    await expect(list).toContainText(imageName);
+
+    // 文件名子串（大小写不敏感）：只保留 PDF，不误伤同批图片/文本。
+    await page.locator('#files-search-input').fill('搜索报告');
+    await expect(list).toContainText(documentName);
+    await expect(list).not.toContainText(imageName);
+    await expect(list).not.toContainText(textName);
+
+    // 清空查询后按类型筛选；图片与文档互斥，文本归入文档。
+    await page.locator('#files-search-input').fill('');
+    await pane.getByRole('radio', { name: '图片' }).click();
+    await expect(list).toContainText(imageName);
+    await expect(list).not.toContainText(documentName);
+    await expect(list).not.toContainText(textName);
+
+    await pane.getByRole('radio', { name: '文档' }).click();
+    await expect(list).toContainText(documentName);
+    await expect(list).toContainText(textName);
+    await expect(list).not.toContainText(imageName);
+
+    // 组合条件为空结果时给出筛选空态，而不是“房间还没有文件”。
+    await page.locator('#files-search-input').fill('不存在的文件');
+    await expect(list).not.toContainText(documentName);
+    await expect(page.locator('#files-empty')).toContainText('没有匹配的文件');
+  });
 });

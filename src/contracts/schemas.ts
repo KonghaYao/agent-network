@@ -753,8 +753,14 @@ export const roomFileBindSchema = z.object({
   file_id: fileId,
 });
 
+/** 文件类型筛选：图片、文档、其他（音视频、压缩包与未知类型）。 */
+export const roomFileKindSchema = z.enum(['image', 'document', 'other']);
+
 export const roomFileListSchema = z.object({
   room_id: id(),
+  /** 按文件名子串过滤（ASCII 大小写不敏感）；包含扩展名。 */
+  query: z.string().trim().min(1).max(LIMITS.messageSearchQueryMax).optional(),
+  kind: roomFileKindSchema.optional(),
   cursor,
   limit: z.number().int().min(1).max(LIMITS.roomFilePageMax).optional(),
 });

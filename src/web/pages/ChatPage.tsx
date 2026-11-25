@@ -33,7 +33,7 @@ import { useChatSearchNavigation } from '../features/search/useChatSearchNavigat
 import { useIsMobile } from '../hooks/useIsMobile';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 import { useRoomChat } from '../hooks/useRoomChat';
-import { useRoomFiles } from '../hooks/useRoomFiles';
+import { useRoomFiles, type RoomFilesFilter } from '../hooks/useRoomFiles';
 import { useRoomMonitor } from '../hooks/useRoomMonitor';
 import { useRoomPreferences } from '../hooks/useRoomPreferences';
 import { useRoomMenuActions, type AgentManagementView } from '../hooks/useRoomMenuActions';
@@ -148,6 +148,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
   const [forwardItem, setForwardItem] = useState<HistoryMessage | null>(null);
   const [previewFile, setPreviewFile] = useState<RoomFileItem | null>(null);
   const [panePreviewFile, setPanePreviewFile] = useState<RoomFileItem | null>(null);
+  const [filesFilter, setFilesFilter] = useState<RoomFilesFilter>({ query: '', kind: 'all' });
 
   useEffect(() => {
     const onScopeReset = (event: Event) => {
@@ -580,7 +581,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
   const filesShellVisible = filesRequested && chat.status !== 'error';
   const monitorVisible =
     ready && (desktop ? monitorDesktopOpen : overlayPane === 'monitor');
-  const files = useRoomFiles(roomId, token, filesVisible);
+  const files = useRoomFiles(roomId, token, filesVisible, filesFilter);
   const monitor = useRoomMonitor(roomId, token, monitorVisible);
 
   useEffect(() => {
@@ -588,6 +589,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
     setOverlay(null);
     setPreviewFile(null);
     setPanePreviewFile(null);
+    setFilesFilter({ query: '', kind: 'all' });
   }, [roomId]);
 
   useEffect(() => {
@@ -993,6 +995,8 @@ export function ChatPage({ roomId }: ChatPageProps) {
                     onOpenPreview={openFilePreview}
                     onBack={() => setPanePreviewFile(null)}
                     files={files}
+                    filter={filesFilter}
+                    onFilterChange={setFilesFilter}
                   />
                 ) : (
                   <FilesPaneFallback />

@@ -42,6 +42,12 @@ export const FILES_STYLE = `
   .files-close { border: 0; background: transparent; color: var(--wx-link); }
   .files-close:hover { background: var(--wx-hover); }
 
+  /* 文件筛选：文件名搜索 + 类型分段控件；窄栏内允许换行，不挤占列表。 */
+  .files-search { flex: 0 0 auto; display: flex; flex-direction: column; gap: 8px;
+    padding: 10px 12px 2px; min-width: 0; }
+  .files-search > * { min-width: 0; max-width: 100%; }
+  .files-search [data-lenso-slot='segmented-control-label'] { color: var(--wx-text); }
+
   .files-drop { flex: 0 0 auto; margin: 10px 12px 4px; padding: 12px 10px;
     border: 1px dashed var(--wx-line); border-radius: 8px; text-align: center;
     color: var(--wx-muted); font-size: 12px; line-height: 1.6; cursor: pointer; }

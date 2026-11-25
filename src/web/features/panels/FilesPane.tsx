@@ -1,15 +1,19 @@
+import { LIMITS } from '../../../contracts/limits';
 import { Tooltip } from '../../app/lenso-tooltip';
 import {
   Button,
   EmptyState,
   Pagination,
   ProgressBar,
+  SearchInput,
+  SegmentedControl,
   Separator,
   Surface,
   Toolbar,
 } from '../../app/lenso-controls';
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties, type DragEvent } from 'react';
 
+import type { RoomFilesFilter } from '../../hooks/useRoomFiles';
 import type { RoomFileItem } from '../../lib/files-ui';
 import {
   fileCopyUrl,
@@ -85,6 +89,9 @@ interface FilesPaneProps {
     refresh: () => Promise<void>;
     loadMore: () => Promise<void>;
   };
+  /** 文件名与类型筛选；实际请求由 useRoomFiles 防抖后发出。 */
+  filter: RoomFilesFilter;
+  onFilterChange: (filter: RoomFilesFilter) => void;
 }
 
 interface UploadState {
@@ -107,7 +114,7 @@ interface FailedBind {
  * 上传仍走 XHR + `network_room_file_bind`，删除需要二次确认；所有文件名、
  * 链接与预览内容都用 React 文本/属性写入，不注入 HTML。
  */
-export function FilesPane({ roomId, token, readOnly, open, onClose, preview, onOpenPreview, onBack, files }: FilesPaneProps) {
+export function FilesPane({ roomId, token, readOnly, open, onClose, preview, onOpenPreview, onBack, files, filter, onFilterChange }: FilesPaneProps) {
   const [status, setStatus] = useState('');
   const [statusError, setStatusError] = useState(false);
   const writeBlocked = useUpdateWriteBlocked();
@@ -470,6 +477,39 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, preview, onO
           </Suspense>
         ) : null}
         <div className="files-list-view" hidden={preview !== null}>
+        <div className="files-search" role="search" aria-label="搜索房间文件">
+          <SearchInput
+            id="files-search-input"
+            name="file_query"
+            autoComplete="off"
+            aria-label="搜索文件名"
+            placeholder="搜索文件名"
+            maxLength={LIMITS.messageSearchQueryMax}
+            value={filter.query}
+            aria-controls="files-list"
+            onChange={(event) => onFilterChange({ ...filter, query: event.target.value })}
+          />
+          <SegmentedControl
+            aria-label="文件类型"
+            items={[
+              { value: 'all', label: '全部' },
+              { value: 'image', label: '图片' },
+              { value: 'document', label: '文档' },
+              { value: 'other', label: '其他' },
+            ]}
+            value={filter.kind}
+            onValueChange={(value) => {
+              if (
+                value === 'all' ||
+                value === 'image' ||
+                value === 'document' ||
+                value === 'other'
+              ) {
+                onFilterChange({ ...filter, kind: value });
+              }
+            }}
+          />
+        </div>
         {writeBlocked ? (
           <p id="files-update-block" className="files-status error" role="status">
             {blockedReason}
@@ -629,7 +669,9 @@ export function FilesPane({ roomId, token, readOnly, open, onClose, preview, onO
               width: 'auto',
             }}
           >
-            这个房间还没有文件
+            {filter.query.trim() || filter.kind !== 'all'
+              ? '没有匹配的文件'
+              : '这个房间还没有文件'}
           </EmptyState>
         ) : null}
         {files.loadMoreError ? (

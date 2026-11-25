@@ -399,6 +399,35 @@ interface RoomFileListRow extends RoomFileRow {
   uploader_name: string;
 }
 
+/**
+ * 文件类型筛选的 SQL 片段。
+ *
+ * MIME 是主依据；`application/octet-stream` 或不带 MIME 的上传按扩展名兜底。
+ * 文档包含文本、PDF、Office、OpenDocument 与常见纯文本格式；其余归入 other。
+ */
+const IMAGE_KIND_SQL = `(lower(rf.mime_type) LIKE 'image/%'
+  OR lower(rf.name) LIKE '%.png' OR lower(rf.name) LIKE '%.jpg' OR lower(rf.name) LIKE '%.jpeg'
+  OR lower(rf.name) LIKE '%.gif' OR lower(rf.name) LIKE '%.webp' OR lower(rf.name) LIKE '%.avif'
+  OR lower(rf.name) LIKE '%.bmp' OR lower(rf.name) LIKE '%.tif' OR lower(rf.name) LIKE '%.tiff'
+  OR lower(rf.name) LIKE '%.heic' OR lower(rf.name) LIKE '%.heif')`;
+const DOCUMENT_KIND_SQL = `(lower(rf.mime_type) LIKE 'text/%'
+  OR lower(rf.mime_type) IN ('application/pdf', 'application/json', 'application/xml',
+    'application/rtf', 'application/msword', 'application/vnd.ms-excel',
+    'application/vnd.ms-powerpoint', 'application/epub+zip')
+  OR lower(rf.mime_type) LIKE 'application/vnd.openxmlformats-officedocument.%'
+  OR lower(rf.mime_type) LIKE 'application/vnd.oasis.opendocument.%'
+  OR lower(rf.name) LIKE '%.pdf' OR lower(rf.name) LIKE '%.doc' OR lower(rf.name) LIKE '%.docx'
+  OR lower(rf.name) LIKE '%.xls' OR lower(rf.name) LIKE '%.xlsx' OR lower(rf.name) LIKE '%.ppt'
+  OR lower(rf.name) LIKE '%.pptx' OR lower(rf.name) LIKE '%.odt' OR lower(rf.name) LIKE '%.ods'
+  OR lower(rf.name) LIKE '%.odp' OR lower(rf.name) LIKE '%.rtf' OR lower(rf.name) LIKE '%.txt'
+  OR lower(rf.name) LIKE '%.md' OR lower(rf.name) LIKE '%.markdown' OR lower(rf.name) LIKE '%.csv'
+  OR lower(rf.name) LIKE '%.json' OR lower(rf.name) LIKE '%.xml' OR lower(rf.name) LIKE '%.epub')`;
+const FILE_KIND_SQL = {
+  image: IMAGE_KIND_SQL,
+  document: DOCUMENT_KIND_SQL,
+  other: `NOT (${IMAGE_KIND_SQL} OR ${DOCUMENT_KIND_SQL})`,
+} as const;
+
 export async function roomFileList(
   db: D1Database,
   principal: Principal,
@@ -414,8 +443,21 @@ export async function roomFileList(
 }> {
   const { caller, room, boundary } = await requireRoomMember(db, principal, input.room_id);
   const limit = clampPage(input.limit, LIMITS.roomFilePageDefault, LIMITS.roomFilePageMax);
-  const scope = historyCursorScope('files', room.room_id, boundary.memberGeneration);
+  // 筛选改变结果集时必须换游标 scope，避免把上一组筛选的游标继续用于新结果。
+  const filterScope =
+    input.query || input.kind
+      ? `:q${await sha256Hex((input.query ?? '').toLowerCase())}:k${input.kind ?? 'all'}`
+      : '';
+  const scope = `${historyCursorScope('files', room.room_id, boundary.memberGeneration)}${filterScope}`;
   const cursor = input.cursor ? decodeHistoryCursor(input.cursor, scope, room.room_id) : null;
+  const filters: string[] = [];
+  const filterBinds: unknown[] = [];
+  if (input.query !== undefined) {
+    filters.push('instr(lower(rf.name), lower(?)) > 0');
+    filterBinds.push(input.query);
+  }
+  if (input.kind !== undefined) filters.push(FILE_KIND_SQL[input.kind]);
+  const filterSql = filters.length > 0 ? `AND ${filters.join(' AND ')}` : '';
   const keyset = cursor
     ? 'AND (rf.created_at < ? OR (rf.created_at = ? AND rf.room_file_id < ?))'
     : '';
@@ -425,11 +467,12 @@ export async function roomFileList(
         room.room_id,
         Date.now(),
         ...history.binds,
+        ...filterBinds,
         cursor.seq,
         cursor.seq,
         cursor.key ?? '',
       ]
-    : [room.room_id, Date.now(), ...history.binds];
+    : [room.room_id, Date.now(), ...history.binds, ...filterBinds];
 
   const rows = await db
     .prepare(
@@ -438,7 +481,7 @@ export async function roomFileList(
          JOIN actors a ON a.actor_id = rf.uploader_id
         WHERE rf.room_id = ? AND rf.deleted_at IS NULL
           AND (rf.retained = 1 OR rf.expires_at > ?)
-          AND (${history.sql}) ${keyset}
+          AND (${history.sql}) ${filterSql} ${keyset}
         ORDER BY rf.created_at DESC, rf.room_file_id DESC
         LIMIT ?`,
     )
