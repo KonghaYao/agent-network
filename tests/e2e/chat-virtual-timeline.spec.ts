@@ -754,6 +754,49 @@ function richBody(index: number, imageUrl: string, documentUrl: string): string 
   return `Peri 维护进度 ${index}：已完成第 ${index} 项检查，继续观察底部。`;
 }
 
+/**
+ * 滚动条场景的 120 条富 Markdown：表格、代码与长段落，不加图片/文件卡与
+ * Task。复现单次拖到底后 Virtuoso 继续测量/footer 的 46–287px 残留；同时
+ * 避免给同一 beforeAll 的其他用例额外引入图片/文件卡加载时序。
+ */
+async function seedScrollTimeline(
+  base: string,
+  token: string,
+  roomId: string,
+  count: number,
+): Promise<void> {
+  const batch = 20;
+  for (let start = 1; start <= count; start += batch) {
+    await Promise.all(
+      Array.from({ length: Math.min(batch, count - start + 1) }, (_, offset) => {
+        const index = start + offset;
+        const body =
+          index % 5 === 0
+            ? [
+                `## 滚动条记录 ${index}`,
+                '',
+                '| 项 | 值 |',
+                '| --- | --- |',
+                '| 滚动 | 观察 |',
+                '| 贴底 | 复核 |',
+                '',
+                '```ts',
+                `const offset = ${index};`,
+                '```',
+              ].join('\n')
+            : `滚动条消息 ${index}：${'检查长内容。'.repeat(index % 11 === 0 ? 18 : 1)}`;
+        return callTool(base, token, 'network_message_send', {
+          request_id: requestId('virt_scroll_seed'),
+          client_message_id: crypto.randomUUID(),
+          room_id: roomId,
+          invoke: [],
+          body,
+        });
+      }),
+    );
+  }
+}
+
 async function seedRichTimeline(
   base: string,
   token: string,
@@ -1130,6 +1173,9 @@ test.describe('virtual chat timeline', () => {
 test.describe('virtual timeline bottom stability', () => {
   const RICH_TOTAL = 240;
   const LOADED_TARGET = 220;
+  // 滚动条用例使用 120 条：旧用例的 240 条 + 两次写到底会让第二次写入恰好
+  // 覆盖真实底部，掩盖单次拖到底后 Virtuoso 继续测量/footer 的 46–287px 残留。
+  const SCROLL_TOTAL = 120;
   const LIGHT_TOTAL = 80;
   // 慢 Markdown 用例使用更小的房间：入口数据窗口更快就绪，延迟 100ms 的
   // 资源必然晚于/逼近 reveal，才能稳定复现“空气泡先显示”的时序。
@@ -1138,6 +1184,7 @@ test.describe('virtual timeline bottom stability', () => {
   let ownerToken = '';
   let agentToken = '';
   let roomId = '';
+  let scrollRoomId = '';
   let lightRoomId = '';
   let slowRoomId = '';
   let lightAgentToken = '';
@@ -1167,6 +1214,17 @@ test.describe('virtual timeline bottom stability', () => {
       },
     );
     roomId = created.room.room_id;
+    const scrollRoom = await callTool<{ room: { room_id: string } }>(
+      base,
+      ownerToken,
+      'network_room_create',
+      {
+        request_id: requestId('virt_scroll_room'),
+        kind: 'direct',
+        members: [agent.actor_id],
+      },
+    );
+    scrollRoomId = scrollRoom.room.room_id;
     const lightAgent = await callTool<{ actor_id: string; token: string }>(
       base,
       ownerToken,
@@ -1217,6 +1275,7 @@ test.describe('virtual timeline bottom stability', () => {
     imageUrl = image.publicUrl;
     documentUrl = document.publicUrl;
     await seedRichTimeline(base, agentToken, roomId, RICH_TOTAL, imageUrl, documentUrl);
+    await seedScrollTimeline(base, agentToken, scrollRoomId, SCROLL_TOTAL);
     await seedSlowMarkdownRoom(base, agentToken, slowRoomId, SLOW_MARKDOWN_TOTAL);
   });
 
@@ -1468,8 +1527,10 @@ test.describe('virtual timeline bottom stability', () => {
   });
 
   test('re-pins after dragging the scrollbar to the bottom', async ({ page }) => {
-    await openRoom(page, roomId);
-    await loadOlderUntil(page, LOADED_TARGET);
+    // 120 条富内容只写一次到底：240 条 + 两次写入会让第二次恰好覆盖真实
+    // 底部，掩盖 Virtuoso 在拖到底后继续测量/footer 的残留。
+    await openRoom(page, scrollRoomId);
+    await loadOlderUntil(page, SCROLL_TOTAL);
     await scrollToTop(page);
     await expect.poll(async () => (await messageBox(page)).pinned, { timeout: 5_000 }).toBe('false');
     // 让程序化到顶的“向上意图”窗口过去，避免把 re-pin 误判成用户仍在阅读。
@@ -1492,16 +1553,9 @@ test.describe('virtual timeline bottom stability', () => {
       );
       node.scrollTop = node.scrollHeight;
     });
+    // 单次写入后等待 Virtuoso 完成测量回写；此时当前 gap 可能是 46–287px，
+    // 但手势中确实到过底部，松手后必须按方向/落点 re-pin。
     await page.waitForTimeout(300);
-    // 首次写到底后，底部内容可能仍在测量长高；再写一次到达新的真实底部
-    // （等价于用户把滚动条继续拖到最底），让复核对准 gap≤2。
-    await page.evaluate(() => {
-      const node = document.getElementById('messages');
-      if (!node) throw new Error('缺少 #messages');
-      node.scrollTop = node.scrollHeight;
-    });
-    await expect.poll(() => bottomGap(page), { timeout: 10_000 }).toBeLessThanOrEqual(2);
-    await page.waitForTimeout(100);
     await page.evaluate(() => {
       window.dispatchEvent(
         new PointerEvent('pointerup', {
@@ -1513,11 +1567,13 @@ test.describe('virtual timeline bottom stability', () => {
       );
     });
 
-    // 松手后必须重新 pinned，否则下一条新消息不会跟随。
-    await expect
-      .poll(async () => (await messageBox(page)).pinned, { timeout: 5_000 })
-      .toBe('true');
-    expect((await messageBox(page)).jumpHidden).toBe(true);
+    // 松手 500ms 后必须回到真实底部并重新 pinned，否则下一条新消息不会跟随。
+    await page.waitForTimeout(500);
+    const released = await messageBox(page);
+    expect(released.gap).toBeLessThanOrEqual(2);
+    expect(released.pinned).toBe('true');
+    expect(released.jumpHidden).toBe(true);
+    expect(released.lastVisible).toBe(true);
     const sent = await callTool<{ message: { message_id: string } }>(
       base,
       agentToken,
@@ -1525,7 +1581,7 @@ test.describe('virtual timeline bottom stability', () => {
       {
         request_id: requestId('virt_scrollbar_live'),
         client_message_id: crypto.randomUUID(),
-        room_id: roomId,
+        room_id: scrollRoomId,
         invoke: [],
         body: `滚动条拖到底后到达的消息 ${crypto.randomUUID().slice(0, 8)}`,
       },
@@ -1534,6 +1590,9 @@ test.describe('virtual timeline bottom stability', () => {
       page.locator(`#messages .msg[data-message-id="${sent.message.message_id}"]`),
     ).toBeVisible({ timeout: 15_000 });
     await expect.poll(() => bottomGap(page), { timeout: 15_000 }).toBeLessThanOrEqual(2);
+    const followed = await messageBox(page);
+    expect(followed.pinned).toBe('true');
+    expect(followed.lastVisible).toBe(true);
   });
 
   test('keeps scrollTop stable for 2s after reaching the bottom', async ({ page }) => {

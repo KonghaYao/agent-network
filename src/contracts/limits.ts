@@ -498,6 +498,16 @@ export const LIMITS = {
   webScrollIntentPx: 6,
   /** 用户上翻后的短窗口：期间异步高度与 scroll 事件都不得自动回底（毫秒）。 */
   webScrollSuppressPinMs: 250,
+  /**
+   * 指针按住但没有任何事件时的最长门控时间（毫秒）。pointerup/pointercancel
+   * 可能在窗口外丢失；超过该时间不再视为按住，避免自动跟随永久停止。
+   */
+  webScrollPointerMaxHoldMs: 1_000,
+  /** 松手后的 re-pin 判定窗口：只在这段时间内采用松手时的方向/位置（毫秒）。 */
+  webScrollReleaseIntentMs: 1_000,
+  /** re-pin 后吸收 Virtuoso 测量/footer 增长的短重试次数与间隔（毫秒）。 */
+  webScrollPinRetryMax: 3,
+  webScrollPinRetryStepMs: 80,
   /** 全量重建时落点未知，用于忽略钳制 scroll 事件的兜底窗口（毫秒）。 */
   webScrollProgrammaticMs: 200,
   /** 用户滚动停止多久后才做阅读锚点补偿（毫秒）。 */
