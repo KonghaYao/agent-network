@@ -275,6 +275,263 @@ async function loadOlderUntil(page: Page, target: number): Promise<void> {
   }
 }
 
+/**
+ * 等待滚动条拖到底后的测量残留出现并稳定：Virtuoso 会在 scrollTop 写到底
+ * 之后继续测量/footer，留下 36–287px 的 gap。固定等待 300ms 在冷启动时
+ * 可能早于残留出现，导致用例侥幸通过；这里以“连续两帧 gap 相同且 >2”为
+ * 确定性条件。
+ */
+async function waitForScrollResidual(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    (window as unknown as { __residualGap?: number }).__residualGap = undefined;
+  });
+  await page.waitForFunction(
+    () => {
+      const node = document.getElementById('messages');
+      if (!node) return false;
+      const gap = node.scrollHeight - node.scrollTop - node.clientHeight;
+      const state = window as unknown as { __residualGap?: number };
+      if (gap <= 2) {
+        state.__residualGap = undefined;
+        return false;
+      }
+      if (state.__residualGap !== gap) {
+        state.__residualGap = gap;
+        return false;
+      }
+      return true;
+    },
+    undefined,
+    { timeout: 5_000, polling: 'raf' },
+  );
+}
+
+/**
+ * 等待滚动位置稳定：scrollTop 与 scrollHeight 连续 `stableFrames` 帧不变。
+ * 拖到底后 Virtuoso 的测量回写可能让 gap 变成 36–287px；若测量已完成则
+ * gap 保持 0。两种情况下都以“位置不再变化”为确定性松手时机，而不是固定
+ * 等待 300ms。冷启动时回写尚未发生，位置同样稳定，因此额外等待更长的
+ * 稳定窗口（约 750ms）覆盖测量延迟。
+ */
+async function waitForScrollSettled(page: Page, stableFrames = 45): Promise<void> {
+  await page.evaluate(() => {
+    (window as unknown as { __scrollSettle?: unknown }).__scrollSettle = undefined;
+  });
+  await page.waitForFunction(
+    (frames) => {
+      const node = document.getElementById('messages');
+      if (!node) return false;
+      const snapshot = `${Math.round(node.scrollTop)}:${Math.round(node.scrollHeight)}`;
+      const state = window as unknown as {
+        __scrollSettle?: { snapshot: string; frames: number };
+      };
+      if (!state.__scrollSettle || state.__scrollSettle.snapshot !== snapshot) {
+        state.__scrollSettle = { snapshot, frames: 0 };
+        return false;
+      }
+      state.__scrollSettle.frames += 1;
+      return state.__scrollSettle.frames >= frames;
+    },
+    stableFrames,
+    { timeout: 10_000, polling: 'raf' },
+  );
+}
+
+/** 页面内逐帧采样一段时间内的 gap 与 pinned，用于“松手后不得被拉回”。 */
+async function observeTimeline(
+  page: Page,
+  durationMs = 700,
+): Promise<{ minGap: number; maxGap: number; pinned: string | null; top: number }> {
+  return page.evaluate(async (duration) => {
+    const node = document.getElementById('messages');
+    if (!node) throw new Error('缺少 #messages');
+    let minGap = Number.POSITIVE_INFINITY;
+    let maxGap = Number.NEGATIVE_INFINITY;
+    const startedAt = performance.now();
+    while (performance.now() - startedAt < duration) {
+      const gap = node.scrollHeight - node.scrollTop - node.clientHeight;
+      minGap = Math.min(minGap, gap);
+      maxGap = Math.max(maxGap, gap);
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    }
+    return {
+      minGap,
+      maxGap,
+      pinned: node.getAttribute('data-virt-pinned'),
+      top: node.scrollTop,
+    };
+  }, durationMs);
+}
+
+async function pointerDownOnTimeline(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const node = document.getElementById('messages');
+    if (!node) throw new Error('缺少 #messages');
+    node.dispatchEvent(
+      new PointerEvent('pointerdown', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+        buttons: 1,
+      }),
+    );
+  });
+}
+
+async function pointerUpOnWindow(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    window.dispatchEvent(
+      new PointerEvent('pointerup', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+      }),
+    );
+  });
+}
+
+/**
+ * 等待初始 reveal 的测量稳定：scrollHeight 连续 `stableFrames` 帧不变且
+ * 已贴底。避免手势期间 Virtuoso 还在测量/回写，把方向与落点搅乱。
+ */
+async function waitForTimelineSettled(page: Page, stableFrames = 30): Promise<void> {
+  await page.evaluate(() => {
+    (window as unknown as { __timelineSettle?: unknown }).__timelineSettle = undefined;
+  });
+  await page.waitForFunction(
+    (frames) => {
+      const node = document.getElementById('messages');
+      if (!node) return false;
+      const gap = node.scrollHeight - node.scrollTop - node.clientHeight;
+      const state = window as unknown as {
+        __timelineSettle?: { height: number; frames: number };
+      };
+      if (gap > 2) {
+        state.__timelineSettle = undefined;
+        return false;
+      }
+      const height = node.scrollHeight;
+      if (!state.__timelineSettle || state.__timelineSettle.height !== height) {
+        state.__timelineSettle = { height, frames: 0 };
+        return false;
+      }
+      state.__timelineSettle.frames += 1;
+      return state.__timelineSettle.frames >= frames;
+    },
+    stableFrames,
+    { timeout: 15_000, polling: 'raf' },
+  );
+}
+
+/**
+ * 从底部上方 120px 拖回真实底部：pointerdown 后先向上让出 120px，再写回
+ * scrollHeight，让本次手势真正经过 gap 0。返回时手势仍被按住（没有
+ * pointerup），且方向为 down、reachedBottom 为 true。不依赖从顶部跳到
+ * 底部的测量大回写，避免把 Virtuoso 的锚点校正误当成用户上翻。
+ */
+async function dragDownToBottom(page: Page, fromGap = 120): Promise<void> {
+  await page.evaluate((distance) => {
+    const node = document.getElementById('messages');
+    if (!node) throw new Error('缺少 #messages');
+    node.dispatchEvent(
+      new PointerEvent('pointerdown', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+        buttons: 1,
+      }),
+    );
+    node.scrollTop = Math.max(0, node.scrollTop - distance);
+    node.dispatchEvent(new Event('scroll'));
+  }, fromGap);
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+  await page.evaluate(() => {
+    const node = document.getElementById('messages');
+    if (!node) throw new Error('缺少 #messages');
+    node.scrollTop = node.scrollHeight;
+    node.dispatchEvent(new Event('scroll'));
+  });
+}
+
+/**
+ * 从顶部拖回真实底部并等测量残留：用于 pointerup/blur 兜底场景。手势结束
+ * 后仍保持 unpinned（残留 >20px，不会触发“真实贴底即 pin”）。
+ */
+async function dragFromTopToBottomWithResidual(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const node = document.getElementById('messages');
+    if (!node) throw new Error('缺少 #messages');
+    node.dispatchEvent(
+      new PointerEvent('pointerdown', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+        buttons: 1,
+      }),
+    );
+    node.scrollTop = node.scrollHeight;
+  });
+  await waitForScrollResidual(page);
+}
+
+/**
+ * 在测量残留中继续向下拖 4px：把最后方向确定为 down，同时 gap 仍 >2，
+ * 不会触发 onScroll 的“真实贴底即 pin”。用于验证兜底 re-pin 本身。
+ */
+async function nudgeDownWithinResidual(page: Page): Promise<void> {
+  const gap = await page.evaluate(() => {
+    const node = document.getElementById('messages');
+    if (!node) throw new Error('缺少 #messages');
+    const current = node.scrollHeight - node.scrollTop - node.clientHeight;
+    if (current <= 4) throw new Error(`测量残留不足：${current}`);
+    // 向下拖 1–4px：方向变 down，同时保留 >2px 的残留，避免触发
+    // onScroll 的“真实贴底即 pin”而掩盖兜底逻辑。
+    node.scrollTop += Math.max(1, Math.min(4, Math.floor((current - 3) / 2)));
+    node.dispatchEvent(new Event('scroll'));
+    return node.scrollHeight - node.scrollTop - node.clientHeight;
+  });
+  expect(gap).toBeGreaterThan(2);
+}
+
+/**
+ * 从当前 scrollTop 向上拖 `distance` 像素。显式派发一次 scroll，等价于
+ * 滚动条拖动过程中的一次真实位移：原生 scroll 可能与 Virtuoso 的测量
+ * 回写合并，不能让方向判定依赖帧时序。`end` 在同一任务内结束手势，
+ * 保证松手/失焦快照记录的是这次向上方向。
+ */
+async function dragUpFromTimeline(
+  page: Page,
+  distance: number,
+  end: 'release' | 'blur' | 'lost',
+): Promise<number> {
+  return page.evaluate(
+    ({ pixels, ending }) => {
+      const node = document.getElementById('messages');
+      if (!node) throw new Error('缺少 #messages');
+      node.scrollTop = Math.max(0, node.scrollTop - pixels);
+      node.dispatchEvent(new Event('scroll'));
+      if (ending === 'release') {
+        window.dispatchEvent(
+          new PointerEvent('pointerup', {
+            bubbles: true,
+            cancelable: true,
+            pointerId: 1,
+            pointerType: 'mouse',
+          }),
+        );
+      } else if (ending === 'blur') {
+        window.dispatchEvent(new Event('blur'));
+      }
+      return node.scrollHeight - node.scrollTop - node.clientHeight;
+    },
+    { pixels: distance, ending: end },
+  );
+}
+
 interface BottomFrame {
   top: number;
   height: number;
@@ -1554,8 +1811,9 @@ test.describe('virtual timeline bottom stability', () => {
       node.scrollTop = node.scrollHeight;
     });
     // 单次写入后等待 Virtuoso 完成测量回写；此时当前 gap 可能是 46–287px，
-    // 但手势中确实到过底部，松手后必须按方向/落点 re-pin。
-    await page.waitForTimeout(300);
+    // 但手势中确实到过底部，松手后必须按方向/落点 re-pin。等滚动位置
+    // 稳定（而不是固定 300ms）后再松手，冷启动也要覆盖到回写。
+    await waitForScrollSettled(page);
     await page.evaluate(() => {
       window.dispatchEvent(
         new PointerEvent('pointerup', {
@@ -1781,6 +2039,161 @@ test.describe('mobile touch bottom follow', () => {
     expect(frames.length).toBeGreaterThan(30);
     expect(Math.max(...frames) - Math.min(...frames)).toBeLessThanOrEqual(1);
     expect((await messageBox(page)).gap).toBeLessThanOrEqual(2);
+  });
+
+  test('keeps position after reaching the bottom and dragging up 554px', async ({ page }) => {
+    // 从底部（openRoom 已贴底）开始手势：先向上让出 120px，再拖回真实底部，
+    // 让本次手势确实到过底部；随后上翻 554px 再松手。
+    await openRoom(page, roomId);
+    await waitForTimelineSettled(page);
+    await dragDownToBottom(page);
+    await dragUpFromTimeline(page, 554, 'release');
+
+    // 28a213e：reachedBottom + min(gap, lastDownGap) 会让 withinSticky 恒真，
+    // 松手立即被拉回 gap 0。修复后必须停在 554px 附近。
+    const observed = await observeTimeline(page, 700);
+    expect(observed.minGap).toBeGreaterThanOrEqual(500);
+    expect(observed.pinned).toBe('false');
+  });
+
+  test('keeps position after reaching the bottom and dragging up 1107px', async ({ page }) => {
+    await openRoom(page, roomId);
+    await waitForTimelineSettled(page);
+    await dragDownToBottom(page);
+    await dragUpFromTimeline(page, 1_107, 'release');
+
+    const observed = await observeTimeline(page, 700);
+    expect(observed.minGap).toBeGreaterThanOrEqual(1_000);
+    expect(observed.pinned).toBe('false');
+  });
+
+  test('re-pins after a lost pointerup when the gesture ended at the bottom', async ({ page }) => {
+    await openRoom(page, roomId);
+    await waitForTimelineSettled(page);
+    await scrollToTop(page);
+    await page.waitForTimeout(400);
+    await dragFromTopToBottomWithResidual(page);
+    await nudgeDownWithinResidual(page);
+    // 不派发 pointerup：等待 webScrollPointerMaxHoldMs（1000ms）后的兜底复核。
+    await page.waitForTimeout(1_400);
+    await expect.poll(() => bottomGap(page), { timeout: 5_000 }).toBeLessThanOrEqual(2);
+    const released = await messageBox(page);
+    expect(released.pinned).toBe('true');
+    expect(released.lastVisible).toBe(true);
+
+    const sent = await callTool<{ message: { message_id: string } }>(
+      base,
+      agentToken,
+      'network_message_send',
+      {
+        request_id: requestId('virt_mobile_lost_down'),
+        client_message_id: crypto.randomUUID(),
+        room_id: roomId,
+        invoke: [],
+        body: `丢失 pointerup 后到达的消息 ${crypto.randomUUID().slice(0, 8)}`,
+      },
+    );
+    await expect(
+      page.locator(`#messages .msg[data-message-id="${sent.message.message_id}"]`),
+    ).toBeVisible({ timeout: 15_000 });
+    await expect.poll(() => bottomGap(page), { timeout: 15_000 }).toBeLessThanOrEqual(2);
+    expect((await messageBox(page)).pinned).toBe('true');
+  });
+
+  test('does not re-pin after a lost pointerup when the gesture ended scrolling up', async ({
+    page,
+  }) => {
+    await openRoom(page, roomId);
+    await waitForTimelineSettled(page);
+    await dragDownToBottom(page);
+    await dragUpFromTimeline(page, 554, 'lost');
+
+    // 兜底超时只解除手势；方向向上时不得把阅读位置拉回底部。
+    await page.waitForTimeout(1_400);
+    const observed = await observeTimeline(page, 500);
+    expect(observed.minGap).toBeGreaterThanOrEqual(500);
+    expect(observed.pinned).toBe('false');
+
+    const sent = await callTool<{ message: { message_id: string } }>(
+      base,
+      agentToken,
+      'network_message_send',
+      {
+        request_id: requestId('virt_mobile_lost_up'),
+        client_message_id: crypto.randomUUID(),
+        room_id: roomId,
+        invoke: [],
+        body: `向上阅读时到达的消息 ${crypto.randomUUID().slice(0, 8)}`,
+      },
+    );
+    expect(sent.message.message_id).toBeTruthy();
+    await expect(page.locator('#jump-latest-label')).toHaveText('有新消息 · 回到最新', {
+      timeout: 15_000,
+    });
+    const after = await messageBox(page);
+    expect(Math.abs(after.top - observed.top)).toBeLessThanOrEqual(4);
+  });
+
+  test('re-pins after window blur when the gesture ended at the bottom', async ({ page }) => {
+    await openRoom(page, roomId);
+    await waitForTimelineSettled(page);
+    await scrollToTop(page);
+    await page.waitForTimeout(400);
+    await dragFromTopToBottomWithResidual(page);
+    await nudgeDownWithinResidual(page);
+    await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+    await expect.poll(() => bottomGap(page), { timeout: 5_000 }).toBeLessThanOrEqual(2);
+    const released = await messageBox(page);
+    expect(released.pinned).toBe('true');
+    expect(released.lastVisible).toBe(true);
+
+    const sent = await callTool<{ message: { message_id: string } }>(
+      base,
+      agentToken,
+      'network_message_send',
+      {
+        request_id: requestId('virt_mobile_blur_down'),
+        client_message_id: crypto.randomUUID(),
+        room_id: roomId,
+        invoke: [],
+        body: `blur 后到达的消息 ${crypto.randomUUID().slice(0, 8)}`,
+      },
+    );
+    await expect(
+      page.locator(`#messages .msg[data-message-id="${sent.message.message_id}"]`),
+    ).toBeVisible({ timeout: 15_000 });
+    await expect.poll(() => bottomGap(page), { timeout: 15_000 }).toBeLessThanOrEqual(2);
+    expect((await messageBox(page)).pinned).toBe('true');
+  });
+
+  test('does not re-pin after window blur when the gesture ended scrolling up', async ({ page }) => {
+    await openRoom(page, roomId);
+    await waitForTimelineSettled(page);
+    await dragDownToBottom(page);
+    await dragUpFromTimeline(page, 554, 'blur');
+
+    const observed = await observeTimeline(page, 700);
+    expect(observed.minGap).toBeGreaterThanOrEqual(500);
+    expect(observed.pinned).toBe('false');
+
+    const sent = await callTool<{ message: { message_id: string } }>(
+      base,
+      agentToken,
+      'network_message_send',
+      {
+        request_id: requestId('virt_mobile_blur_up'),
+        client_message_id: crypto.randomUUID(),
+        room_id: roomId,
+        invoke: [],
+        body: `blur 前向上阅读时到达的消息 ${crypto.randomUUID().slice(0, 8)}`,
+      },
+    );
+    expect(sent.message.message_id).toBeTruthy();
+    await expect(page.locator('#jump-latest-label')).toHaveText('有新消息 · 回到最新', {
+      timeout: 15_000,
+    });
+    const after = await messageBox(page);
+    expect(Math.abs(after.top - observed.top)).toBeLessThanOrEqual(4);
   });
 
   test('jump-latest returns to the newest message', async ({ page }) => {
