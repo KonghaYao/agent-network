@@ -176,6 +176,7 @@ export function TimelineVirtual({
     handleAtBottom,
     handleTotalListHeightChanged,
     snapPinnedToBottom,
+    followLatest,
   } = useTimelineBottomFollow({
     virtuosoRef,
     scrollerRef,
@@ -346,13 +347,13 @@ export function TimelineVirtual({
     }
     if (forcePinToken !== lastForceRef.current) {
       lastForceRef.current = forcePinToken;
-      setPin(true);
+      followLatest();
       requestAnimationFrame(() => jumpToLatest());
     } else if (!pinnedRef.current && lastKey !== lastKeyRef.current) {
       setHasNew(true);
     }
     lastKeyRef.current = lastKey;
-  }, [anchored, forcePinToken, jumpToLatest, lastKey, restoring, setPin]);
+  }, [anchored, followLatest, forcePinToken, jumpToLatest, lastKey, restoring]);
 
   // 搜索定位：目标必须在当前 items 中；否则由调用方先打开 anchor 窗口。
   useLayoutEffect(() => {
@@ -600,7 +601,7 @@ export function TimelineVirtual({
         anchored={anchored}
         hasNew={hasNew}
         onJumpLatest={() => {
-          setPin(true);
+          followLatest();
           jumpToLatest(true);
         }}
       />

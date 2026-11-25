@@ -216,6 +216,55 @@ async function scrollToBottom(page: Page): Promise<void> {
   await expect.poll(() => bottomGap(page), { timeout: 10_000 }).toBeLessThanOrEqual(2);
 }
 
+/**
+ * 真实触摸滚动手势（移动端）。`yDistance > 0` 表示手指向下拖（看更早的
+ * 消息），`< 0` 表示向底部 fling。CDP 手势会派发 touchstart/touchmove/
+ * touchend，因此同时覆盖“手势门控”和真实滚动。
+ */
+async function touchScroll(page: Page, yDistance: number, speed = 2_000): Promise<void> {
+  const box = await page.locator('#messages').boundingBox();
+  if (!box) throw new Error('缺少消息区');
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    await cdp.send('Input.synthesizeScrollGesture', {
+      x: Math.round(box.x + box.width / 2),
+      y: Math.round(box.y + box.height / 2),
+      yDistance,
+      speed,
+      gestureSourceType: 'touch',
+    });
+  } finally {
+    await cdp.detach();
+  }
+}
+
+async function messageBox(page: Page): Promise<{
+  top: number;
+  maxTop: number;
+  gap: number;
+  pinned: string | null;
+  atBottom: string | null;
+  jumpHidden: boolean;
+  lastVisible: boolean;
+}> {
+  return page.evaluate(() => {
+    const node = document.getElementById('messages');
+    if (!node) throw new Error('缺少 #messages');
+    const rect = node.getBoundingClientRect();
+    const last = Array.from(node.querySelectorAll('.msg[data-message-id]')).at(-1);
+    const lastRect = last?.getBoundingClientRect();
+    return {
+      top: node.scrollTop,
+      maxTop: Math.max(0, node.scrollHeight - node.clientHeight),
+      gap: node.scrollHeight - node.scrollTop - node.clientHeight,
+      pinned: node.getAttribute('data-virt-pinned'),
+      atBottom: node.getAttribute('data-virt-at-bottom'),
+      jumpHidden: document.getElementById('jump-latest')?.hasAttribute('hidden') ?? true,
+      lastVisible: lastRect ? lastRect.bottom <= rect.bottom + 1 : false,
+    };
+  });
+}
+
 async function loadOlderUntil(page: Page, target: number): Promise<void> {
   while ((await loadedCount(page)) < target) {
     const before = await loadedCount(page);
@@ -1482,5 +1531,203 @@ test.describe('virtual timeline bottom stability', () => {
     // 只允许向下跟随；任何明显的向上回弹都是旧实现的测量争抢。
     expect(report.maxBackward).toBeLessThanOrEqual(2);
     expect(await page.locator('#messages').getAttribute('data-virt-at-bottom')).toBe('true');
+  });
+});
+
+/**
+ * 移动端触摸贴底（390×844、isMobile、hasTouch）。
+ *
+ * 回归背景：940af35 的贴底修复里，touchstart/touchmove 只写入“上翻意图”
+ * 时间戳，从不取消 pinned；紧接着每个 scroll 事件都被同步写回
+ * scrollHeight。触摸设备没有 wheel，pinned 因此恒为真，用户完全滚不动，
+ * 也到不了真正的底部。四条用例分别覆盖：触摸滚动/回到底部、按钮、
+ * 输入框/键盘、上翻期间的新消息。
+ */
+test.describe('mobile touch bottom follow', () => {
+  test.use({
+    viewport: { width: 390, height: 844 },
+    isMobile: true,
+    hasTouch: true,
+    deviceScaleFactor: 3,
+  });
+
+  const TOTAL = 120;
+  let base = '';
+  let ownerToken = '';
+  let agentToken = '';
+  let roomId = '';
+  let imageUrl = '';
+  let documentUrl = '';
+
+  test.beforeAll(async () => {
+    base = await baseUrl();
+    const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+    const owner = await registerHuman(base, `移动 Owner ${suffix}`, `virt-mobile-${suffix}`);
+    ownerToken = owner.token;
+    const agent = await callTool<{ actor_id: string; token: string }>(
+      base,
+      ownerToken,
+      'network_agent_create',
+      { request_id: requestId('virt_mobile_agent'), name: `移动 Agent ${suffix}` },
+    );
+    agentToken = agent.token;
+    const created = await callTool<{ room: { room_id: string } }>(
+      base,
+      ownerToken,
+      'network_room_create',
+      {
+        request_id: requestId('virt_mobile_room'),
+        kind: 'group',
+        members: [agent.actor_id],
+        title: '移动端贴底',
+      },
+    );
+    roomId = created.room.room_id;
+    const image = await uploadRoomFile(
+      base,
+      ownerToken,
+      roomId,
+      '移动截图.png',
+      'image/png',
+      PIXEL_PNG,
+    );
+    const document = await uploadRoomFile(
+      base,
+      ownerToken,
+      roomId,
+      '移动记录.md',
+      'text/markdown',
+      Buffer.from('# 移动端记录\n\n- 时间线\n- 贴底\n', 'utf8'),
+    );
+    imageUrl = image.publicUrl;
+    documentUrl = document.publicUrl;
+    await seedRichTimeline(base, agentToken, roomId, TOTAL, imageUrl, documentUrl);
+  });
+
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript((token) => {
+      try {
+        localStorage.setItem('agent-network-token', token);
+        localStorage.removeItem('agent-network-logged-out');
+      } catch {
+        // 存储不可用时由页面错误态兜底。
+      }
+    }, ownerToken);
+  });
+
+  test('scrolls away from the bottom and returns without snap-back', async ({ page }) => {
+    await openRoom(page, roomId);
+    const start = await messageBox(page);
+    expect(start.gap).toBeLessThanOrEqual(2);
+
+    // 向上拖（看更早）：修复前 pinned 恒为真，scrollTop 会被每个 scroll
+    // 事件写回底部，这里会直接停在 maxTop。
+    await touchScroll(page, 1_200);
+    await expect
+      .poll(async () => (await messageBox(page)).top, { timeout: 10_000 })
+      .toBeLessThan(start.maxTop - 200);
+    const away = await messageBox(page);
+    expect(away.pinned).toBe('false');
+    expect(away.jumpHidden).toBe(false);
+    expect(away.lastVisible).toBe(false);
+
+    // 向下 fling 回到底部：最新消息必须真正进入视口。
+    await touchScroll(page, -20_000, 6_000);
+    await expect.poll(() => bottomGap(page), { timeout: 10_000 }).toBeLessThanOrEqual(2);
+    const arrived = await messageBox(page);
+    expect(arrived.atBottom).toBe('true');
+    expect(arrived.jumpHidden).toBe(true);
+    expect(arrived.lastVisible).toBe(true);
+
+    // 松手后不得被 layout effect / RO / MO 拉回或抖动。
+    const frames = await page.evaluate(async () => {
+      const node = document.getElementById('messages');
+      const samples: number[] = [];
+      const startedAt = performance.now();
+      while (performance.now() - startedAt < 800) {
+        if (node) samples.push(node.scrollTop);
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      }
+      return samples;
+    });
+    expect(frames.length).toBeGreaterThan(30);
+    expect(Math.max(...frames) - Math.min(...frames)).toBeLessThanOrEqual(1);
+    expect((await messageBox(page)).gap).toBeLessThanOrEqual(2);
+  });
+
+  test('jump-latest returns to the newest message', async ({ page }) => {
+    await openRoom(page, roomId);
+    await touchScroll(page, 1_200);
+    await expect(page.locator('#jump-latest')).toBeVisible();
+    const jump = page.locator('#jump-latest');
+    await jump.tap();
+    await expect.poll(() => bottomGap(page), { timeout: 10_000 }).toBeLessThanOrEqual(2);
+    const box = await messageBox(page);
+    expect(box.pinned).toBe('true');
+    expect(box.jumpHidden).toBe(true);
+    expect(box.lastVisible).toBe(true);
+  });
+
+  test('keyboard viewport shrink neither yanks nor blocks the bottom', async ({ page }) => {
+    await openRoom(page, roomId);
+    await touchScroll(page, 1_200);
+    await expect(page.locator('#jump-latest')).toBeVisible();
+    const before = await messageBox(page);
+
+    await page.locator('#composer textarea').tap();
+    // 无头环境没有软键盘：用更矮的视口模拟 visualViewport 收缩。
+    await page.setViewportSize({ width: 390, height: 520 });
+    await page.waitForTimeout(600);
+    const shrunk = await messageBox(page);
+    // 键盘弹起不能把正在阅读的历史强行拉到底部。
+    expect(Math.abs(shrunk.top - before.top)).toBeLessThanOrEqual(2);
+    expect(shrunk.jumpHidden).toBe(false);
+
+    // 键盘打开时仍然可以滚到底。
+    await touchScroll(page, -20_000, 6_000);
+    await expect.poll(() => bottomGap(page), { timeout: 10_000 }).toBeLessThanOrEqual(2);
+    expect((await messageBox(page)).lastVisible).toBe(true);
+    await page.setViewportSize({ width: 390, height: 844 });
+  });
+
+  test('new message while reading history does not force the bottom', async ({ page }) => {
+    await openRoom(page, roomId);
+    await touchScroll(page, 1_200);
+    await expect(page.locator('#jump-latest')).toBeVisible();
+    await expect(page.locator('#jump-latest-label')).toHaveText('回到最新');
+    const before = await messageBox(page);
+
+    const sent = await callTool<{ message: { message_id: string } }>(
+      base,
+      agentToken,
+      'network_message_send',
+      {
+        request_id: requestId('virt_mobile_live'),
+        client_message_id: crypto.randomUUID(),
+        room_id: roomId,
+        invoke: [],
+        body: [
+          '## 移动端阅读期间到达',
+          '',
+          '| 项 | 状态 |',
+          '| --- | --- |',
+          '| 视线 | 保持 |',
+          '',
+          `${'阅读历史时不能把视角拽回底部。\n'.repeat(12)}`,
+        ].join('\n'),
+      },
+    );
+    await expect(page.locator('#jump-latest-label')).toHaveText('有新消息 · 回到最新', {
+      timeout: 15_000,
+    });
+    const after = await messageBox(page);
+    expect(Math.abs(after.top - before.top)).toBeLessThanOrEqual(4);
+    expect(after.jumpHidden).toBe(false);
+
+    await page.locator('#jump-latest').tap();
+    await expect.poll(() => bottomGap(page), { timeout: 10_000 }).toBeLessThanOrEqual(2);
+    await expect(
+      page.locator(`#messages .msg[data-message-id="${sent.message.message_id}"]`),
+    ).toBeVisible({ timeout: 15_000 });
   });
 });
