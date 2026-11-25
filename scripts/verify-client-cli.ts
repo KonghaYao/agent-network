@@ -748,7 +748,11 @@ interface RunResult {
 
 async function runProcess(
   command: string[],
-  options: { env?: Record<string, string | undefined>; timeoutMs?: number } = {},
+  options: {
+    env?: Record<string, string | undefined>;
+    timeoutMs?: number;
+    stdin?: string;
+  } = {},
 ): Promise<RunResult> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
@@ -761,9 +765,16 @@ async function runProcess(
   const proc = Bun.spawn(command, {
     cwd: ROOT,
     env,
+    stdin: options.stdin === undefined ? 'ignore' : 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',
   });
+  if (options.stdin !== undefined) {
+    const stdin = proc.stdin;
+    if (stdin === undefined) throw new Error('stdin pipe unavailable');
+    stdin.write(options.stdin);
+    await stdin.end();
+  }
   const timer = setTimeout(() => proc.kill(), options.timeoutMs ?? 30_000);
   const [stdout, stderr, code] = await Promise.all([
     new Response(proc.stdout).text(),
@@ -779,6 +790,8 @@ interface RunCliOptions {
   explicit?: boolean;
   token?: string;
   expectActor?: string;
+  /** 通过管道写入子进程 stdin；undefined 时不提供 stdin。 */
+  stdin?: string;
 }
 
 function runCli(
@@ -794,6 +807,7 @@ function runCli(
   }
   return runProcess([process.execPath, CLI, ...prefix, ...args], {
     env: { AGENTNET_URL: baseUrl, AGENTNET_TOKEN: TOKEN, ...extraEnv },
+    ...(options.stdin === undefined ? {} : { stdin: options.stdin }),
   });
 }
 
@@ -1577,6 +1591,78 @@ async function main(): Promise<void> {
       completeHuman.stdout.includes('message_id=msg_mock') &&
         completeHuman.stdout.includes('final_message_id=msg_reply'),
       completeHuman.stdout,
+    );
+
+    const completeNoBodyCall = mock.calls
+      .filter((call) => call.tool === 'network_delivery_complete')
+      .at(-1);
+    check(
+      'complete 不传 --body 不发送 final_body',
+      completeNoBodyCall?.arguments?.final_body === undefined,
+      completeNoBodyCall?.arguments,
+    );
+
+    const completeCallsBeforeStdin = mock.calls.filter(
+      (call) => call.tool === 'network_delivery_complete',
+    ).length;
+    const stdinBody = '最终答复第一行\n\n第二行\n';
+    const completeStdin = await runCli(
+      mock.baseUrl,
+      [
+        'complete',
+        'dlv_mock',
+        '--attempt',
+        '1',
+        '--claim-id',
+        'clm_mock',
+        '--body',
+        '-',
+      ],
+      {},
+      { stdin: stdinBody },
+    );
+    checkEqual('complete --body - 退出 0', completeStdin.code, 0);
+    const completeStdinCalls = mock.calls.filter(
+      (call) => call.tool === 'network_delivery_complete',
+    );
+    checkEqual(
+      'complete --body - 调用一次工具',
+      completeStdinCalls.length,
+      completeCallsBeforeStdin + 1,
+    );
+    checkEqual(
+      'complete --body - 从 stdin 读取 final_body 且不 trim',
+      completeStdinCalls.at(-1)?.arguments?.final_body,
+      stdinBody,
+    );
+
+    const completeCallsBeforeEmpty = completeStdinCalls.length;
+    const completeEmpty = await runCli(
+      mock.baseUrl,
+      [
+        'complete',
+        'dlv_mock',
+        '--attempt',
+        '1',
+        '--claim-id',
+        'clm_mock',
+        '--body',
+        '-',
+      ],
+      {},
+      { stdin: '' },
+    );
+    check('complete --body - 空 stdin 退出非 0', completeEmpty.code !== 0, completeEmpty);
+    check(
+      'complete --body - 空 stdin 报清晰错误',
+      completeEmpty.stderr.includes('stdin 为空') &&
+        completeEmpty.stderr.includes('--body <text>'),
+      completeEmpty.stderr,
+    );
+    checkEqual(
+      'complete --body - 空 stdin 不调用工具',
+      mock.calls.filter((call) => call.tool === 'network_delivery_complete').length,
+      completeCallsBeforeEmpty,
     );
 
     const historyHuman = await runCli(mock.baseUrl, ['history', '--room', 'rm_mock']);

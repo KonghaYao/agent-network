@@ -117,7 +117,7 @@ const HELP_GUIDE = `
   read --message <message-id> [--cursor <chunk-cursor>]
   reply --delivery <delivery-id> --body <text|->
   claim <delivery-id>
-  complete <delivery-id> --attempt <n> --claim-id <id> [--body <text>]
+  complete <delivery-id> --attempt <n> --claim-id <id> [--body <text|->]
   fail <delivery-id> --attempt <n> --claim-id <id> --error <text>
   task mark|unmark --room <room-id> --message <message-id>
   task summaries --room <room-id> --roots <id,id>
@@ -305,7 +305,7 @@ function deliveryOptions(command: Command, extra: 'none' | 'report' | 'complete'
     command
       .option('--attempt <n>', '投递 attempt')
       .option('--claim-id <id>', 'claim_id')
-      .option('--body <text>', '完成时的最终正文')
+      .option('--body <text>', '完成时的最终正文；传 - 从 stdin 读取')
       .option('--client-message-id <id>', '客户端消息 id');
   }
   if (extra === 'fail') {
@@ -682,16 +682,21 @@ function buildProgram(): Command {
   deliveryOptions(
     program.command('complete').description('完成投递'),
     'complete',
-  ).action(
-    async (
-      delivery: string | undefined,
-      options: Record<string, string | undefined>,
-      command: Command,
-    ) => {
-      const { client, config } = clientFor(command);
-      await complete(client, config, options, delivery);
-    },
-  );
+  )
+    .addHelpText(
+      'after',
+      '\n示例\n  agentnet complete dlv_... --attempt 1 --claim-id clm_... --body "完成"\n  agentnet complete dlv_... --attempt 1 --claim-id clm_... --body -\n',
+    )
+    .action(
+      async (
+        delivery: string | undefined,
+        options: Record<string, string | undefined>,
+        command: Command,
+      ) => {
+        const { client, config } = clientFor(command);
+        await complete(client, config, options, delivery);
+      },
+    );
 
   deliveryOptions(
     program.command('fail').description('标记投递失败'),

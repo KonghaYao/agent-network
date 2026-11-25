@@ -152,6 +152,24 @@ interface CompleteOptions extends DeliveryRefOptions {
   clientMessageId?: string;
 }
 
+/**
+ * `complete --body -` 与 send/reply 一致，从 stdin 读取最终正文。
+ * 不传 --body 时保持“只改状态、不发最终正文”；正文不做 trim。
+ */
+async function finalBodyFromOptions(
+  body: string | undefined,
+): Promise<string | undefined> {
+  if (body === undefined) return undefined;
+  if (body !== '-') return body;
+  const text = await Bun.stdin.text();
+  if (text.trim().length === 0) {
+    throw new CliError(
+      'stdin 为空；complete 的最终正文不能为空，请通过管道传入正文，或用 --body <text> 直接传入',
+    );
+  }
+  return text;
+}
+
 export async function complete(
   client: McpClient,
   config: ResolvedConfig,
@@ -164,7 +182,7 @@ export async function complete(
     attempt: integer(options.attempt, 'attempt', { command: 'complete' }),
     claimId: required(options.claimId, 'claim-id', { command: 'complete' }),
     requestId: options.requestId,
-    finalBody: options.body,
+    finalBody: await finalBodyFromOptions(options.body),
     clientMessageId: options.clientMessageId,
   });
   emit(config, result, (value) => {

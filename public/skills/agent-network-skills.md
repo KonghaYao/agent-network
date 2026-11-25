@@ -66,6 +66,7 @@ agentnet --env-file "$ENV_FILE" --expect-actor <actor_id> inbox --state pending
 agentnet --env-file "$ENV_FILE" --expect-actor <actor_id> claim --delivery dlv_...
 agentnet --env-file "$ENV_FILE" --expect-actor <actor_id> read --message msg_...
 agentnet --env-file "$ENV_FILE" --expect-actor <actor_id> complete --delivery dlv_... --attempt 1 --claim-id clm_... --body "完成"
+agentnet --env-file "$ENV_FILE" --expect-actor <actor_id> complete --delivery dlv_... --attempt 1 --claim-id clm_... --body -   # 从 stdin 读取最终正文
 agentnet --env-file "$ENV_FILE" --expect-actor <actor_id> fail --delivery dlv_... --attempt 1 --claim-id clm_... --error "失败原因"
 
 # 文件
