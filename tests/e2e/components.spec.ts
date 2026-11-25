@@ -1,11 +1,71 @@
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test } from '@playwright/test';
+import { expect, test, type Locator } from '@playwright/test';
 import { baseUrl, callTool, createComponentRoom, dragFile, expectAccountMenuClearOfDialog, login, requestId } from './fixtures/components';
 
 import { semanticColor } from './fixtures/semantic-colors';
 import { expectNoHorizontalOverflow, LONG_TASK_URL } from './fixtures/task-layout';
 
 // 真实 MCP fixture 与浏览器交互覆盖组件、RHF、持久化及可访问性。
+
+/** 等 Lenso 完成首次测量/碰撞定位，避免读到中间帧的旧坐标。 */
+async function waitForStableRect(locator: Locator) {
+  await locator.evaluate(async (element) => {
+    const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    let previous = element.getBoundingClientRect();
+    for (let index = 0; index < 30; index += 1) {
+      await nextFrame();
+      const current = element.getBoundingClientRect();
+      if (
+        Math.abs(current.left - previous.left) < 0.5 &&
+        Math.abs(current.top - previous.top) < 0.5 &&
+        Math.abs(current.width - previous.width) < 0.5 &&
+        Math.abs(current.height - previous.height) < 0.5
+      ) {
+        return;
+      }
+      previous = current;
+    }
+  });
+}
+
+/** 读取 Select 弹层的视口几何，并用 elementFromPoint 验证最后一项真的可点。 */
+async function readSelectGeometry(list: Locator, triggerId: string) {
+  return list.evaluate((listbox, id) => {
+    const trigger = document.getElementById(id);
+    const dialog = document.getElementById('members-modal');
+    const footer = dialog?.querySelector<HTMLElement>('.members-actions');
+    const options = [...listbox.querySelectorAll<HTMLElement>('[role="option"]')];
+    const last = options.at(-1);
+    if (!trigger || !footer || !last) throw new Error(`缺少 Select 几何节点：${id}`);
+    const listRect = listbox.getBoundingClientRect();
+    const triggerRect = trigger.getBoundingClientRect();
+    const footerRect = footer.getBoundingClientRect();
+    const lastRect = last.getBoundingClientRect();
+    const hit = document.elementFromPoint(
+      lastRect.left + lastRect.width / 2,
+      lastRect.top + lastRect.height / 2,
+    );
+    return {
+      viewport: { width: innerWidth, height: innerHeight },
+      list: {
+        top: listRect.top,
+        bottom: listRect.bottom,
+        left: listRect.left,
+        right: listRect.right,
+      },
+      trigger: { top: triggerRect.top, bottom: triggerRect.bottom },
+      footer: { top: footerRect.top, bottom: footerRect.bottom },
+      last: {
+        top: lastRect.top,
+        bottom: lastRect.bottom,
+        text: last.textContent?.trim() ?? '',
+      },
+      background: getComputedStyle(listbox).backgroundColor,
+      hitIsLast: hit?.closest('[role="option"]') === last,
+      hitInFooter: Boolean(hit?.closest('.members-actions')),
+    };
+  }, triggerId);
+}
 
 test.describe.serial('SPA 组件库与状态管理', () => {
 
@@ -835,6 +895,92 @@ test.describe.serial('SPA 组件库与状态管理', () => {
     await page.keyboard.press('Escape');
     await expect(page.locator('#members-modal')).toBeHidden();
     await expect(members).toBeFocused();
+  });
+
+  test('群策略底部 Select 在 1440/390 完整可见、可点且 Esc 只关下拉', async ({ page }) => {
+    const viewports = [
+      { width: 1440, height: 900 },
+      { width: 390, height: 844 },
+    ];
+    for (const viewport of viewports) {
+      await page.setViewportSize(viewport);
+      await page.goto(`${base}/c/${roomId}`);
+      await expect(page.locator('#composer')).toBeVisible();
+      await page.locator('#members-button').click();
+      const dialog = page.locator('#members-modal');
+      await expect(dialog).toBeVisible();
+      // 弹窗入场动画会改变 trigger 的视口坐标；等动画结束再测量下拉。
+      await dialog.evaluate((element) =>
+        Promise.all(
+          element
+            .getAnimations({ subtree: true })
+            .map((animation) => animation.finished.catch(() => undefined)),
+        ),
+      );
+      const scroll = dialog.locator('.members-scroll');
+      await scroll.evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+      });
+
+      // 前几个 Select 仍向下展开。
+      const firstTrigger = page.locator('#group-policy-message');
+      await firstTrigger.click();
+      const firstList = page.getByRole('listbox');
+      await expect(firstList).toBeVisible();
+      await waitForStableRect(firstList);
+      const firstGeometry = await readSelectGeometry(firstList, 'group-policy-message');
+      expect(firstGeometry.list.top).toBeGreaterThanOrEqual(firstGeometry.trigger.bottom - 1);
+      await page.keyboard.press('Escape');
+      await expect(firstList).toBeHidden();
+      await expect(dialog).toBeVisible();
+
+      // 最后一个 Select 在底部改向上展开，最后一项不被 footer 覆盖。
+      const lastTrigger = page.locator('#group-policy-mention-all');
+      await lastTrigger.scrollIntoViewIfNeeded();
+      await lastTrigger.click();
+      const list = page.getByRole('listbox');
+      await expect(list).toBeVisible();
+      await expect(list.getByRole('option')).toHaveCount(2);
+      await waitForStableRect(list);
+      const geometry = await readSelectGeometry(list, 'group-policy-mention-all');
+      expect(geometry.last.text).toBe('所有成员');
+      expect(geometry.list.top).toBeGreaterThanOrEqual(0);
+      expect(geometry.list.bottom).toBeLessThanOrEqual(geometry.viewport.height);
+      expect(geometry.list.left).toBeGreaterThanOrEqual(0);
+      expect(geometry.list.right).toBeLessThanOrEqual(geometry.viewport.width);
+      expect(geometry.list.bottom).toBeLessThanOrEqual(geometry.trigger.top);
+      expect(geometry.last.bottom).toBeLessThanOrEqual(geometry.footer.top);
+      expect(geometry.last.top).toBeGreaterThanOrEqual(0);
+      expect(geometry.last.bottom).toBeLessThanOrEqual(geometry.viewport.height);
+      expect(geometry.background, '下拉需要实色面板').not.toBe('rgba(0, 0, 0, 0)');
+      expect(geometry.hitIsLast, '最后一项必须命中 option 而不是 footer').toBe(true);
+      expect(geometry.hitInFooter).toBe(false);
+
+      await page.keyboard.press('Escape');
+      await expect(list).toBeHidden();
+      await expect(dialog).toBeVisible();
+      await expect(lastTrigger).toBeFocused();
+
+      // 选择后保存仍走原有策略更新链路。
+      const current = (await lastTrigger.textContent())?.trim() ?? '';
+      const nextLabel = current.includes('所有成员') ? '仅群主/管理员' : '所有成员';
+      const nextValue = nextLabel === '所有成员' ? 'members' : 'owner_admin';
+      await lastTrigger.click();
+      await page.getByRole('option', { name: nextLabel, exact: true }).click();
+      await expect(lastTrigger).toContainText(nextLabel);
+      await page.locator('#group-policy-save').click();
+      await expect(page.locator('#group-policy-status')).toContainText('已保存群策略');
+      const detail = await callTool<{ room: { policies?: { member_mention_all: string } } }>(
+        base,
+        tokenA,
+        'network_room_get',
+        { room_id: roomId },
+      );
+      expect(detail.room.policies?.member_mention_all).toBe(nextValue);
+
+      await page.locator('#members-close').click();
+      await expect(dialog).toBeHidden();
+    }
   });
 
   test('390 下群成员入口在搜索右侧且无横向溢出', async ({ page }) => {

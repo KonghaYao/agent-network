@@ -133,6 +133,10 @@ export interface SelectAdapterProps {
   onChange: (value: string) => void;
   placeholder?: string;
   className?: string;
+  /** 首选展开方向；空间不足时 SDK 仍会按碰撞结果翻转。 */
+  side?: 'top' | 'bottom';
+  /** 下拉与 trigger 的横向对齐。 */
+  align?: 'start' | 'center' | 'end';
   'aria-label'?: string;
   'aria-invalid'?: boolean;
   'aria-describedby'?: string;
@@ -153,6 +157,8 @@ export function Select({
   onChange,
   placeholder,
   className,
+  side,
+  align,
   'aria-label': ariaLabel,
   'aria-invalid': ariaInvalid,
   'aria-describedby': ariaDescribedBy,
@@ -261,7 +267,10 @@ export function Select({
     ),
     createElement(
       Content,
-      null,
+      // Lenso 默认把选中项覆盖到 trigger 上（原生 select 样式）。在本应用的
+      // 可滚动弹窗里，这会让弹层贴着底部并被 footer 视觉压住；改用普通弹层，
+      // 由 SDK 做碰撞翻转，底部空间不足时向上开。
+      { alignItemWithTrigger: false, collisionPadding: 8, side, align },
       options.map((option) =>
         createElement(
           Item,

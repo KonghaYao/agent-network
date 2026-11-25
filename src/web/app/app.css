@@ -242,6 +242,19 @@
   transform: translateY(-50%);
 }
 
+/* Lenso Select 的 popover 在非 sheet 呈现下不画实底；应用侧补上面板，
+ * 避免选项直接叠在表单和底部操作区上。定位与翻转仍由 SDK 负责。 */
+[data-lenso-slot='select-popover'][data-presentation='popover'] {
+  border: 1px solid var(--lenso-separator) !important;
+  border-radius: var(--app-radius-lg) !important;
+  background: var(--lenso-background-secondary) !important;
+  box-shadow: var(--lenso-surface-shadow) !important;
+}
+
+[data-lenso-slot='select-popover'][data-presentation='popover'] > [data-lenso-slot='select-surface'] {
+  display: none !important;
+}
+
 .field [data-lenso-slot='select-trigger'] {
   width: 100% !important;
   min-height: 0 !important;

@@ -52,6 +52,7 @@ function Select<T extends string>({
   value,
   options,
   disabled,
+  side,
   onChange,
 }: {
   id: string;
@@ -59,6 +60,7 @@ function Select<T extends string>({
   value: T;
   options: { value: T; label: string }[];
   disabled?: boolean;
+  side?: 'top' | 'bottom';
   onChange: (value: T) => void;
 }) {
   return (
@@ -70,6 +72,8 @@ function Select<T extends string>({
         value={value}
         disabled={disabled}
         options={options}
+        side={side}
+        align="end"
         onChange={(next) => onChange(next as T)}
       />
     </div>
@@ -226,6 +230,7 @@ export function GroupPoliciesPanel({
               label="@所有人"
               value={form.member_mention_all}
               disabled={busy}
+              side="top"
               options={[
                 { value: 'owner_admin', label: '仅群主/管理员' },
                 { value: 'members', label: '所有成员' },
