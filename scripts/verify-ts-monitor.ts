@@ -43,6 +43,7 @@ import {
   extractAttachmentCandidates,
   startAttachmentCleanup,
 } from '../client/monitor/attachments';
+import { isAlertEvent } from '../client/monitor/alerts';
 import { MonitorEngine, retryDelayMs } from '../client/monitor/engine';
 import { LIMITS } from '../src/contracts/limits';
 
@@ -1550,19 +1551,35 @@ async function runMemoryContextChecks(): Promise<void> {
 }
 
 async function runRoomEventChecks(): Promise<void> {
-  // 默认开启：即使没有 --room-events，也输出所有房间活动。
+  // 默认关闭：没有 --room-events 时只做定向监听，informational room_message 不输出。
   const defaultMock = createMock();
   const defaultWatcher = startWatcher(defaultMock.base, {
     AGENTNET_MONITOR_RETRY_BASE_MS: '600000',
   });
   try {
     await waitForLine(defaultWatcher.stderr, (line) => line.includes('READY'), 'default READY');
-    sendItems(defaultMock, [roomItem('rm_allowed', 'msg_default_on')]);
-    await waitForRoomEvent(defaultWatcher.stdout, 'msg_default_on');
+    const defaultDeliveryId = 'dlv_default_live';
+    defaultMock.state.pending.set(defaultDeliveryId, delivery(defaultDeliveryId));
+    sendItems(defaultMock, [
+      roomItem('rm_allowed', 'msg_default_off'),
+      streamItem('room.membership', {
+        attention: 'action_required',
+        change: 'removed',
+        room_id: 'rm_allowed',
+        seq: '12',
+        event_id: 'evt_default_membership',
+      }),
+      notificationItem(defaultDeliveryId, 'delivery.created', 'evt_default_delivery'),
+    ]);
+    const defaultDelivery = await waitForEvent(defaultWatcher.stdout, 'delivery', defaultDeliveryId);
+    checkEqual('默认定向监听仍输出 delivery', defaultDelivery.claim_state, 'claimed');
+    const defaultMembership = await waitForStreamEvent(defaultWatcher.stdout, 'room.membership');
+    checkEqual('默认定向监听仍输出 action_required', defaultMembership.change, 'removed');
+    await Bun.sleep(700);
     checkEqual(
-      '默认开启输出 room_message',
-      roomEventCount(defaultWatcher.stdout, 'msg_default_on'),
-      1,
+      '默认不输出 informational room_message',
+      roomEventCount(defaultWatcher.stdout, 'msg_default_off'),
+      0,
     );
   } finally {
     await defaultWatcher.kill();
@@ -1735,7 +1752,7 @@ async function runRoomEventChecks(): Promise<void> {
     );
     checkEqual('首次连接 history 基线使用 after', baseline.direction, 'after');
     checkEqual(
-      '默认监听所有房间，各取一次基线',
+      '全监听时所有房间各取一次基线',
       mock.state.historyCalls.filter((call) => call.cursor === null).length,
       2,
     );
@@ -2561,9 +2578,22 @@ async function runRoomEventChecks(): Promise<void> {
     stderr: 'pipe',
   });
   check(
-    '--no-room-events 可用于关闭默认监听',
+    '--no-room-events 与默认一致（兼容旧命令）',
     noRoomEvents.exitCode === 0,
     noRoomEvents.stderr.toString(),
+  );
+
+  const defaultRoomEvents = Bun.spawnSync({
+    cmd: [process.execPath, CLI, 'monitor', '--harness', 'claude', '--check-config'],
+    cwd: ROOT,
+    env: { ...process.env, AGENTNET_TOKEN: TOKEN },
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  check(
+    '无 --room-events 时 --check-config 成功',
+    defaultRoomEvents.exitCode === 0,
+    defaultRoomEvents.stderr.toString(),
   );
 
   const invalidRoom = Bun.spawnSync({
@@ -2864,6 +2894,14 @@ async function runPeriRecoveryCheck(): Promise<void> {
 }
 
 async function runPeriJsonChecks(): Promise<void> {
+  check(
+    'alert 分类：action_required 的 stream_event 会唤醒',
+    isAlertEvent({ type: 'stream_event', attention: 'action_required' }) === true,
+  );
+  check(
+    'alert 分类：普通 informational stream_event 不唤醒',
+    isAlertEvent({ type: 'stream_event', attention: 'informational' }) === false,
+  );
   const mock = createMock();
   const watcher = startPeriWatcher(mock.base, {}, ['--json']);
   try {
@@ -3730,10 +3768,10 @@ async function runDshChecks(): Promise<void> {
     const ids = new Set(queued.map((event) => event.event_id));
     const deliveryIds = new Set(queued.map((event) => event.delivery_id));
     check('dsh 投递事件入队', deliveryIds.has('dlv_1'), queued);
-    check('dsh 直聊普通消息入队', ids.has('102'), queued);
-    check('dsh 自己的消息也入队', ids.has('104'), queued);
-    check('dsh 群聊普通消息入队', ids.has('103'), queued);
-    check('dsh 未知房间普通消息入队', ids.has('110'), queued);
+    check('dsh 默认不写直聊普通消息', !ids.has('102'), queued);
+    check('dsh 默认不写自己的普通消息', !ids.has('104'), queued);
+    check('dsh 默认不写群聊普通消息', !ids.has('103'), queued);
+    check('dsh 默认不写未知房间普通消息', !ids.has('110'), queued);
     check('dsh delivery.updated 回执入队', ids.has('105'), queued);
     check('dsh session.login 入队', ids.has('106'), queued);
     check('dsh delivery.reminder 入队', deliveryIds.has('dlv_3'), queued);

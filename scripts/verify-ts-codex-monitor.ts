@@ -1536,7 +1536,7 @@ async function runReminderChecks(): Promise<void> {
 }
 
 async function runInfoChecks(): Promise<void> {
-  const fixture = await createFixture('info');
+  const fixture = await createFixture('info', { args: ['--room-events'] });
   try {
     await waitForLine(fixture.watcher.stdout, (line) => line.startsWith('READY actor='), 'READY');
     fixture.mcp.sendItems([
@@ -1604,7 +1604,7 @@ async function runInfoChecks(): Promise<void> {
 }
 
 async function runOffModeInfoChecks(): Promise<void> {
-  const fixture = await createFixture('info-off', { args: ['--no-room-events'] });
+  const fixture = await createFixture('info-off');
   try {
     await waitForLine(fixture.watcher.stdout, (line) => line.startsWith('READY actor='), 'READY');
     fixture.mcp.sendItems([
@@ -1652,14 +1652,14 @@ async function runOffModeInfoChecks(): Promise<void> {
     );
     await Bun.sleep(500);
     check(
-      'codex --no-room-events 抑制 informational room.message',
+      'codex 默认定向监听抑制 informational room.message',
       !fixture.watcher.stdout.some(
         (line) =>
           line.startsWith('STREAM_EVENT') && line.includes('message=msg_off_room'),
       ),
       fixture.watcher.stdout.slice(-10),
     );
-    checkEqual('codex --no-room-events 回执不 claim', fixture.mcp.state.claimCalls.size, 0);
+    checkEqual('codex 默认定向监听回执不 claim', fixture.mcp.state.claimCalls.size, 0);
   } finally {
     await fixture.stop();
   }
@@ -1948,7 +1948,7 @@ async function main(): Promise<void> {
   await runReminderChecks();
   console.log('TS codex monitor: informational stream items');
   await runInfoChecks();
-  console.log('TS codex monitor: --no-room-events');
+  console.log('TS codex monitor: 默认定向监听');
   await runOffModeInfoChecks();
   console.log('TS codex monitor: reconnect/idle');
   await runReconnectChecks();

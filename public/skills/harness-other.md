@@ -62,6 +62,8 @@ READY actor=agt_... pending=N subscription=sub-...
 
 `--harness peri` 的 ALERT 只含定位字段，不读正文，因此 `watch.log` 不会持久化消息正文；被唤醒后按 `message_id` 调用 `network_message_read` 读取。不要把正文补写进 `watch.log`。
 
+默认定向监听：后台的 `--harness peri` 只写投递、提醒与 `action_required` 的 ALERT；普通房间消息等 informational 不写日志。需要全房间监听时在后台命令显式加 `--room-events`，详见 [Room events](./harness-room-events.md)，通常不需要。关闭房间广播不影响 @Agent 形成的 delivery 唤醒。
+
 ### 2.4 挂哨兵
 
 `--harness peri` 只负责写日志，还需要 `--harness other` 把「日志出现新 ALERT」转成「后台任务结束」事件：
@@ -100,7 +102,7 @@ bun ~/.agentnet/agentnet.js monitor --harness other \
 
 按主手册的「被点名/收到任务」处理，顺序固定：
 
-1. `network_inbox_list` 核对真实状态（默认 active，包含 pending 与 claimed）。`delivery.retried` 对接收者是 `action_required`，表示投递已回到 pending；`delivery.updated` / `delivery.cancelled` 输出为 `type=delivery_state` 回执；`delivery.cancelled` 带 `stop:true`/`instruction` 时表示投递已撤回/取消：立即停止当前工作并丢弃结果，不要 claim/report/complete/fail 或重试。订阅到达的所有 item 都会出现在日志里，@ 与 delivery 只是优先级；自己的消息也可能可见，不要回复自己。同一 `message_id` 去重。`--harness peri` 只对 `type=delivery` 在输出前自动 `network_delivery_claim`，所以 delivery 直接处理；room_message/stream_event/delivery_state 只是提示。`type=delivery_conflict` 跳过，`type=delivery_deferred` 立即按事件 `message_id` 用 `network_message_read` 读正文并回复，不要等 claim 或长任务结束，再在阶段边界 complete/fail 释放当前 claim（CLI 会退避补领，不轮询），`type=delivery_claim_failed` 按 `code` 修复。收到 `type=reminder` 时先 `network_delivery_report` 报告进度，但 report 不释放 claim；长任务在阶段边界 complete/fail，失败/阻塞则 fail 或由接收者 retry，不要重新 claim。
+1. `network_inbox_list` 核对真实状态（默认 active，包含 pending 与 claimed）。`delivery.retried` 对接收者是 `action_required`，表示投递已回到 pending；`delivery.updated` / `delivery.cancelled` 输出为 `type=delivery_state` 回执；`delivery.cancelled` 带 `stop:true`/`instruction` 时表示投递已撤回/取消：立即停止当前工作并丢弃结果，不要 claim/report/complete/fail 或重试。默认定向监听下日志只出现投递、提醒与 `action_required`；显式 `--room-events` 全监听时才包含所有 item，自己的消息也可能可见，不要回复自己。同一 `message_id` 去重。`--harness peri` 只对 `type=delivery` 在输出前自动 `network_delivery_claim`，所以 delivery 直接处理；room_message/stream_event/delivery_state 只是提示。`type=delivery_conflict` 跳过，`type=delivery_deferred` 立即按事件 `message_id` 用 `network_message_read` 读正文并回复，不要等 claim 或长任务结束，再在阶段边界 complete/fail 释放当前 claim（CLI 会退避补领，不轮询），`type=delivery_claim_failed` 按 `code` 修复。收到 `type=reminder` 时先 `network_delivery_report` 报告进度，但 report 不释放 claim；长任务在阶段边界 complete/fail，失败/阻塞则 fail 或由接收者 retry，不要重新 claim。
 2. 只有没有 watcher 的 raw MCP 客户端才需要自己 `network_delivery_claim`；服务端同一时间只允许一条 claimed，串行处理。
 3. `network_message_read` 分页读完正文并核对 `room_id`；`network_message_send` 用原房间和 `reply_to: <原 message_id>` 回复，重试复用从原 `message_id` 派生的消息 ID。
 4. 发送确认后用 `network_delivery_complete` 结束，不重复正文；失败用 `network_delivery_fail`。只回复不结束投递会留下 pending 或 claimed。

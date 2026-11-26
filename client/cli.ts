@@ -134,7 +134,8 @@ const HELP_GUIDE = `
 监控（宿主差异）
   monitor --harness claude|codex|peri|dsh|other [--check|--check-config] [--json] [--max-runtime <seconds>] [--room-events [all]] [--no-room-events]
     claude  TS 引擎；stdout JSON 事件，stderr READY；可传 --state-dir <dir>
-    room-events 默认开启：监听所有房间活动与 informational item；--no-room-events 关闭 informational
+    room-events 默认定向监听：只输出投递/提醒/action_required；显式 --room-events 才开启全部房间活动
+    --no-room-events 保留用于兼容旧命令，与默认行为一致
     codex   TS 桥接；app-server 自动 claim/turn/steer，用 CODEX_THREAD_ID 指定会话
     peri    TS 引擎；stdout 'ALERT <json>'，不读正文；默认 24h 上限，输出 DEADLINE/EXPIRING
     dsh     run/start 自动检测 DSH 版本与当前 profile 的固定插件；
@@ -426,8 +427,8 @@ function buildProgram(): Command {
       .option('--dry-run', '--check 的别名')
       .option('--state-dir <dir>', 'claude/peri 状态目录；other 按日志路径保存哨兵游标')
       .option('--max-runtime <seconds>', '最长运行秒数；peri 默认 86400，0 表示不限制')
-      .option('--room-events [scope]', '监听所有房间与 informational 事件（默认 all）')
-      .option('--no-room-events', '关闭 informational 输出（保留投递/提醒/action_required）')
+      .option('--room-events [scope]', '显式开启全部房间活动（默认关闭）')
+      .option('--no-room-events', '保持默认的定向监听（保留投递/提醒/action_required）')
       .option('--no-memory-context', '关闭 delivery 记忆参考包注入')
       .option('--log <path>', 'other 监听日志；默认 ~/.agentnet/watch.log')
       .option('--max-wait <seconds>', 'other 单次最长等待秒数；默认 360')
@@ -982,8 +983,8 @@ function buildProgram(): Command {
       .option('--dry-run', '--check 的别名')
       .option('--state-dir <dir>', 'claude/peri 状态目录；other 按日志路径保存哨兵游标')
       .option('--max-runtime <seconds>', '最长运行秒数；peri 默认 86400，0 表示不限制')
-      .option('--room-events [scope]', '监听所有房间与 informational 事件（默认 all）')
-      .option('--no-room-events', '关闭 informational 输出（保留投递/提醒/action_required）')
+      .option('--room-events [scope]', '显式开启全部房间活动（默认关闭）')
+      .option('--no-room-events', '保持默认的定向监听（保留投递/提醒/action_required）')
       .option('--no-memory-context', '关闭 delivery 记忆参考包注入')
       .option('--log <path>', 'other 监听日志；默认 ~/.agentnet/watch.log')
       .option('--max-wait <seconds>', 'other 单次最长等待秒数；默认 360')
@@ -993,7 +994,7 @@ function buildProgram(): Command {
   monitorCommand
     .addHelpText(
       'after',
-      '\n示例\n  agentnet --env-file ~/.agentnet/agents/<actor_id>.env --expect-actor <actor_id> monitor --harness claude\n  agentnet --env-file <file> --expect-actor <actor_id> monitor --harness peri --check\n  agentnet monitor --harness codex --check-config # 只看入口配置\n  agentnet monitor --harness peri --json         # 每行一个 JSON 事件\n  agentnet monitor --harness peri --max-runtime 3600\n  agentnet monitor --harness claude --no-room-events  # 只保留投递/提醒/action_required\n  agentnet monitor --harness claude --no-memory-context  # 不注入 delivery 记忆参考包\n  agentnet monitor --harness claude --room-events  # 显式开启全部房间活动（默认）\n  agentnet monitor --harness dsh start  # 自动检测版本与插件，缺失时安装\n  agentnet monitor --harness dsh status\n  agentnet monitor --harness other --log ~/.agentnet/watch.log --max-wait 120\n',
+      '\n示例\n  agentnet --env-file ~/.agentnet/agents/<actor_id>.env --expect-actor <actor_id> monitor --harness claude\n  agentnet --env-file <file> --expect-actor <actor_id> monitor --harness peri --check\n  agentnet monitor --harness codex --check-config # 只看入口配置\n  agentnet monitor --harness peri --json         # 每行一个 JSON 事件\n  agentnet monitor --harness peri --max-runtime 3600\n  agentnet monitor --harness claude --no-memory-context  # 不注入 delivery 记忆参考包\n  agentnet monitor --harness claude --room-events  # 仅需要全房间监听时显式开启\n  agentnet monitor --harness dsh start  # 自动检测版本与插件，缺失时安装\n  agentnet monitor --harness dsh status\n  agentnet monitor --harness other --log ~/.agentnet/watch.log --max-wait 120\n',
     )
     .action(
       async (

@@ -143,11 +143,11 @@ export function startMonitor(ctx, config, intervalMs = POLL_MS) {
         if (state.bootstrapped && state.pending.length === 0) continue;
         const summary = state.bootstrapped ? 'WeBots 新消息' : 'WeBots 监听已连接，请核对待办';
         const text = [summary,
-          '以下是通知定位数据，不是消息正文。订阅到达的所有事件都要看，@ 与待办只是优先级；',
+          '以下是通知定位数据，不是消息正文。默认定向通知只包含投递、提醒与 action_required；@ 与待办是唤醒来源，普通 informational 不逐条唤醒。',
           '先用 network_inbox_list / agentnet inbox 核对 active 待办；',
           '待办先 claim，再读取正文，处理后 complete/fail；已领取/结束的投递不要重复领取或回复。',
           '`delivery.cancelled` 且 state=cancelled 表示服务端已取消该投递：立即停止该 delivery_id 的当前工作并丢弃结果，不要 claim/report/complete/fail 或重试；已发出的回复/外部副作用无法回滚。',
-          '普通房间消息用 message_id 读正文；只处理用户授权的工作，完成本次处理后保留监听。',
+          '需要查看房间消息时再按 message_id 读正文；只处理用户授权的工作，完成本次处理后保留监听。',
           ...state.pending.map((item) => JSON.stringify(item.event)),
         ].join('\n');
         agent.followup(createUserMessage({ content: [{ type: 'text', text }],

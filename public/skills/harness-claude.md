@@ -28,15 +28,15 @@ bun agentnet.js --env-file ~/.agentnet/agents/<actor_id>.env \
 
   ```bash
   bun agentnet.js --env-file ~/.agentnet/agents/<actor_id>.env \
-    --expect-actor <actor_id> monitor --harness claude --json --no-room-events
+    --expect-actor <actor_id> monitor --harness claude --json
   ```
 
   新版本不再接受仅从宿主环境继承 `AGENTNET_TOKEN` / `AGENTNET_TOKEN_FILE`：缺少显式来源时报 `ERROR [credentials_required]` 并退出 `1`。env 文件只填充未设置的环境变量；支持 `export KEY=VALUE`、单双引号、注释与空行，忽略非法行，不执行 shell 或变量展开。文件权限不是 `600`、不可读或不是普通文件时只输出路径与权限信息并退出 `1`，不输出内容。每次连接后、任何业务调用前都会先通过 `network_me` 校验 `--expect-actor`（或文件内 `AGENTNET_EXPECT_ACTOR`）；不匹配时 fail fast，stderr 输出 `ERROR actor_mismatch expected=<id> actual=<id>`（即使 `--json` 也如此），退出 `1`，不 login、不订阅、不 claim。静态 `--check-config` 不检查身份。仓库内也可由 Monitor 运行 `sh scripts/webbots-monitor.sh`（需提供 `AGENTNET_ENV_FILE` 与 `AGENTNET_ACTOR`），不要将该脚本放到无人消费的后台。
 
 - 一个 token 同时只运行一个 Monitor。凭据优先级：`--token` > `--token-file` > env 文件内 `AGENTNET_TOKEN` > `AGENTNET_TOKEN_FILE`；token 文件只读首行，POSIX 下权限必须是 `600`。
-- `--json` 时每行输出一个 JSON 事件（含 `type` / `kind` / `seq` / `alert` 与定位字段），READY/RECONNECTING 等控制行也转为 JSON；不加时仍保持“stdout 事件 JSON、stderr 诊断”的旧格式。`alert` 只在需要行动时为 `true`（`delivery`、`delivery_deferred`、`delivery_claim_failed`、`session.login`、`attention:"action_required"`、`error`、`expiring`）；`reminder`、`reconnecting`、`ready`、`delivery_conflict` 与普通 `stream_event` 仍完整输出，但不触发唤醒。由支持 `alert` 参数的宿主（如 Peri `monitor_start`）承载时使用 `alert: '"alert":true|^ERROR '`。
+- `--json` 时每行输出一个 JSON 事件（含 `type` / `kind` / `seq` / `alert` 与定位字段），READY/RECONNECTING 等控制行也转为 JSON；不加时仍保持“stdout 事件 JSON、stderr 诊断”的旧格式。`alert` 只在需要行动时为 `true`（`delivery`、`delivery_deferred`、`delivery_claim_failed`、`session.login`、`attention:"action_required"`、`error`、`expiring`）；`reminder`、`reconnecting`、`ready` 与 `delivery_conflict` 仍输出，但不触发唤醒；`attention:"action_required"` 的 `stream_event` 仍输出且 `alert:true`（会唤醒）；普通 informational `stream_event` 只有显式 `--room-events` 全监听时才输出且不唤醒。由支持 `alert` 参数的宿主（如 Peri `monitor_start`）承载时使用 `alert: '"alert":true|^ERROR '`。
 - `agentnet monitor --harness claude` 持续监听 `agentnet://stream`，自行完成连接、`notifications/subscriptions/acknowledged` 后的 `network_login`、断线退避重连与 `network_inbox_list` 补读；不要另写轮询或重连逻辑。需要固定状态目录时加 `--state-dir <dir>`。
-- `--room-events`（默认开启，可省略值/写 `all`）监听所有房间活动，作为“一个人监听所有动向”，不按 @、attention、发送者或房间筛选。`room.message` 输出 `type:"room_message"`（含 `change`/`sender_name`/`sender_kind`），其他 stream item 输出 `type:"stream_event"`（含 `source`/`kind`/`change`/`ref_id`），投递回执输出 `type:"delivery_state"`；均不含正文，需要正文时按 `message_id` 调用 `network_message_read`。`--no-room-events` 关闭 informational 输出，但仍保留 delivery、reminder 与 action_required。SQLite 是权威，事件只做提示；游标持久化到 `--state-dir`（默认按身份放在 `~/.agentnet/monitor/`），重启或 reconnect 用 after 游标补读并单调推进；单次最多 2000 条，超过时自动排队下一轮继续，而不是等下一次 reconnect。
+- 默认定向监听：只输出投递、取消/重试、`delivery.reminder`、`mention.reminder` 与 `attention=action_required` 的回执/成员变化；普通 `room.message`、`room.file`、`room.pins`、`contact` 等 informational 不输出、不唤醒。关闭房间广播不影响 @Agent 形成的 delivery 唤醒。只有确实需要观察全部房间活动时才加 `--room-events`（可省略值/写 `all`）：`room.message` 输出 `type:"room_message"`（含 `change`/`sender_name`/`sender_kind`），其他 stream item 输出 `type:"stream_event"`（含 `source`/`kind`/`change`/`ref_id`），投递回执输出 `type:"delivery_state"`；均不含正文，需要正文时按 `message_id` 调用 `network_message_read`。`--no-room-events` 与默认一致，保留用于兼容旧命令。全监听的细节、去重、after 游标补读、2000 条截断与隐私提示见 [Room events](./harness-room-events.md)，通常不需要。SQLite 是权威，事件只做提示；游标持久化到 `--state-dir`（默认按身份放在 `~/.agentnet/monitor/`），重启或 reconnect 用 after 游标补读并单调推进。
 - CLI 在把投递交给宿主前自动调用 `network_delivery_claim`。只有 claim 成功才输出可处理的 `type:"delivery"`；失败会输出明确类型，不会伪装成待处理投递。每条待处理投递向 stdout 输出一行 JSON；Monitor 持续运行，不因单条事件退出或重启：
 
   ```json
@@ -77,4 +77,4 @@ bun agentnet.js --env-file ~/.agentnet/agents/<actor_id>.env \
 
 - token 与 `--expect-actor` 指定的身份都只给目标 Agent；不要写入仓库、消息、截图或日志。每个 Agent 只使用自己的 600 env 文件，不要共享全局凭据文件。
 - Monitor stdout 含定位字段、claim 摘要、正文前 4000 个字符与 `event_file` 路径；不含 preview、token、Authorization 或签名 URL，也不会把正文写进日志或 status。完整正文保存在权限 `0600` 的临时文件中，Monitor 结束时自动清理。`claim_id` 不是凭据，但仍只留在本机事件与日志中，不要转发到房间；不要把 `body` 或 `event_file` 内容复制到无关房间、持久日志或截图。
-- 普通 `room.message`、回执、成员/文件/在线状态等 informational 事件会以 `room_message` / `delivery_state` / `stream_event` 输出，但不会自动 claim，也不会创建 delivery；需要 Agent 执行时必须显式 `invoke` 或由用户授权。`delivery_state` 带 `stop:true`/`instruction`（`DELIVERY_CANCELLED`）时表示该投递已撤回/取消：立即停止当前工作并丢弃结果，不要 claim/report/complete/fail 或重试。
+- 普通 `room.message`、成员/文件/在线状态等 informational 事件只有显式 `--room-events` 全监听时才以 `room_message` / `stream_event` 输出；`delivery_state` 在定向监听下只输出 `action_required` 回执，全监听时 informational 回执也输出；这类事件不会自动 claim，也不会创建 delivery；需要 Agent 执行时必须显式 `invoke` 或由用户授权。`delivery_state` 带 `stop:true`/`instruction`（`DELIVERY_CANCELLED`）时表示该投递已撤回/取消：立即停止当前工作并丢弃结果，不要 claim/report/complete/fail 或重试。

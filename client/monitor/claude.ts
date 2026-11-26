@@ -5,8 +5,8 @@
  * - stdout 每行一个事件 JSON；
  * - stderr 输出 READY、RECONNECTING、DEGRADED 与 ERROR；
  * - 自动 claim 成功后携带正文预览与 event_file；
- * - 默认（`all`）监听全部房间活动并输出所有 informational stream item；
- *   `--no-room-events` 可关闭；
+ * - 默认定向监听：只输出投递、取消/重试、提醒与 action_required；
+ *   `--room-events` 显式开启全部房间活动，`--no-room-events` 与默认一致；
  * - SIGINT/SIGTERM/SIGHUP 保留 seen/游标，清理事件文件后以 0 退出。
  */
 

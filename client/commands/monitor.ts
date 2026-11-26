@@ -82,7 +82,7 @@ export interface MonitorOptions {
   json?: boolean;
   /** 最长运行秒数；peri 默认 24h，0 表示不限制。 */
   maxRuntime?: string;
-  /** 房间/信息事件：默认 all，`--no-room-events` 关闭。 */
+  /** 房间/信息事件：默认关闭（定向监听）；`--room-events` 显式开启。 */
   roomEvents?: string | boolean;
   /** delivery 记忆参考包：默认开，`--no-memory-context` 关闭。 */
   memoryContext?: boolean;
@@ -408,13 +408,15 @@ function maxRuntimeMs(harness: string, raw: string | undefined): number {
 }
 
 /**
- * `--room-events [all]`：监听所有房间与 informational stream item，默认开启；
- * `--no-room-events` 关闭。不再支持房间白名单。
+ * `--room-events [all]`：显式开启所有房间与 informational stream item。
+ *
+ * 默认关闭（定向监听），只保留投递、取消/重试、提醒与 action_required；
+ * `--no-room-events` 与缺省一致，保留用于兼容旧命令。不再支持房间白名单。
  */
 export function parseRoomEvents(raw: string | boolean | undefined): RoomEventScope | false {
-  if (raw === false) return false;
-  if (raw === undefined || raw === true || raw === '' || raw === 'all') return 'all';
-  throw new CliError('--room-events 只接受 all（默认监听所有房间）');
+  if (raw === undefined || raw === false) return false;
+  if (raw === true || raw === '' || raw === 'all') return 'all';
+  throw new CliError('--room-events 只接受 all；显式加 --room-events 才监听房间活动');
 }
 
 export async function monitor(
@@ -520,11 +522,11 @@ export async function monitor(
           `dsh_version=${detected.dshVersion}\n`,
       );
     }
-    return runDshMonitor(runtimeContext, extra, { roomEvents: roomEvents !== false });
+    return runDshMonitor(runtimeContext, extra, { roomEvents: roomEvents === 'all' });
   }
   if (harness === 'codex') {
     return runCodexMonitor(runtimeContext, {
-      roomEvents: roomEvents !== false,
+      roomEvents: roomEvents === 'all',
       memoryContext: options.memoryContext !== false,
     });
   }

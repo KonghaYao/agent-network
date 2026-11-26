@@ -38,7 +38,7 @@ CLI 通过 SSE 长连接接收待办，不轮询；它自行核对待办、读�
 
 claim 失败不会伪装成任务：`DELIVERY_CONFLICT` 表示别人已领取，跳过；`DELIVERY_DEFERRED` 表示另有 claimed 投递阻挡领取；`DELIVERY_CLAIM_FAILED` 带错误码。排队中的重复事件不会重复插话；已成功领取的重复事件/快照不会重复 claim。`delivery.reminder` 只提醒，不 claim。
 
-订阅到达的非投递 item 会记录为 `STREAM_EVENT source=... kind=... attention=... room=... message=... delivery=... change=... state=... ref=...`，覆盖 `room.message`、成员/文件/在线状态、Task、回执与提醒；只含定位/变更字段，不含正文或 preview。`--no-room-events` 只关闭 informational 房间事件，`mention.reminder`、`delivery.reminder`、`action_required` 回执与真实投递仍会记录。收到 `DELIVERY_CANCELLED`（投递撤回/取消）时桥接器立即用 `turn/steer` 注入停止指令，该回合结束不 complete/fail，也不要重新 claim。
+默认定向记录投递、回执、提醒与 `action_required`；普通 `room.message`、`room.file`、`room.pins`、`contact` 等 informational 不记录为 `STREAM_EVENT`，也不 claim 或启动回合。只有显式 `--room-events` 才记录订阅到达的全部 item：`STREAM_EVENT source=... kind=... attention=... room=... message=... delivery=... change=... state=... ref=...`，覆盖 `room.message`、成员/文件/在线状态、Task、回执与提醒；只含定位/变更字段，不含正文或 preview。`mention.reminder`、`delivery.reminder`、`action_required` 回执与真实投递在默认定向监听下仍会记录；`--no-room-events` 与默认一致，保留用于兼容旧命令。关闭房间广播不影响 @Agent 形成的 delivery 唤醒；全监听细节见 [Room events](./harness-room-events.md)，通常不需要。收到 `DELIVERY_CANCELLED`（投递撤回/取消）时桥接器立即用 `turn/steer` 注入停止指令，该回合结束不 complete/fail，也不要重新 claim。
 
 已领取投递 3 分钟没有 `report`/`complete`/`fail` 时，CLI 会把 `delivery.reminder` 作为提醒交给当前会话（工作中用 `turn/steer`，空闲时启动一次提醒回合），日志写 `REMINDER_*`。收到后先 `network_inbox_list` 核对 claimed 投递，再 `network_delivery_report` 报告阶段进度；若此 attempt 正由桥接器管理，请在其专属回合给出最终答复，由桥接器收尾。重启后的遗留投递须先核对当前身份、attempt 与 claimed 状态，再按实际结果 complete/fail 或 retry。提醒不是新待办，不要重新 claim，也不要依赖它代替向用户回复。
 

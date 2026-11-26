@@ -2737,6 +2737,11 @@ async function main(): Promise<void> {
     skillDocText.slice(0, 400),
   );
   check(
+    '静态技能包含 Room events 可选指南链接',
+    skillDocText.includes('[Room events](./harness-room-events.md)'),
+    skillDocText.slice(0, 400),
+  );
+  check(
     '静态技能包含 Other 哨兵与无 monitor 接入标记',
     ['Other', '无 monitor', 'agentnet monitor --harness other', 'watch.log', '--max-wait', '360', '哨兵'].every(
       (marker) => skillDocText.includes(marker),
@@ -2857,6 +2862,15 @@ async function main(): Promise<void> {
   }
 
   // CLI bundle 由服务启动时构建到内存；这里不构建磁盘文件，直接验收路由。
+  const roomEventsGuide = await fetch(`${baseUrl()}/skills/harness-room-events.md`);
+  checkEqual('GET /skills/harness-room-events.md 返回 200（全房间监听指南）', roomEventsGuide.status, 200);
+  const roomEventsType = roomEventsGuide.headers.get('content-type') ?? '';
+  const roomEventsText = await roomEventsGuide.text();
+  check(
+    'harness-room-events.md 为 Markdown 且说明 --room-events',
+    roomEventsType.includes('text/markdown') && roomEventsText.includes('--room-events'),
+    { contentType: roomEventsType },
+  );
   const cliAsset = await fetch(`${baseUrl()}/skills/agentnet.js`);
   checkEqual('GET /skills/agentnet.js 返回 200', cliAsset.status, 200);
   const cliAssetType = cliAsset.headers.get('content-type') ?? '';

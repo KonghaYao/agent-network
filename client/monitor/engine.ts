@@ -11,11 +11,12 @@
  * - 同一时刻只保留一个 claim（由服务端约束），deferred 不写永久 seen；
  * - inbox 查询失败按指数退避重试，恢复后补领 pending；
  * - deferred 进入本地待领队列，按退避重试 claim，同一状态只提示一次；
- * - room events 默认开启：所有 informational stream item（房间消息、成员、
- *   文件、在线状态、Task、已读、好友、设备、资料、未知）都输出定位字段，
- *   不按 @、attention、发送者或房间类型过滤；delivery 回执走 delivery_state，
+ * - room events 默认关闭（定向监听）：只输出投递、回执、提醒与 action_required；
+ *   显式 `--room-events` 才输出所有 informational stream item（房间消息、成员、
+ *   文件、在线状态、Task、已读、好友、设备、资料、未知），不按 @、attention、
+ *   发送者或房间类型过滤；delivery 回执走 delivery_state，
  *   撤回/取消的 recipient 回执额外输出 stop/instruction，仍不进入 claim；按 message_id/event_id 精确去重；
- * - 房间游标与最后 stream seq 持久化到 stateDir，重启后按已存游标有界补读；
+ * - 全监听时房间游标与最后 stream seq 持久化到 stateDir，重启后按已存游标有界补读；
  *   reconnect 与 more/dropped 都触发所有房间的有界补读，2000 条截断后继续排队；
  *   成员代次变化触发 CURSOR_EXPIRED 时清游标、记录一次重置并重取基线；
  * - 正文只进 event_file 与 stdout 的预览，不写日志。
@@ -105,7 +106,7 @@ type RoomHistoryFetch =
   | { ok: true; data: JsonObject }
   | { ok: false; code: string };
 
-/** `--room-events`：开启后监听全部房间活动；缺省开启，`--no-room-events` 关闭。 */
+/** `--room-events`：显式开启后监听全部房间活动；缺省为定向监听（只输出需要动作的事件）。 */
 export type RoomEventScope = 'all';
 
 /** Peri 宿主 monitor 的单次上限；到期后 CLI 主动结束，避免静默失效。 */
@@ -170,7 +171,7 @@ export interface MonitorEngineOptions {
   expiringThresholdMs?: number;
   /** 到达 deadline 时通知宿主进程停止（通常传 AbortController.abort）。 */
   onDeadline?: () => void;
-  /** 输出 informational 房间/信息事件的开关；缺省开启，false 关闭。 */
+  /** 输出 informational 房间/信息事件的开关；缺省 false（定向监听）。 */
   roomEvents?: RoomEventScope | false;
   /**
    * delivery 记忆参考包粒度；缺省 off，由各 harness 入口显式开启。
@@ -368,7 +369,7 @@ export class MonitorEngine {
   private readonly maxRuntimeMs: number;
   private readonly expiringThresholdMs: number;
   private readonly onDeadline: (() => void) | undefined;
-  /** null 表示 `--no-room-events` 关闭。 */
+  /** null 表示定向监听（默认）；只有显式 `--room-events` 才输出全部房间活动。 */
   private readonly roomEventScope: RoomEventScope | null;
   /** delivery 记忆参考包粒度；off 时完全不调用工具。 */
   private readonly memoryMode: MemoryMode;
@@ -445,7 +446,7 @@ export class MonitorEngine {
     this.maxRuntimeMs = options.maxRuntimeMs ?? 0;
     this.expiringThresholdMs = options.expiringThresholdMs ?? EXPIRING_THRESHOLD_MS;
     this.onDeadline = options.onDeadline;
-    this.roomEventScope = options.roomEvents === false ? null : 'all';
+    this.roomEventScope = options.roomEvents === 'all' ? 'all' : null;
     this.memoryMode = options.memoryMode ?? 'off';
     this.attachmentsEnabled = options.attachments === true;
     this.verifiedActor = options.verifiedActor ?? '';
@@ -875,7 +876,7 @@ export class MonitorEngine {
     return true;
   }
 
-  /** informational stream item 默认全部输出；关闭时仍保留 action_required 与提醒。 */
+  /** 定向监听只保留 action_required 与提醒；全监听才输出其余 informational。 */
   private emitInformationalItem(item: JsonObject): void {
     if (this.roomEventScope === null && !visibleWithoutRoomEvents(item)) return;
     const source = asString(item.source) || 'unknown';

@@ -13,9 +13,9 @@
  * 时提示新消息并保留 pending，当前回合结束后依次领取处理；
  * deferred/conflict/claim_failed 分类记录；10 秒未结束的回合发送一次慢确认；
  * `delivery.reminder` 只提醒、不 claim；`delivery.cancelled` 是停止指令：
- * 同一 activeTurn 立即 turn/steer，回合结束不 complete/fail。所有 informational stream item
- * （房间消息、成员、文件、在线状态、Task、回执等）都会记录；
- * `--no-room-events` 只关闭 informational 房间事件，投递、回执与提醒仍记录。
+ * 同一 activeTurn 立即 turn/steer，回合结束不 complete/fail。默认定向监听：
+ * 只记录投递、回执、提醒与 action_required；显式 `--room-events` 才记录全部
+ * informational stream item（房间消息、成员、文件、在线状态、Task 等）。
  * 不执行任何 `.sh`，也不依赖 Python。
  */
 
@@ -115,7 +115,7 @@ interface CodexWatcherOptions {
   token: string;
   signal: AbortSignal;
   log?: (line: string) => void;
-  /** false 时只关闭 informational 房间事件；投递、回执与提醒仍记录。 */
+  /** true 时才记录全部 informational 房间事件；缺省只保留投递/回执/提醒。 */
   roomEvents?: boolean;
   /** delivery 记忆参考包；缺省开启，`--no-memory-context` 关闭。 */
   memoryContext?: boolean;
@@ -161,7 +161,7 @@ class CodexWatcher {
   constructor(options: CodexWatcherOptions) {
     this.signal = AbortSignal.any([options.signal, this.controller.signal]);
     this.log = options.log ?? writeStdout;
-    this.roomEvents = options.roomEvents !== false;
+    this.roomEvents = options.roomEvents === true;
     this.memoryContext = options.memoryContext !== false;
     this.attachmentConfig = options.attachments;
     this.verifiedActor = options.verifiedActor ?? '';

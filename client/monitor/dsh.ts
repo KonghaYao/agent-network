@@ -5,8 +5,8 @@
  * - `run` 前台运行，stdout 不写事件；start 把 run 重定向到 watch.log 后台运行；
  * - `start/stop/status/logs/wait` 只读写 WEBBOTS_HOME（默认 ~/.webbots）；
  * - 事件只写 wake.queue 的定位/变更字段，不读正文、不 claim、不写 token；
- * - 默认入队所有 stream item：不再区分直聊/群聊，也不按 source/发送者丢弃；
- *   `--no-room-events` 只关闭 informational 房间事件，保留投递、回执与提醒；
+ * - 默认定向入队：只保留投递、回执、提醒与 action_required；显式 `--room-events`
+ *   才入队全部 informational stream item（不再区分直聊/群聊，也不按 source/发送者丢弃）；
  * - `pending_count > 0` 时补 catchup，同一 pending/head 快照 30 秒内不重复；
  * - `CREDENTIAL_INVALID` 立即退出 3，`NOT_AGENT` 退出 4，`PROTOCOL` 退出 5。
  *
@@ -186,7 +186,7 @@ class DshWatcher {
   private readonly signal: AbortSignal;
   private readonly diagnostics: (line: string) => void;
   private readonly rpc: MonitorRpc;
-  /** false 时只保留 action_required；默认入队所有 stream item。 */
+  /** true 时入队全部 stream item；默认定向只保留投递/提醒/action_required。 */
   private readonly roomEvents: boolean;
 
   private status = initialStatus(process.pid);
@@ -217,7 +217,7 @@ class DshWatcher {
     this.token = options.token;
     this.signal = options.signal;
     this.diagnostics = options.diagnostics ?? writeStderr;
-    this.roomEvents = options.roomEvents !== false;
+    this.roomEvents = options.roomEvents === true;
     this.rpc = new MonitorRpc({
       endpoint: options.endpoint,
       token: options.token,
@@ -434,7 +434,7 @@ class DshWatcher {
     this.status.lastNotificationAt = nowIso();
 
     for (const item of asArray(envelope.items).map(asRecord)) {
-      // 默认全部入队；--no-room-events 只关闭 informational 房间事件，保留投递、回执与提醒。
+      // 默认定向入队；显式 --room-events 才保留全部 informational 房间事件。
       if (!this.roomEvents && !visibleWithoutRoomEvents(item)) continue;
       await this.emitWake(item);
     }
@@ -656,7 +656,7 @@ async function startDaemon(context: MonitorContext, roomEvents: boolean): Promis
         '--harness',
         'dsh',
         'run',
-        ...(roomEvents ? [] : ['--no-room-events']),
+        ...(roomEvents ? ['--room-events'] : []),
       ],
       env,
       stdin: 'ignore',
@@ -866,7 +866,7 @@ export async function runDshMonitor(
   const raw = [...scriptArgs];
   const command = raw[0] ?? 'run';
   const argument = raw[1];
-  const roomEvents = options.roomEvents !== false;
+  const roomEvents = options.roomEvents === true;
 
   switch (command) {
     case 'run':

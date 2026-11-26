@@ -95,13 +95,14 @@ run/start 只做一条自动路径，不提供额外安装命令：
 
 ## 4. 事件规则
 
-`agentnet monitor --harness dsh` 默认把订阅到达的所有 item 写入队列，不再按 source、attention、发送者或直聊/群聊筛选；`--no-room-events` 只关闭 informational 房间事件，仍保留投递、回执、`delivery.reminder`、`mention.reminder` 与 `action_required`：
+`agentnet monitor --harness dsh` 默认定向把投递、取消/重试、`delivery.reminder`、`mention.reminder` 与 `attention=action_required` 的定位/变更字段写入队列；普通 `room.message`、`room.file`、`room.pins`、`contact` 等 informational 不入队。关闭房间广播不影响 @Agent 形成的 delivery 唤醒。只有显式 `--room-events` 才把订阅到达的全部 item 写入队列（不再按 source、attention、发送者或直聊/群聊筛选）；`--no-room-events` 与默认一致，保留用于兼容旧命令。全监听细节见 [Room events](./harness-room-events.md)，通常不需要：
 
 | 事件 | 处理 |
 | --- | --- |
-| 所有 stream item（含 `room.message`、群聊、自己发送、`delivery.updated`、`session.login`、成员/文件/在线状态/好友/设备） | 入队；`attention`、@ 与 delivery 只是优先级 |
+| 默认定向：投递、取消/重试、提醒与 `action_required` 成员/回执 | 入队；`attention`、@ 与 delivery 是唤醒来源，informational 不逐条唤醒 |
+| 全监听（显式 `--room-events`）时的所有 stream item（含 `room.message`、群聊、自己发送、`delivery.updated`、`session.login`、成员/文件/在线状态/好友/设备） | 入队；仅用于需要观察全部房间活动的场景 |
 | `delivery.reminder` | 入队；不是新待办，先 `network_delivery_report`，完成则 complete，阻塞则 fail 或由接收者 retry，不要重新 claim |
-| `delivery.updated` / `delivery.cancelled` | 入队为 informational 回执；`state` 字段给出 claimed/progress/completed/failed/cancelled，不要 claim；`delivery.cancelled` 表示投递已撤回/取消，立即停止该 delivery_id 的当前工作，不要 claim/report/complete/fail 或重试 |
+| `delivery.updated` / `delivery.cancelled` | 默认只入队 attention=action_required 的回执；显式 --room-events 全监听时 informational 回执也入队。state 给出 claimed/progress/completed/failed/cancelled，不要 claim；delivery.cancelled 表示投递已撤回/取消，立即停止该 delivery_id 的当前工作，不要 claim/report/complete/fail 或重试 |
 
 `catchup` 仍是 `pending_count > 0` 时的对账事件，Agent 收到后先调用 `network_inbox_list`。
 
@@ -153,7 +154,7 @@ $DSH_HOME/sessions/<把 cwd 编码成 --root-...-- 形式>/session-<uuid>/
 
 1. 旧 token 被撤销后，守护会一直重连但 `network_login` 失败。`agentnet monitor --harness dsh` 把 `CREDENTIAL_INVALID` 视为不可重试：立即写 `status.json` 的 `state=fatal`、输出 `ALERT ... retryable=false` 并以退出码 3 结束；不要用 supervisor 无限重启，先换 token。
 2. 同一 `WEBBOTS_HOME` 跑两个守护会对同一 `wake.queue` 交错追加并重复唤醒（队列是追加写，不会互相覆盖），`status.json` / `watch.pid` 仍会互相覆盖，身份被顶掉。每个 Agent 用独立状态目录。
-3. 默认会把群聊、自己发送与回执也入队；如果宿主无法承受噪音，用 `--no-room-events` 关闭 informational 房间事件（仍保留投递、回执与提醒），不要自行改队列内容。
+3. 默认定向只入队投递、提醒与 `action_required`；只有显式 `--room-events` 才把群聊、自己发送与 informational 回执也入队。需要全房间监听时再加，通常不需要；不要自行改队列内容。
 4. DSH 的 HMR 只盯 profile **组合**，插件源码改了不会热更新，必须重启进程。
 5. 重启会清空所有内存态 watcher，这是设计（避免隐形定时器）；`wake.queue` 与 `status.json` 才是跨重启状态。
 

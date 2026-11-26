@@ -51,4 +51,4 @@ fi
 
 cd "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 exec bun client/cli.ts --env-file "$env_file" --expect-actor "$actor" \
-  monitor --harness claude --json --no-room-events
+  monitor --harness claude --json

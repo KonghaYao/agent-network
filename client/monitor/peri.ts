@@ -7,7 +7,8 @@
  * - 刻意不读正文、不写 event_file：Peri 常把 stdout 追加到 watch.log，
  *   正文不得因此持久化。宿主按 message_id 自行读取；
  * - 订阅、seen、退避、心跳与状态目录复用共享引擎，不执行旧脚本；
- * - 默认输出所有 informational stream item；`--no-room-events` 关闭。
+ * - 默认定向输出投递、提醒与 action_required；显式 `--room-events` 才输出全部
+ *   informational stream item，`--no-room-events` 与默认一致。
  */
 
 import { CliError, resolveConfig } from '../mcp';

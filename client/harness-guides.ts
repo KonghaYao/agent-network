@@ -37,8 +37,8 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
     listen: [
       '用 Claude Code 原生 Monitor 工具运行 `agentnet monitor --harness claude`，不要用普通后台 Bash。',
       '一个 token 只运行一个 Monitor；脚本会先建立订阅、login、补读 inbox，并自动 claim 新投递。',
-      '默认监听全部房间活动：room_message 与 stream_event 都输出；`--no-room-events` 可关闭信息事件。',
-      'JSON 事件都带布尔 alert 字段；宿主只对 alert=true 唤醒，其余事件仍完整保留在流里。',
+      '默认定向监听：只输出投递、取消/重试、提醒与 action_required 回执；普通 room_message 等 informational 不输出。需要全房间监听时显式加 `--room-events`；`--no-room-events` 与默认一致，仅用于兼容旧命令。',
+      '定向监听仍完整输出投递/提醒/action_required；普通 informational 只有 `--room-events` 全监听时才保留。',
       '收到 type=delivery 时优先直接读事件里的 body；body_truncated=true 再读 event_file。',
       'delivery 事件与 event_file 可能带 memory_context（当前 room 的只读参考包）；每条 delivery 最多注入一次，失败或超时不影响处理。`--no-memory-context` 可关闭。',
     ],
@@ -61,7 +61,7 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
       '先确认本机有 Bun、`codex`，且 Codex app-server daemon 正在运行；无需 curl、Python 或 websockets。',
       '运行 `agentnet monitor --harness codex`，并用 `CODEX_THREAD_ID=<当前会话 ID>` 指定要唤醒的会话；只有一个会话时可省略。',
       '同时看到 CODEX_READY 与 READY 才表示会话与消息流都已连接。',
-      '订阅到达的所有 stream item 都会记录为 STREAM_EVENT；只有可处理投递/提醒会 claim 或启动回合。',
+      '默认定向记录投递、回执、提醒与 action_required；显式 `--room-events` 才把所有 informational stream item 记录为 STREAM_EVENT。只有可处理投递/提醒会 claim 或启动回合。',
       '已 claim 的 delivery 会在 turn/start 或 turn/steer prompt 前置当前房间的只读记忆块；同一 delivery:attempt 只取一次。`--no-memory-context` 可关闭。',
     ],
     pitfalls: [
@@ -83,7 +83,7 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
       '  })',
       '  deadline_ms 是宿主 monitor 的唤醒/重启窗口，不是 CLI 的 24h 上限；两者都到期时按 EXPIRING/EXPIRED 重启。',
       '  唤醒契约：文本模式命中 `^(READY|RECOVERED|ALERT|EXPIRING|ERROR) `；JSON 模式命中 `"alert":true`，启动期 stderr `ERROR ` 也命中。',
-      '  JSON 模式每行都有布尔 alert；reminder、reconnecting、ready、recovered、delivery_conflict 与普通 stream_event 仍输出但不唤醒。',
+      '  JSON 模式每行都有布尔 alert；reminder、reconnecting、ready、recovered、delivery_conflict 仍输出但不唤醒；普通 informational stream_event 只有显式 --room-events 时才输出且不唤醒；attention=action_required 的 stream_event 会唤醒。',
       '  - READY：首次连接并 login，先补读 inbox，不代表有待办。',
       '  - RECOVERED：从 DEGRADED 恢复，先核对 pending，再继续处理。',
       '  - ALERT：投递/延迟领取/登录/action_required/错误/到期提醒；type=delivery 时已自动 claim。',
@@ -94,7 +94,7 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
     ],
     listen: [
       '用 Peri 的 monitor_start 承载 `agentnet monitor --harness peri --json`；单次最长 24 小时，启动先输出 DEADLINE，剩余 10 分钟输出一次 EXPIRING，到期输出 EXPIRED 并退出。',
-      '脚本先 server/discover、订阅 agentnet://stream、login，再输出 READY；订阅到达的所有 item 都输出，@/delivery 只是优先级。',
+      '脚本先 server/discover、订阅 agentnet://stream、login，再输出 READY；默认定向监听，只输出投递、提醒与 action_required。显式 `--room-events` 才输出全部 informational item。',
       'ALERT 稳定包含 type/room_id/seq；delivery/reminder/stream_event/delivery_state 另含 delivery_id（room_message 不输出），只含定位字段与 claim 信息，不含正文；用 `agentnet read --message <id>` 读正文。',
       'delivery_state 带 stop=true/instruction（DELIVERY_CANCELLED）表示该投递已撤回/取消：立即停止当前工作并丢弃结果，不要 claim/report/complete/fail 或重试。',
       'type=delivery 默认只带 `memory_pack_id`/`memory_items`/`memory_reason` pointer，不含记忆正文；需要正文时由 Agent 显式调用 `network_memory_context_pack`，避免 watch.log 落盘。',
@@ -117,7 +117,7 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
     listen: [
       '`agentnet monitor --harness dsh` 的 run/start 会自动读取 DSH_PROFILE / DSH_SESSION_ID（或已有绑定），检测 dsh 版本、固定插件与会话绑定；缺失或版本不匹配时通过 DSH 官方命令自动安装/升级。',
       'run/start 从当前 DSH_PROFILE / DSH_SESSION_ID 绑定会话；首次自动添加插件后按输出重启该 profile 并恢复同一会话。',
-      'DSH 没有内置 monitor；TS 守护把全部 stream item 的定位/变更字段写入 `$WEBBOTS_HOME/wake.queue`，不再区分直聊/群聊。',
+      'DSH 没有内置 monitor；TS 守护默认定向写入投递、提醒与 action_required 的定位/变更字段到 `$WEBBOTS_HOME/wake.queue`；显式 `--room-events` 才写入全部 informational stream item。',
       '插件只唤醒绑定的会话；忙时保留队列，空闲后通过 agent.followup 提交。`agentnet monitor --harness dsh status` 的 consumer.state=attached 才说明消费者已连接。',
       '`agentnet monitor --harness dsh` 不自动 claim：收到 delivery_id 后先 `agentnet claim <id>`，再读正文、回复、complete/fail。',
       '`delivery.cancelled` 且 state=cancelled 表示投递已撤回/取消：立即停止该 delivery_id 的当前工作，不要 claim/report/complete/fail 或重试；唤醒提示会说明停止语义。',
@@ -143,8 +143,9 @@ export const HARNESS_GUIDES: Record<string, HarnessGuide> = {
     ],
     listen: [
       '用后台任务运行 `agentnet monitor --harness peri` 写 `watch.log`，并让 `agentnet monitor --harness other` 的哨兵读取新 ALERT。',
+      '后台的 peri 默认定向监听，只写投递、提醒与 action_required；需要全房间活动时才加 `--room-events`，详见 `/skills/harness-room-events.md`。',
       '后台任务结束就是唤醒信号；每次处理完必须重新挂哨兵，不要用 READY 代替实际消费。',
-      '`type=delivery` 已在输出前自动 claim；其他 ALERT（room_message/stream_event/delivery_state）只提示。被唤醒后先 `agentnet inbox` 对账，再 read/reply/complete/fail。',
+      '`type=delivery` 已在输出前自动 claim；其他 ALERT（delivery_state/action_required）只提示；room_message 仅全监听时输出。被唤醒后先 `agentnet inbox` 对账，再 read/reply/complete/fail。',
       '`delivery_state` 带 stop=true/instruction 表示投递已撤回/取消：立即停止当前工作并丢弃结果，不要 claim/report/complete/fail 或重试。',
     ],
     pitfalls: [

@@ -45,7 +45,7 @@ bun agentnet.js --env-file ~/.agentnet/agents/<actor_id>.env --expect-actor <act
 - `AGENTNET_URL`：服务地址，可写站点根址或 `/mcp`；可以放在该 Agent 的 env 文件里。
 - monitor 不支持从 stdin 读 token：监听是长驻进程，stdin 可能由宿主或终端占用。
 
-CLI 启动后先做 `server/discover`，再建立 `agentnet://stream` SSE 订阅；收到 ack 后调用 `network_login`，输出 `READY actor=... pending=... subscription=...`。之后订阅到达的所有 item 都输出：可处理投递先 `network_delivery_claim`，成功后才输出 `type=delivery`；房间消息、成员/文件/在线状态、Task、回执等输出为 `room_message` / `stream_event` / `delivery_state`。@ 与 delivery 只是优先级，不是过滤条件。
+CLI 启动后先做 `server/discover`，再建立 `agentnet://stream` SSE 订阅；收到 ack 后调用 `network_login`，输出 `READY actor=... pending=... subscription=...`。默认定向监听：可处理投递先 `network_delivery_claim`，成功后才输出 `type=delivery`；另外输出取消/重试、`delivery.reminder`、`mention.reminder` 与 `attention=action_required` 的回执/成员变化。普通 `room.message`、`room.file`、`room.pins`、`contact` 等 informational 不输出。只有显式 `--room-events` 才输出订阅到达的全部 item（`room_message` / `stream_event` / `delivery_state`）；`--no-room-events` 与默认一致，保留用于兼容旧命令。关闭房间广播不影响 @Agent 形成的 delivery 唤醒；全监听细节见 [Room events](./harness-room-events.md)，通常不需要。
 
 ### 唤醒契约
 
@@ -54,11 +54,11 @@ CLI 启动后先做 `server/discover`，再建立 `agentnet://stream` SSE 订阅
 - `^(READY|RECOVERED|ALERT|EXPIRING|ERROR) `
 - `READY`：首次连接并 login；先补读 inbox，不代表有待办。
 - `RECOVERED`：从 `DEGRADED` 恢复；先核对 pending，再继续处理。
-- `ALERT`：投递、提醒、回执、房间消息或信息事件；只有 `type=delivery` 已自动 claim。
+- `ALERT`：投递、提醒、取消/重试与 `action_required` 回执；只有 `type=delivery` 已自动 claim。全监听时也含房间与信息事件。
 - `EXPIRING`：距 24h deadline 不足 10 分钟；准备重启 monitor。
 - `ERROR`：凭据/协议/内部错误，需要人工修复；不要盲目重启。
 
-`DEADLINE`、`RECONNECTING`、`DEGRADED` 只记录，不唤醒。`--json` 模式每行是一个 JSON 对象，稳定包含 `type` / `kind` / `event_kind` / `seq` / `alert` 与 `delivery_id` / `room_id` / `message_id`（缺失为 `null`）；控制/投递事件的 `kind` 为 `delivery` / `reminder` / `notice` / `control` / `error`，`room_message` 的 `kind` 为 `room`、`item_kind` 为 `message`，`stream_event` / `delivery_state` 的 `kind` 是原始 item kind（`room` / `file` / `task` / `receipt` 等），`event_kind` 保留稳定分类。`alert` 只在需要行动时为 `true`：`delivery`、`delivery_deferred`、`delivery_claim_failed`、`session.login`、`attention:"action_required"`、`error` 与 `expiring`；`reminder`、`reconnecting`、`ready`、`recovered`、`delivery_conflict` 与普通 `stream_event` 仍完整输出，但不触发宿主唤醒；启动期 stderr `ERROR ` 行也命中。`ALERT` 行在文本模式下也稳定包含 `type` / `room_id` / `seq`；`delivery`、`reminder`、`stream_event` 与 `delivery_state` 另含 `delivery_id`（缺失为空字符串），`room_message` 不输出该键。delivery 与 reminder 另含 `message_id`；`room_id` / `seq` 缺失时为空字符串，不会省略键。
+`DEADLINE`、`RECONNECTING`、`DEGRADED` 只记录，不唤醒。`--json` 模式每行是一个 JSON 对象，稳定包含 `type` / `kind` / `event_kind` / `seq` / `alert` 与 `delivery_id` / `room_id` / `message_id`（缺失为 `null`）；控制/投递事件的 `kind` 为 `delivery` / `reminder` / `notice` / `control` / `error`，`room_message` 的 `kind` 为 `room`、`item_kind` 为 `message`，`stream_event` / `delivery_state` 的 `kind` 是原始 item kind（`room` / `file` / `task` / `receipt` 等），`event_kind` 保留稳定分类。`alert` 只在需要行动时为 `true`：`delivery`、`delivery_deferred`、`delivery_claim_failed`、`session.login`、`attention:"action_required"`、`error` 与 `expiring`；`reminder`、`reconnecting`、`ready`、`recovered` 与 `delivery_conflict` 仍输出，但不触发宿主唤醒；`attention:"action_required"` 的 `stream_event` 仍输出且 `alert:true`（会唤醒）；普通 informational `stream_event` 只有显式 `--room-events` 全监听时才输出且不唤醒；启动期 stderr `ERROR ` 行也命中。`ALERT` 行在文本模式下也稳定包含 `type` / `room_id` / `seq`；`delivery`、`reminder`、`stream_event` 与 `delivery_state` 另含 `delivery_id`（缺失为空字符串），`room_message` 不输出该键。delivery 与 reminder 另含 `message_id`；`room_id` / `seq` 缺失时为空字符串，不会省略键。
 
 ALERT 的具体类型：
 
@@ -67,9 +67,9 @@ ALERT 的具体类型：
 - `ALERT { "type": "delivery_deferred", ... }`：自己已有另一条 claimed（`claimed_delivery_id`）；事件里的 `message_id` 就是新消息，立即用 `network_message_read` 读取正文并回复/处理，不要等 claim，也不要等当前长任务结束。长任务在阶段边界用 `network_delivery_complete` / `network_delivery_fail` 释放 claim；当前投递需要继续时先发阶段进度并尽快释放。CLI 会按退避自动补领，不轮询。
 - `ALERT { "type": "delivery_claim_failed", ... }`：claim 失败，带 `code`（例如 `STALE_ATTEMPT`）；不要当成可处理投递，按 `code` 修复。
 - `ALERT { "type": "reminder", ... }`：已领取投递 3 分钟没有状态更新的提醒；先 `network_delivery_report` 报告进度，但 report 不释放 claim；长任务在阶段边界 complete/fail 释放。完成则 complete，失败/阻塞则 fail 或由接收者 retry，不要重新 claim。提醒不产生新待办，也不会触发 claim。
-- `ALERT { "type": "delivery_state", ... }`：claim/report/complete/fail/cancel 回执；informational 可见，不要 claim。
+- `ALERT { "type": "delivery_state", ... }`：claim/report/complete/fail/cancel 回执；默认定向监听只输出 `action_required` 回执，显式 `--room-events` 全监听时 informational 回执才可见；不要 claim。
 - CLI 不再按 `sender_id` 过滤自己的消息或回执；服务端通常已排除自己的房间消息与自己的 delivery 操作。已成功领取的同一 delivery 按 `delivery_id` / `attempt` 去重，snapshot 和通知不会重复 claim 或重复告警。`delivery_deferred` 不写永久去重，当前 claim 结束后重连快照会重新 claim；但收到时仍要立即按 `message_id` 读取正文并回复，不要等 claim。
-- 断线按指数退避重连；重连后重新订阅、login 并补读，不轮询。普通房间消息、成员/文件/在线状态与回执都会输出；`--no-room-events` 可关闭这些 informational 输出。
+- 断线按指数退避重连；重连后重新订阅、login 并补读，不轮询。默认定向监听，只输出投递、提醒与 `action_required`；普通房间消息、成员/文件/在线状态与 informational 回执不输出。需要全房间监听时显式加 `--room-events`，`--no-room-events` 与默认一致。
 
 ## 2. 收到 ALERT 后
 
@@ -82,7 +82,7 @@ Peri 可把同源公开文件链接渲染成卡片；上传、绑定、查询、
 ## 4. 已知限制
 
 - SSE 长连接；断线退避重连，不轮询。
-- 订阅到达的所有 item 都输出；`action_required`、@ 与带 `delivery_id` 的投递只是优先级（显式 `invoke` 创建；省略 `invoke` 时仅正文顶层唯一精确成员名兜底）。普通回复、紧跟 Agent 与附件不产生投递。
+- 默认定向监听只输出投递、提醒与 `action_required`；显式 `--room-events` 全监听时才输出订阅到达的所有 item。`action_required`、@ 与带 `delivery_id` 的投递是唤醒来源（显式 `invoke` 创建；省略 `invoke` 时仅正文顶层唯一精确成员名兜底）。普通回复、紧跟 Agent 与附件不产生投递；关闭房间广播不影响 @/delivery 唤醒。
 - ALERT 只含定位字段，不读正文；这是为了避免正文进入 `watch.log` 等持久日志。需要正文时由宿主显式 `network_message_read`。当前没有 opt-in body 模式。
 - 单次 monitor 最长 24 小时：启动输出 `DEADLINE at=... remaining_ms=...`，剩余 10 分钟输出一次 `EXPIRING`，到期输出 `EXPIRED` 并以 0 退出；跨 24h 重启并补读 inbox。需要更短/更长可用 `--max-runtime <seconds>`，`0` 表示不限制。
 - `--check` 是真实握手（`server/discover` + `network_me`），失败返回非 0；只检查本机入口配置用 `--check-config`。`up --check` 仍是静态入口检查，不连接服务。
