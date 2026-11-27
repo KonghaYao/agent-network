@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import { semanticColor } from './fixtures/semantic-colors';
-import { expectNoHorizontalOverflow, expectTaskAvatarsContained, LONG_TASK_URL } from './fixtures/task-layout';
+import { expectNoHorizontalOverflow } from './fixtures/components';
 
 async function baseUrl(): Promise<string> {
   if (process.env.E2E_BASE_URL) return process.env.E2E_BASE_URL;
@@ -441,13 +441,11 @@ test.describe('SPA Chat', () => {
     }, tokenA);
   });
 
-  test('长 URL Task 消息在 390/1280 明暗主题中换行且摘要可点击', async ({ page }) => {
+  test('长 URL 消息在 390/1280 明暗主题中换行', async ({ page }) => {
+    const longUrl = `https://github.com/LioRae/lenso-ui/blob/main/${'long-segment-'.repeat(36)}?description=${'正文'.repeat(80)}`;
     const sent = await callTool<{ message: { message_id: string } }>(base, tokenB, 'network_message_send', {
-      request_id: requestId('task_long'), client_message_id: requestId('task_long'),
-      room_id: roomId, body: LONG_TASK_URL, invoke: [],
-    });
-    await callTool(base, tokenB, 'network_task_mark', {
-      request_id: requestId('task_mark'), room_id: roomId, message_id: sent.message.message_id,
+      request_id: requestId('long_url'), client_message_id: requestId('long_url'),
+      room_id: roomId, body: longUrl, invoke: [],
     });
     for (const width of [390, 1280]) {
       for (const colorScheme of ['light', 'dark'] as const) {
@@ -457,13 +455,6 @@ test.describe('SPA Chat', () => {
         const message = page.locator(`.msg[data-message-id="${sent.message.message_id}"]`);
         await expect(message.locator('.bubble')).toContainText('github.com');
         await expectNoHorizontalOverflow(message.locator('.bubble'));
-        const bar = message.locator('.task-bar');
-        await expectNoHorizontalOverflow(bar);
-        await expectTaskAvatarsContained(bar);
-        expect((await bar.boundingBox())!.height).toBeGreaterThanOrEqual(44);
-        await bar.click();
-        await expectNoHorizontalOverflow(page.locator('#task-trace-drawer'));
-        await page.locator('#task-trace-close').click();
         expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
       }
     }
@@ -927,10 +918,6 @@ test.describe('SPA Chat', () => {
       return typeof args?.body === 'string' ? args.body : '';
     });
     expect(body).toMatch(/\/f\//);
-    const messageId = await fileCard.evaluate((node) => node.closest('[data-message-id]')?.getAttribute('data-message-id'));
-    await callTool(base, tokenA, 'network_task_mark', {
-      request_id: requestId('file_task'), room_id: roomId, message_id: messageId,
-    });
     // 文件卡容器是 .msg-files（消息卡没有 Lenso surface），且只承载本消息的唯一附件。
     const fileSurface = fileCard.locator('..');
     await expect(fileSurface).toHaveClass(/(?:^|\s)msg-files(?:\s|$)/u);

@@ -11,6 +11,10 @@ export const FOCUS_STYLE = `
     --focus-tracking: #52669d;
     --focus-done: var(--wx-green);
   }
+  [data-theme='dark'] {
+    --focus-needs: #e0a45c;
+    --focus-tracking: #93a8dc;
+  }
 
   /* 侧栏入口：沿用账号文字入口的高度与换行，不新增说明段落。 */
   .focus-entry { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; padding: 0 4px 2px; }

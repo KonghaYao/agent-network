@@ -737,7 +737,6 @@ export interface CheckboxAdapterProps {
   value?: string;
   children?: ReactNode;
   'aria-label'?: string;
-  'data-task-only'?: boolean;
 }
 
 /** 复选框：根节点保留受控 `checked`；未就绪时回退原生 input + label。 */

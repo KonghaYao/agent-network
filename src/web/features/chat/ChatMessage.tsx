@@ -37,7 +37,6 @@ import { ActorAvatar } from '../avatar/ActorAvatar';
 import { HumanBody } from './MessageBody';
 import { MarkdownIsland } from './MarkdownIsland';
 import { BodyPendingContext } from './body-pending';
-import { TaskSummaryBar } from '../tasks/TaskSummaryBar';
 import { scrollToMessage } from './scroll-to-message';
 
 /**
@@ -76,8 +75,6 @@ interface ChatMessageProps {
   searchFlash?: boolean;
   onQuote: (item: HistoryMessage) => void;
   onStatus: (message: string) => void;
-  onToggleTask: (item: HistoryMessage) => void;
-  onOpenTask: (rootId: string, focusMessageId: string | null) => void;
   onOpenFile: (item: RoomFileItem) => void;
   onRecall: (item: HistoryMessage) => void;
   /** 把自己撤回、且本机有原文副本的消息放回输入框。 */
@@ -269,7 +266,6 @@ function useMessageActions(
   identityKind: 'human' | 'agent',
   onQuote: (item: HistoryMessage) => void,
   onStatus: (message: string) => void,
-  onToggleTask: (item: HistoryMessage) => void,
   onRecall: (item: HistoryMessage) => void,
   onSetPinned: (item: HistoryMessage, pinned: boolean) => void,
   pinnedMessageIds: ReadonlySet<string>,
@@ -297,16 +293,6 @@ function useMessageActions(
   const actions: MessageAction[] = [{ id: 'message-action-copy', label: '复制', run: copy }];
   if (!room.read_only) {
     actions.push({ id: 'message-action-quote', label: '引用', run: () => onQuote(item) });
-  }
-  const canSend = !room.read_only && room.capabilities?.send_message !== false;
-  if (canSend) {
-    const marked = item.task_root_id === item.message_id;
-    actions.push({
-      id: 'message-action-task',
-      label: marked ? '取消 Task' : '标记为 Task',
-      disabled: writeBlocked,
-      run: () => onToggleTask(item),
-    });
   }
   actions.push({
     id: 'message-action-forward',
@@ -381,7 +367,6 @@ function MessageActions({
   identityKind,
   onQuote,
   onStatus,
-  onToggleTask,
   onRecall,
   onSetPinned,
   pinnedMessageIds,
@@ -395,7 +380,6 @@ function MessageActions({
   identityKind: 'human' | 'agent';
   onQuote: (item: HistoryMessage) => void;
   onStatus: (message: string) => void;
-  onToggleTask: (item: HistoryMessage) => void;
   onRecall: (item: HistoryMessage) => void;
   onSetPinned: (item: HistoryMessage, pinned: boolean) => void;
   pinnedMessageIds: ReadonlySet<string>;
@@ -410,7 +394,6 @@ function MessageActions({
     identityKind,
     onQuote,
     onStatus,
-    onToggleTask,
     onRecall,
     onSetPinned,
     pinnedMessageIds,
@@ -446,7 +429,6 @@ function MessageContextMenu({
   identityKind,
   onQuote,
   onStatus,
-  onToggleTask,
   onRecall,
   onSetPinned,
   pinnedMessageIds,
@@ -461,7 +443,6 @@ function MessageContextMenu({
   identityKind: 'human' | 'agent';
   onQuote: (item: HistoryMessage) => void;
   onStatus: (message: string) => void;
-  onToggleTask: (item: HistoryMessage) => void;
   onRecall: (item: HistoryMessage) => void;
   onSetPinned: (item: HistoryMessage, pinned: boolean) => void;
   pinnedMessageIds: ReadonlySet<string>;
@@ -477,7 +458,6 @@ function MessageContextMenu({
     identityKind,
     onQuote,
     onStatus,
-    onToggleTask,
     onRecall,
     onSetPinned,
     pinnedMessageIds,
@@ -507,8 +487,6 @@ export const ChatMessage = memo(function ChatMessage({
   searchFlash = false,
   onQuote,
   onStatus,
-  onToggleTask,
-  onOpenTask,
   onOpenFile,
   onRecall,
   onReedit,
@@ -675,7 +653,6 @@ export const ChatMessage = memo(function ChatMessage({
         identityKind={identityKind}
         onQuote={onQuote}
         onStatus={onStatus}
-        onToggleTask={onToggleTask}
         onRecall={onRecall}
         onSetPinned={onSetPinned}
         pinnedMessageIds={pinnedMessageIds}
@@ -685,7 +662,6 @@ export const ChatMessage = memo(function ChatMessage({
       >
         <div
           className={`msg${mine ? ' mine has-receipt' : ''}${searchActive ? ' search-active' : ''}${searchFlash ? ' search-flash' : ''}`}
-          data-task-message={item.task_root_id ? 'true' : undefined}
           data-message-id={item.message_id}
           data-search-active={searchActive ? 'true' : undefined}
           data-sender-kind={agent ? 'agent' : 'human'}
@@ -717,12 +693,6 @@ export const ChatMessage = memo(function ChatMessage({
                 <HumanBody text={shown} mentions={mentions} />
               )}
             </Tooltip>
-            <TaskSummaryBar
-              item={item}
-              roomId={room.room_id}
-              headSeq={room.head_seq}
-              onOpen={onOpenTask}
-            />
             {cards.length > 0 ? (
               <div className="msg-files">
                 <Suspense fallback={<MessageFileCardFallback />}>
@@ -783,7 +753,6 @@ export const ChatMessage = memo(function ChatMessage({
                 identityKind={identityKind}
                 onQuote={onQuote}
                 onStatus={onStatus}
-                onToggleTask={onToggleTask}
                 onRecall={onRecall}
                 onSetPinned={onSetPinned}
                 pinnedMessageIds={pinnedMessageIds}

@@ -268,8 +268,7 @@ export function FocusBoard() {
 
   const counts = binding?.counts;
   const needsCount = counts?.needs_me ?? 0;
-  const currentCount =
-    binding !== undefined ? counts!.needs_me + counts!.tracking + counts!.done : undefined;
+  const currentCount = counts ? counts.needs_me + counts.tracking + counts.done : undefined;
   const archivedCount = counts?.archived;
   const currentItems = currentList.data?.items ?? [];
 

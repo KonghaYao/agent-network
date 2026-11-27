@@ -71,25 +71,6 @@ export interface ComposerReply {
   mention: MentionSelection | null;
 }
 
-/**
- * 外部注入的草稿（例如从 Task dock 引用并询问进度）。
- *
- * 同一个对象只处理一次；空草稿直接填入，已有草稿保留并在末尾追加一行，
- * 不覆盖用户正在写的内容。`selections` 与正文中的 `@名字` 一起登记，
- * 让群聊发送计划显式 invoke/提醒对应成员。
- */
-export interface ComposerDraftRequest {
-  text: string;
-  selections: MentionSelection[];
-}
-
-/** 非空草稿追加；已以同一段结尾时不重复追加。 */
-export function mergeComposerDraft(current: string, request: string): string {
-  if (!current.trim()) return request;
-  if (current.replace(/\s+$/u, '').endsWith(request)) return current;
-  return `${current.replace(/\s+$/u, '')}\n${request}`;
-}
-
 /** 撤回消息的原文恢复请求；actorId 防止切号后把旧身份正文带进新输入框。 */
 export interface ComposerRestoreDraft {
   actorId: string;
@@ -103,9 +84,6 @@ interface ComposerProps {
   identity: WebIdentity;
   token: string;
   reply: ComposerReply | null;
-  draftRequest: ComposerDraftRequest | null;
-  /** 草稿已消费；页面清空请求，避免 Composer 重挂载时再次注入。 */
-  onDraftApplied: () => void;
   /** 撤回后重新编辑：填入原文但不发送。 */
   restoreDraft: ComposerRestoreDraft | null;
   /** 恢复请求已处理；applied=false 表示用户取消或身份不匹配。 */
@@ -153,8 +131,6 @@ export function Composer({
   identity,
   token,
   reply,
-  draftRequest,
-  onDraftApplied,
   restoreDraft,
   onRestoreApplied,
   sending,
@@ -187,7 +163,6 @@ export function Composer({
   const pendingCaretRef = useRef<number | null>(null);
   const autoCaretRef = useRef(false);
   const handledReplyRef = useRef<ComposerReply | null>(null);
-  const handledDraftRef = useRef<ComposerDraftRequest | null>(null);
   const handledRestoreRef = useRef<ComposerRestoreDraft | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composingRef = useRef(false);
@@ -309,32 +284,6 @@ export function Composer({
     autoCaretRef.current = true;
     setText(next);
   }, [identity.actor_id, identity.kind, reply, room.kind]);
-
-  /*
-   * 外部草稿请求（Task dock 的「询问进度」）：同一对象只处理一次。
-   * 既有草稿不丢弃，追加一行；空草稿直接填入。光标落到末尾，但不发送。
-   */
-  useEffect(() => {
-    if (!draftRequest || handledDraftRef.current === draftRequest) return;
-    handledDraftRef.current = draftRequest;
-    if (draftRequest.selections.length > 0) {
-      setSelections((previous) =>
-        draftRequest.selections.reduce(upsertSelection, previous),
-      );
-    }
-    const next = mergeComposerDraft(textRef.current, draftRequest.text);
-    if (next === textRef.current) {
-      const element = textareaRef.current;
-      element?.focus();
-      const end = element?.value.length ?? 0;
-      element?.setSelectionRange(end, end);
-      onDraftApplied();
-      return;
-    }
-    autoCaretRef.current = true;
-    setText(next);
-    onDraftApplied();
-  }, [draftRequest, onDraftApplied]);
 
   /*
    * 撤回后重新编辑：把本机留存的原文放回输入框，不自动发送。

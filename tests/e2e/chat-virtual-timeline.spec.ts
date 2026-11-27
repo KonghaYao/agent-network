@@ -1003,7 +1003,7 @@ function richBody(index: number, imageUrl: string, documentUrl: string): string 
     return `Peri 维护截图 ${index}\n\n[Peri 截图.png](${imageUrl})`;
   }
   if (index % 11 === 0) {
-    return `Peri 维护长清单 ${index}\n\n${'- 核对 Markdown、图片、文件卡与 Task 的高度变化。\n'.repeat(18)}`;
+    return `Peri 维护长清单 ${index}\n\n${'- 核对 Markdown、图片与文件卡的高度变化。\n'.repeat(18)}`;
   }
   if (index % 13 === 0) {
     return `Peri 维护文档 ${index}\n\n[维护记录.md](${documentUrl})`;
@@ -1012,8 +1012,8 @@ function richBody(index: number, imageUrl: string, documentUrl: string): string 
 }
 
 /**
- * 滚动条场景的 120 条富 Markdown：表格、代码与长段落，不加图片/文件卡与
- * Task。复现单次拖到底后 Virtuoso 继续测量/footer 的 46–287px 残留；同时
+ * 滚动条场景的 120 条富 Markdown：表格、代码与长段落，不加图片/文件卡。
+ * 复现单次拖到底后 Virtuoso 继续测量/footer 的 46–287px 残留；同时
  * 避免给同一 beforeAll 的其他用例额外引入图片/文件卡加载时序。
  */
 async function seedScrollTimeline(
@@ -1078,15 +1078,7 @@ async function seedRichTimeline(
             invoke: [],
             body: richBody(index, imageUrl, documentUrl),
           },
-        ).then(async (sent) => {
-          if (index % 29 === 0) {
-            await callTool(base, token, 'network_task_mark', {
-              request_id: requestId('virt_rich_task'),
-              room_id: roomId,
-              message_id: sent.message.message_id,
-            });
-          }
-        });
+        );
       }),
     );
   }
@@ -1422,8 +1414,8 @@ test.describe('virtual chat timeline', () => {
 });
 
 /**
- * 贴底稳定性：真实「Peri 维护」会话包含大量 Agent 长 Markdown、图片、文件卡
- * 与 Task。旧实现在第一帧 atBottom 就 reveal，且只用 rAF 校正，入口阶段
+ * 贴底稳定性：真实「Peri 维护」会话包含大量 Agent 长 Markdown、图片与
+ * 文件卡。旧实现在第一帧 atBottom 就 reveal，且只用 rAF 校正，入口阶段
  * 可复现 197px 回退（基线 5/5）；到达底部可复现 56/76px 的可见回退。
  * 这里固化入口、到达、静止与追加时的位置不变量，不依赖帧率。
  */
@@ -1616,7 +1608,7 @@ test.describe('virtual timeline bottom stability', () => {
     });
   }
 
-  // 富内容入口：240 条混排长 Markdown、图片文件卡、`.md` 文件卡与 Task。
+  // 富内容入口：240 条混排长 Markdown、图片文件卡与 `.md` 文件卡。
   // 文件卡是 lazy chunk，元数据 `network_room_file_get` 决定缩略图与
   // “类型 · 大小 · 时间”行；若在 reveal 后才返回，卡片会从 244px 长到
   // 420px（独立夹具曾出现一帧 149px 可见 gap）。这里把元数据延迟 400ms，
@@ -1857,7 +1849,7 @@ test.describe('virtual timeline bottom stability', () => {
     await openRoom(page, roomId);
     await loadOlderUntil(page, LOADED_TARGET);
     await scrollToBottom(page);
-    // 等 Markdown 岛、图片、文件卡与 Task 摘要完成首轮挂载/测量。
+    // 等 Markdown 岛、图片与文件卡完成首轮挂载/测量。
     await page.waitForTimeout(2_000);
 
     await startBottomProbe(page);

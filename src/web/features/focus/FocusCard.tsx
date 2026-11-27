@@ -26,6 +26,9 @@ export function FocusCard({
   onArchive: () => void;
 }) {
   const updated = focusTimeLabel(item.updated_at);
+  const updatedAt = Number(item.updated_at);
+  const updatedIso =
+    Number.isFinite(updatedAt) && updatedAt > 0 ? new Date(updatedAt).toISOString() : undefined;
   const due = item.due_text ?? focusTimeLabel(item.due_at);
   const jumpable = item.source_count > 0 && !item.restricted;
 
@@ -87,7 +90,7 @@ export function FocusCard({
         ) : null}
         <span className="focus-card-meta">
           <span>{item.source_count} 条来源</span>
-          {updated ? <time dateTime={new Date(Number(item.updated_at)).toISOString()}>{updated}</time> : null}
+          {updated ? <time dateTime={updatedIso}>{updated}</time> : null}
         </span>
       </button>
       <footer className="focus-card-foot">

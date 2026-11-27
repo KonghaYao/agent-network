@@ -377,10 +377,9 @@ async function waitForChatIdle(page: Page): Promise<void> {
   }));
 }
 
-/** 等置顶区、Task 摘要与文件卡元数据都落位，避免把晚到的布局变化算成右键闪烁。 */
+/** 等置顶区与文件卡元数据都落位，避免把晚到的布局变化算成右键闪烁。 */
 async function waitForChatStable(page: Page): Promise<void> {
   await expect(page.locator('#pinned-messages')).toBeVisible({ timeout: 5000 }).catch(() => undefined);
-  await expect(page.locator('[data-task-surface="summary"]').first()).toBeVisible({ timeout: 5000 }).catch(() => undefined);
   await expect(page.locator('.msg-file[data-loading="1"]')).toHaveCount(0, { timeout: 2000 }).catch(() => undefined);
   await waitForChatIdle(page);
 }
@@ -396,7 +395,6 @@ const TARGETS = [
   '消息气泡',
   '消息头像',
   '文件卡',
-  '任务卡',
   '群成员头像',
 ] as const;
 type TargetName = (typeof TARGETS)[number];
@@ -486,17 +484,10 @@ test.describe('右键菜单逐帧像素回归', () => {
     }
     fileSent = true;
 
-    // 任务卡与置顶区需要真实数据；群主操作，失败会直接影响对应用例。
+    // 置顶区需要真实数据；群主操作，失败会直接影响对应用例。
     const history = await callTool<{
       items: { message_id: string; preview: string }[];
     }>(base, tokenA, 'network_history_list', { room_id: groupId, limit: 50 });
-    const taskMessage = history.items.find((item) => item.preview.includes('右键闪烁探针消息 3'));
-    if (!taskMessage) throw new Error('没有找到用于标记 Task 的消息');
-    await callTool(base, tokenA, 'network_task_mark', {
-      request_id: requestId('e2e_flash_task'),
-      room_id: groupId,
-      message_id: taskMessage.message_id,
-    });
     const pinnedMessage = history.items.find((item) => item.preview.includes('右键闪烁探针消息 5'));
     if (!pinnedMessage) throw new Error('没有找到用于置顶的消息');
     await callTool(base, tokenA, 'network_room_message_pin', {
@@ -544,12 +535,6 @@ test.describe('右键菜单逐帧像素回归', () => {
         await gotoChat(page, base, groupId);
         expect(fileSent).toBe(true);
         return { target: page.locator('.msg-file').last(), menu: '#message-context-menu' };
-      }
-      case '任务卡': {
-        await gotoChat(page, base, groupId);
-        const summary = page.locator('[data-task-surface="summary"]').first();
-        await expect(summary).toBeVisible();
-        return { target: summary, menu: '#message-context-menu' };
       }
       case '群成员头像': {
         await gotoChat(page, base, groupId);
@@ -620,11 +605,10 @@ test.describe('右键菜单逐帧像素回归', () => {
     }));
   }
 
-  /** 等置顶区、Task 摘要与文件卡元数据都落位，避免把晚到的布局变化算成右键闪烁。 */
+  /** 等置顶区与文件卡元数据都落位，避免把晚到的布局变化算成右键闪烁。 */
   async function waitForChatStable(page: Page): Promise<void> {
     await expect(page.locator('#pinned-messages')).toBeVisible({ timeout: 5000 }).catch(() => undefined);
-    await expect(page.locator('[data-task-surface="summary"]').first()).toBeVisible({ timeout: 5000 }).catch(() => undefined);
-    await expect(page.locator('.msg-file[data-loading="1"]')).toHaveCount(0, { timeout: 2000 }).catch(() => undefined);
+      await expect(page.locator('.msg-file[data-loading="1"]')).toHaveCount(0, { timeout: 2000 }).catch(() => undefined);
     await waitForChatIdle(page);
   }
 
@@ -738,16 +722,6 @@ test.describe('右键菜单逐帧像素回归', () => {
         target: () => page.locator('#files-pane .file-row').first(),
       },
       { name: '置顶区', target: () => page.locator('#pinned-messages') },
-      {
-        name: 'Task dock 行',
-        setup: async () => {
-          if ((await page.locator('#task-dock-toggle').getAttribute('aria-expanded')) !== 'true') {
-            await page.locator('#task-dock-toggle').click();
-          }
-          await expect(page.locator('#task-dock-panel')).toBeVisible();
-        },
-        target: () => page.locator('.task-dock-item').first(),
-      },
       {
         name: '搜索弹窗结果',
         setup: async () => {

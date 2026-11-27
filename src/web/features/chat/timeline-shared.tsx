@@ -55,8 +55,6 @@ export interface TimelineProps {
   onQuote: (item: HistoryMessage) => void;
   onStatus: (message: string) => void;
   onMarkRead: (throughSeq: string) => void;
-  onToggleTask: (item: HistoryMessage) => void;
-  onOpenTask: (rootId: string, focusMessageId: string | null) => void;
   onOpenFile: (item: RoomFileItem) => void;
   onRecall: (item: HistoryMessage) => void;
   onReedit: (item: HistoryMessage, body: string) => void;

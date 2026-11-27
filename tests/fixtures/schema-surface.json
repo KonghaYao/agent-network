@@ -48,14 +48,15 @@
     "0049_message_global_order_index.sql",
     "0050_actor_avatar.sql",
     "0051_group_message_moderation.sql",
-    "0052_focus_kanban.sql"
+    "0052_focus_kanban.sql",
+    "0053_drop_message_tasks.sql"
   ],
-  "migrationsDigest": "74652d8d2de1c02f03415aefcf7598ce351b04c6c8be0f168dad3fb95a7a621b",
+  "migrationsDigest": "4fce2f62be9450edc3dae41ba81c297fc25aff78c031e96a613ad9678cb3839a",
   "counts": {
-    "tables": 134,
-    "guardTables": 53,
+    "tables": 132,
+    "guardTables": 51,
     "messageSearchTables": 5,
-    "indexes": 245,
+    "indexes": 244,
     "triggers": 7
   },
   "tables": {
@@ -1622,32 +1623,6 @@
       ],
       "sqlDigest": "345af4484680ebec638abce0e3793867d9edad023acc3c5d0d28d54eba2db8c2"
     },
-    "guard_task_mark_conflict": {
-      "type": "table",
-      "virtual": false,
-      "columns": [
-        "x|INTEGER|nn=1|d=null|pk=0|h=0"
-      ],
-      "indexes": [],
-      "foreignKeys": [],
-      "checks": [
-        "(x=0)"
-      ],
-      "sqlDigest": "752def4138abf74e84eeac14d18b33edd0e3de59c36576ba01944a4aa0ab490f"
-    },
-    "guard_task_mark_unavailable": {
-      "type": "table",
-      "virtual": false,
-      "columns": [
-        "x|INTEGER|nn=1|d=null|pk=0|h=0"
-      ],
-      "indexes": [],
-      "foreignKeys": [],
-      "checks": [
-        "(x=0)"
-      ],
-      "sqlDigest": "2cca9b1cea335f475e97182d892a1d92e2a25e1f6c076223d07e842b407af2fd"
-    },
     "guard_version_conflict": {
       "type": "table",
       "virtual": false,
@@ -2708,25 +2683,19 @@
         "root_id|TEXT|nn=0|d=null|pk=0|h=0",
         "hop|INTEGER|nn=1|d=0|pk=0|h=0",
         "root_invocations_used|INTEGER|nn=1|d=0|pk=0|h=0",
-        "created_at|INTEGER|nn=1|d=null|pk=0|h=0",
-        "task_root_id|TEXT|nn=0|d=null|pk=0|h=0",
-        "task_marked_by|TEXT|nn=0|d=null|pk=0|h=0",
-        "task_marked_at|INTEGER|nn=0|d=null|pk=0|h=0",
-        "task_completed_at|INTEGER|nn=0|d=null|pk=0|h=0",
-        "task_completed_by|TEXT|nn=0|d=null|pk=0|h=0"
+        "created_at|INTEGER|nn=1|d=null|pk=0|h=0"
       ],
       "indexes": [
         "idx_messages_global_order|u=0|o=c|p=0|cols=created_at,message_id|desc=1,1",
         "idx_messages_room_reply_to|u=0|o=c|p=1|cols=room_id,reply_to,created_seq|desc=0,0,0",
         "idx_messages_room_seq|u=0|o=c|p=0|cols=room_id,created_seq|desc=0,1",
         "idx_messages_root|u=0|o=c|p=0|cols=root_id,created_seq|desc=0,0",
-        "idx_messages_task_root|u=0|o=c|p=1|cols=room_id,task_root_id,created_seq|desc=0,0,0",
         "sqlite_autoindex_messages_1|u=1|o=pk|p=0|cols=message_id|desc=0",
         "sqlite_autoindex_messages_2|u=1|o=u|p=0|cols=sender_id,client_message_id|desc=0,0"
       ],
       "foreignKeys": [],
       "checks": [],
-      "sqlDigest": "c672973be8b0430b724ab028e6e2a425f2ebc6b9f3ec9867c4869834c2c5d88c"
+      "sqlDigest": "66843e33487e55b4f4327194bf3134fdd0b917c45569225683943e7879844e17"
     },
     "operations": {
       "type": "table",
@@ -3167,5 +3136,5 @@
     "message_search_fts_ai": "c0d538ed07edf48bcc8dfff50d1adf2158b1ef1c75e528640877b7ac08b0fe71",
     "message_search_fts_au": "af71582b06026e26c1b0acb0e15b6d4e504f8b85450ac9351d70042408abbaf7"
   },
-  "digest": "8125652ca46dc69dd212c81bea7b3c95da2c21752a62616aa4f85e09c84d86aa"
+  "digest": "91e062f86ecc3f639186bba09d23b0261f38a568ae0aed0d15d840207780761a"
 }

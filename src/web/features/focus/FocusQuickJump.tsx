@@ -224,6 +224,9 @@ export function FocusQuickJump({
           role="combobox"
           aria-expanded={entries.length > 0}
           aria-controls="focus-quick-results"
+          aria-activedescendant={
+            selected >= 0 && entries[selected] ? `focus-quick-option-${selected}` : undefined
+          }
           aria-autocomplete="list"
           autoComplete="off"
           placeholder="搜事项、人名、会话或原话"
@@ -270,6 +273,7 @@ export function FocusQuickJump({
                   key={entry.key}
                   type="button"
                   role="option"
+                  id={`focus-quick-option-${index}`}
                   aria-selected={index === selected}
                   data-quick-index={index}
                   className={`focus-quick-row${index === selected ? ' is-selected' : ''}`}
@@ -305,6 +309,7 @@ export function FocusQuickJump({
                   key={entry.key}
                   type="button"
                   role="option"
+                  id={`focus-quick-option-${index}`}
                   aria-selected={index === selected}
                   data-quick-index={index}
                   className={`focus-quick-row${index === selected ? ' is-selected' : ''}`}

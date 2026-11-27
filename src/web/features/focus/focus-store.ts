@@ -75,7 +75,7 @@ export function ensureFocusOwner(ownerId: string | null): void {
 }
 
 export function openFocusBoard(options: { quick?: boolean } = {}): void {
-  update({ open: true, quickOpen: options.quick === true, quickIndex: -1 });
+  update({ open: true, quickOpen: options.quick === true });
 }
 
 export function closeFocusBoard(): void {
@@ -99,7 +99,7 @@ export function closeFocusItem(): void {
 }
 
 export function openFocusQuick(): void {
-  update({ quickOpen: true, quickIndex: -1 });
+  update({ quickOpen: true });
 }
 
 export function closeFocusQuick(): void {

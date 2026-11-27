@@ -30,10 +30,6 @@ async function fixture(page: Page, ready = true, member = false) {
   const group = (await tool<{ room: { room_id: string } }>(member ? peerToken : token, 'network_room_create', {
     ...request(), kind: 'group', title: 'S04 alerts', members: [member ? owner.actor_id : peer.actor_id],
   })).room.room_id;
-  const message = (await tool<{ message: { message_id: string } }>(token, 'network_message_send', {
-    ...request(), client_message_id: crypto.randomUUID(), room_id: group, body: 'S04 task', invoke: [],
-  })).message.message_id;
-  await tool(token, 'network_task_mark', { ...request(), room_id: group, message_id: message });
   await tool(token, 'network_room_monitor_set', { ...request(), room_id: group, url: `${base}/health` });
   await page.addInitScript((auth) => {
     if (sessionStorage.getItem('s04-seeded')) return;
@@ -130,7 +126,7 @@ for (const delayed of [true, false]) {
   });
 }
 
-for (const name of ['Logout', 'LeaveRoom', 'TaskComplete']) {
+for (const name of ['Logout', 'LeaveRoom']) {
   test(`${name}：延迟模块的 lease 与焦点不丢失，关闭重开升级`, async ({ page }) => {
     let release!: () => void;
     const gate = new Promise<void>((done) => { release = done; });
@@ -138,16 +134,13 @@ for (const name of ['Logout', 'LeaveRoom', 'TaskComplete']) {
     try {
       await fixture(page, false);
       if (name === 'Logout') await page.goto(`${base}/`);
-      const id = name === 'Logout' ? 'logout-modal' : name === 'LeaveRoom' ? 'leave-dialog' : 'task-complete-dialog';
-      const cancel = name === 'Logout' ? 'logout-cancel' : name === 'LeaveRoom' ? 'leave-cancel' : 'task-complete-cancel';
+      const id = name === 'Logout' ? 'logout-modal' : 'leave-dialog';
+      const cancel = name === 'Logout' ? 'logout-cancel' : 'leave-cancel';
       const open = async () => {
         if (name === 'Logout') await page.locator('#logout').click();
-        else if (name === 'LeaveRoom') {
+        else {
           await page.locator('#room-menu-toggle').click();
           await page.locator('#room-menu-leave-group').click();
-        } else {
-          if (!(await page.locator('.task-dock-complete').isVisible())) await page.locator('#task-dock-toggle').click();
-          await page.locator('.task-dock-complete').click();
         }
       };
       await open();
@@ -171,54 +164,34 @@ for (const name of ['Logout', 'LeaveRoom', 'TaskComplete']) {
   });
 }
 
-for (const task of [true, false]) {
-  test(`${task ? 'TaskComplete' : 'LeaveRoom'}：真实请求阻塞、busy、错误原位与重试结算`, async ({ page }) => {
-    await fixture(page, true, !task);
-    let release!: () => void;
-    const gate = new Promise<void>((done) => { release = done; });
-    let attempts = 0;
-    const requestIds: string[] = [];
-    await page.route('**/mcp', async (route) => {
-      if (route.request().headers()['mcp-name'] !== (task ? 'network_task_complete' : 'network_room_leave')) return route.continue();
-      attempts++;
-      requestIds.push(route.request().postDataJSON().params.arguments.request_id);
-      if (attempts === 1) { await gate; await fail(route, 'S04 注入失败'); }
-      else await route.continue();
-    });
-    try {
-      if (task) {
-        await page.locator('#task-dock-toggle').click();
-        await page.locator('.task-dock-complete').click();
-      } else {
-        await page.locator('#room-menu-toggle').click();
-        await page.locator('#room-menu-leave-group').click();
-      }
-      const id = task ? 'task-complete-dialog' : 'leave-dialog';
-      const prefix = task ? 'task-complete' : 'leave';
-      const dialog = await lenso(page, id, `${prefix}-message`);
-      await page.locator(`#${prefix}-confirm`).click();
-      await expect(page.locator(`#${prefix}-confirm`)).toBeDisabled();
-      await expect(page.locator(`#${prefix}-confirm`)).toHaveText(task ? '完成中…' : '正在退出…');
-      await expect(dialog).toBeVisible();
-      if (task) {
-        await page.keyboard.press('Escape');
-        await expect(dialog).toBeVisible();
-        await expect(page.locator('#task-complete-cancel')).toBeDisabled();
-      }
-      release();
-      await expect(page.locator(task ? '#task-complete-error' : '#leave-status')).toContainText('S04 注入失败');
-      await expect(dialog).toBeVisible();
-      await page.locator(`#${prefix}-confirm`).click();
-      await expect(dialog).toHaveCount(0);
-      expect(attempts).toBe(2);
-      if (task) {
-        expect(requestIds[0]).toBe(requestIds[1]);
-        await expect(page.locator('#task-dock-toggle')).toBeFocused();
-        await expect(page.locator('#task-dock-count')).toHaveText('0');
-      } else await expect(page).toHaveURL(`${base}/`);
-    } finally { release(); }
+test('LeaveRoom：真实请求阻塞、busy、错误原位与重试结算', async ({ page }) => {
+  await fixture(page, true, true);
+  let release!: () => void;
+  const gate = new Promise<void>((done) => { release = done; });
+  let attempts = 0;
+  await page.route('**/mcp', async (route) => {
+    if (route.request().headers()['mcp-name'] !== 'network_room_leave') return route.continue();
+    attempts++;
+    if (attempts === 1) { await gate; await fail(route, 'S04 注入失败'); }
+    else await route.continue();
   });
-}
+  try {
+    await page.locator('#room-menu-toggle').click();
+    await page.locator('#room-menu-leave-group').click();
+    const dialog = await lenso(page, 'leave-dialog', 'leave-message');
+    await page.locator('#leave-confirm').click();
+    await expect(page.locator('#leave-confirm')).toBeDisabled();
+    await expect(page.locator('#leave-confirm')).toHaveText('正在退出…');
+    await expect(dialog).toBeVisible();
+    release();
+    await expect(page.locator('#leave-status')).toContainText('S04 注入失败');
+    await expect(dialog).toBeVisible();
+    await page.locator('#leave-confirm').click();
+    await expect(dialog).toHaveCount(0);
+    expect(attempts).toBe(2);
+    await expect(page).toHaveURL(`${base}/`);
+  } finally { release(); }
+});
 
 test('页面 confirm：真实 Lenso、ids、取消/Esc/背板、true/false、危险项与还焦', async ({ page }) => {
   await fixture(page);
@@ -292,17 +265,13 @@ test('Logout：Lenso 确认后只清理本机状态，不发业务写请求', as
 
 for (const width of [1280, 390]) {
   for (const colorScheme of ['light', 'dark'] as const) {
-    test(`${width} ${colorScheme}：Logout/Leave/TaskComplete 几何、焦点、Esc/背板与卸载`, async ({ page }) => {
+    test(`${width} ${colorScheme}：Logout/Leave 几何、焦点、Esc/背板与卸载`, async ({ page }) => {
       await page.setViewportSize({ width, height: 844 });
       await page.emulateMedia({ colorScheme });
       await fixture(page);
       const cases = [
         { id: 'leave-dialog', message: 'leave-message', cancel: 'leave-cancel', trigger: '#room-menu-toggle', open: async () => {
           await page.locator('#room-menu-toggle').click(); await page.locator('#room-menu-leave-group').click();
-        } },
-        { id: 'task-complete-dialog', message: 'task-complete-message', cancel: 'task-complete-cancel', trigger: '.task-dock-complete', open: async () => {
-          if (!(await page.locator('.task-dock-complete').isVisible())) await page.locator('#task-dock-toggle').click();
-          await page.locator('.task-dock-complete').click();
         } },
         { id: 'logout-modal', message: 'logout-message', cancel: 'logout-cancel', trigger: '#logout', open: async () => {
           if (!page.url().endsWith('/')) {

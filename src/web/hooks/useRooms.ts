@@ -49,7 +49,7 @@ export function useRooms(enabled = true): RoomsState {
   const lastPage = query.data?.pages[query.data.pages.length - 1];
   const failure = query.error as { message?: string } | null;
 
-  // direct 对端资料进入 actor 头像缓存；消息与 Task 摘要据此补图。
+  // direct 对端资料进入 actor 头像缓存；消息据此补图。
   useEffect(() => {
     rememberActorAvatars(
       rooms

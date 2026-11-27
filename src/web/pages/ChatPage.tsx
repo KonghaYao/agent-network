@@ -20,14 +20,10 @@ import { ChatHeader } from '../features/chat/ChatHeader';
 import { Composer, type ComposerReply, type ComposerRestoreDraft, type ComposerSendInput } from '../features/chat/Composer';
 import { PinnedMessagesBar } from '../features/chat/PinnedMessagesBar';
 import { Timeline } from '../features/chat/Timeline';
-import { scrollToMessage } from '../features/chat/scroll-to-message';
 import { AppSidebar } from '../features/layout/AppSidebar';
 import { FilesPaneFallback } from '../features/panels/FilesPaneFallback';
 import { LazyFilePreviewDialog } from '../features/panels/LazyFilePreviewDialog';
 import type { RoomOverlay } from '../features/overlays/RoomMenu';
-import { RoomTaskDock } from '../features/tasks/RoomTaskDock';
-import { useRoomTaskController } from '../features/tasks/useRoomTaskController';
-import { useTaskAskProgress } from '../features/tasks/useTaskAskProgress';
 import { openAgentMemory } from '../features/memory/memory-store';
 import {
   returnToFocusBoard,
@@ -121,7 +117,7 @@ function onlineLabel(online: boolean | null): string {
  * 确认前持久化，SSE 只作为刷新提示，不直接把通知正文写进页面。
  */
 export function ChatPage({ roomId }: ChatPageProps) {
-  // 撤回事件要等 Task 控制器就绪后才能收敛；先经 ref 转发，避免把
+  // 撤回事件由搜索 anchor 与普通撤回共同收敛；先经 ref 转发，避免把
   // 单宿主 SSE 回调绑死在某一帧的闭包上。
   const chatEventRef = useRef<(event: Extract<ActorStreamEvent, { type: 'event' }>) => void>(
     () => {},
@@ -227,14 +223,6 @@ export function ChatPage({ roomId }: ChatPageProps) {
     [members, identity?.name],
   );
 
-  const {
-    trace: taskTrace,
-    openTrace,
-    closeTrace,
-    onToggleTask,
-    invalidateTasks,
-  } = useRoomTaskController({ roomId, room, token, onStatus: setStatus });
-
   const moderationEvents = useRoomModerationEvents({
     room,
     pinnedMessages: chat.detail?.pinned_messages ?? [],
@@ -242,13 +230,10 @@ export function ChatPage({ roomId }: ChatPageProps) {
     token,
     onStatus: setStatus,
     refreshModeration: chat.refreshModeration,
-    taskTraceRootId: taskTrace?.rootId ?? null,
-    onCloseTrace: closeTrace,
     replyMessageId: reply?.messageId ?? null,
     setReply,
     setSearchOpen,
     setForwardItem,
-    invalidateTasks,
   });
   const { scrollResetToken, searchNavRef, moderation } = moderationEvents;
   const onRecall = moderation.recall;
@@ -283,9 +268,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
     roomId,
     onCommitted: useCallback(() => {
       void refresh();
-      // 本人发送不保证收到 room.message 回声；提交成功即主动失效 Task 列表。
-      invalidateTasks();
-    }, [invalidateTasks, refresh]),
+    }, [refresh]),
   });
   const outboxSending = queue.items.some((item) => item.status === 'sending');
   const outboxBusy = outboxUpdateBusy(outboxSending).join('；');
@@ -399,9 +382,6 @@ export function ChatPage({ roomId }: ChatPageProps) {
     setStatus(message);
   }, []);
 
-  const { draftRequest, canAskTask, onAskTaskProgress, clearDraftRequest } =
-    useTaskAskProgress({ roomId, room, items: chat.items, members, identity, setReply });
-
   const roomActions = useRoomMenuActions({
     room,
     peer,
@@ -428,10 +408,6 @@ export function ChatPage({ roomId }: ChatPageProps) {
             room?.peer_can_manage === true,
         }
       : null;
-
-  const onJumpToMessage = useCallback((messageId: string) => {
-    scrollToMessage(messageId);
-  }, []);
 
   const onSend = useCallback(
     async (input: ComposerSendInput) => {
@@ -926,8 +902,6 @@ export function ChatPage({ roomId }: ChatPageProps) {
                     onQuote={onQuote}
                     onStatus={onStatus}
                     onMarkRead={chat.markRead}
-                    onToggleTask={(item) => void onToggleTask(item)}
-                    onOpenTask={openTrace}
                     onOpenFile={openFilePreview}
                     onRecall={(item) => void onRecall(item)}
                     onReedit={onReedit}
@@ -949,19 +923,7 @@ export function ChatPage({ roomId }: ChatPageProps) {
                 <p id="status" role="status">
                   {shownStatus}
                 </p>
-                {/* Task dock 浮动锚点：绝对定位不占文档流，不推移消息或输入框。 */}
                 <div className="composer-area">
-                  {ready && room && identity ? (
-                    <RoomTaskDock
-                      roomId={roomId}
-                      room={room}
-                      token={token}
-                      actorId={identity.actor_id}
-                      canAskTask={canAskTask}
-                      onAskProgress={onAskTaskProgress}
-                      onOpenTrace={openTrace}
-                    />
-                  ) : null}
                   {loadingShell ? (
                     // 静态输入区：与真实 composer 同高，避免历史到达时列表被撑开。
                     // 豁免：加载骨架保留原生 textarea，与 Composer 的 #body 同一契约，
@@ -996,8 +958,6 @@ export function ChatPage({ roomId }: ChatPageProps) {
                       identity={identity}
                       token={token}
                       reply={reply}
-                      draftRequest={draftRequest}
-                      onDraftApplied={clearDraftRequest}
                       restoreDraft={restoreDraft}
                       onRestoreApplied={onRestoreApplied}
                       sending={false}
@@ -1068,13 +1028,8 @@ export function ChatPage({ roomId }: ChatPageProps) {
           onSearchOpenChange={setSearchOpen}
           searchReturnFocusRef={searchReturnFocusRef}
           onLocateSearchResult={searchNav.locate}
-          onOpenTrace={openTrace}
-          taskTrace={taskTrace}
-          onCloseTrace={closeTrace}
-          onJumpToMessage={onJumpToMessage}
           forwardItem={forwardItem}
           onForwardItemChange={setForwardItem}
-          invalidateTasks={invalidateTasks}
           setStatus={setStatus}
         />
       ) : null}

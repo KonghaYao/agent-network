@@ -46,7 +46,6 @@ function syntheticMessage(roomId: string, seq: number, preview: string) {
     created_at: String(1_700_000_000_000 + seq),
     reply_to: null,
     root_id: null,
-    task_root_id: null,
     hop: 0,
     delivery_states: {},
     mentions: [],
@@ -110,97 +109,6 @@ async function addFriend(base: string, ownerToken: string, peerToken: string, pe
     contact_request_id: requested.request.contact_request_id,
     action: 'accept',
   });
-}
-
-interface LateTaskFixture {
-  owner: { token: string; actorId: string; name: string };
-  b: { token: string; actorId: string; name: string };
-  c: { token: string; actorId: string; name: string };
-  roomId: string;
-  roomTitle: string;
-  rootId: string;
-  messageCount: number;
-}
-
-/** 同一房间里的 B/C 与一条 open Task；replies 用于制造 Trace 分页。 */
-async function createLateTaskRoom(base: string, replies: number): Promise<LateTaskFixture> {
-  const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
-  const owner = await registerHuman(base, `晚到 Owner ${suffix}`);
-  const b = await registerHuman(base, `晚到 B ${suffix}`);
-  const c = await registerHuman(base, `晚到 C ${suffix}`);
-  await addFriend(base, owner.token, b.token, b.actorId);
-  await addFriend(base, owner.token, c.token, c.actorId);
-
-  const roomTitle = `晚到群 ${suffix}`;
-  const created = await callTool<{ room: { room_id: string } }>(
-    base,
-    owner.token,
-    'network_room_create',
-    {
-      request_id: requestId('e2e_late_group'),
-      kind: 'group',
-      title: roomTitle,
-      members: [b.actorId, c.actorId],
-    },
-  );
-  const roomId = created.room.room_id;
-  const sent = await callTool<{ message: { message_id: string } }>(
-    base,
-    owner.token,
-    'network_message_send',
-    {
-      request_id: requestId('e2e_late_root'),
-      client_message_id: requestId('e2e_late_root_client'),
-      room_id: roomId,
-      body: `晚到任务 ${suffix}`,
-      invoke: [],
-    },
-  );
-  const rootId = sent.message.message_id;
-  await callTool(base, owner.token, 'network_task_mark', {
-    request_id: requestId('e2e_late_mark'),
-    room_id: roomId,
-    message_id: rootId,
-  });
-  for (let index = 0; index < replies; index += 1) {
-    await callTool(base, owner.token, 'network_message_send', {
-      request_id: requestId('e2e_late_reply'),
-      client_message_id: requestId('e2e_late_reply_client'),
-      room_id: roomId,
-      body: `处理记录 ${index + 1}`,
-      invoke: [],
-      task_root_id: rootId,
-    });
-  }
-  return {
-    owner,
-    b,
-    c,
-    roomId,
-    roomTitle,
-    rootId,
-    messageCount: replies + 1,
-  };
-}
-
-async function expandTaskDock(page: Page) {
-  await expect(page.locator('#task-dock')).toBeVisible({ timeout: 15_000 });
-  if ((await page.locator('#task-dock').getAttribute('data-state')) !== 'expanded') {
-    await page.locator('#task-dock-toggle').click();
-  }
-  await expect(page.locator('#task-dock')).toHaveAttribute('data-state', 'expanded');
-}
-
-function taskItem(page: Page, rootId: string) {
-  return page.locator(`#task-dock .task-dock-item[data-task-root="${rootId}"]`);
-}
-
-async function openTaskTrace(page: Page, rootId: string) {
-  await taskItem(page, rootId).locator('.task-dock-item-trigger').click();
-  const popover = page.locator(`#task-preview-${rootId}`);
-  await expect(popover).toBeVisible();
-  await popover.getByRole('button', { name: /查看全部 \d+ 条消息/ }).click();
-  await expect(page.locator('#task-trace-drawer')).toBeVisible({ timeout: 15_000 });
 }
 
 /**
@@ -800,86 +708,6 @@ test('合并 online/visibility/ACK 为单轮恢复，并在离线时只标离线
   console.log(JSON.stringify({ probe: 'offline-conversation', bannerWhileOffline: true }));
 });
 
-test('同身份重连 ACK 先清空 Task 与 Trace，再重读回填', async ({ page }) => {
-  const base = await baseUrl();
-  const fixture = await createComponentRoom(base);
-  const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
-  const sent = await callTool<{ message: { message_id: string } }>(
-    base,
-    fixture.tokenA,
-    'network_message_send',
-    {
-      request_id: requestId('e2e_ack_task'),
-      client_message_id: requestId('e2e_ack_task_client'),
-      room_id: fixture.roomId,
-      body: `重连前后都可见的 Task ${suffix}`,
-      invoke: [],
-    },
-  );
-  const rootId = sent.message.message_id;
-  await callTool(base, fixture.tokenA, 'network_task_mark', {
-    request_id: requestId('e2e_ack_mark'),
-    room_id: fixture.roomId,
-    message_id: rootId,
-  });
-
-  let holdReads = false;
-  let heldLists = 0;
-  let heldTraces = 0;
-  const releases: (() => void)[] = [];
-  await page.route('**/mcp', async (route) => {
-    const name = route.request().headers()['mcp-name'];
-    if (!holdReads || (name !== 'network_task_list' && name !== 'network_task_trace')) {
-      await route.continue();
-      return;
-    }
-    if (name === 'network_task_list') heldLists += 1;
-    else heldTraces += 1;
-    await new Promise<void>((release) => releases.push(release));
-    await route.continue();
-  });
-
-  await login(page, base, fixture.tokenA);
-  await openRoom(page, base, fixture.tokenA, fixture.roomId, fixture.roomTitle);
-  await expandTaskDock(page);
-  await expect(taskItem(page, rootId)).toHaveCount(1, { timeout: 15_000 });
-  await openTaskTrace(page, rootId);
-  await expect(page.locator('#task-trace-items .task-trace-item')).toHaveCount(1, {
-    timeout: 15_000,
-  });
-
-  holdReads = true;
-  await page.evaluate(() => {
-    (
-      window as unknown as { __agentNetworkRecovery?: { trigger: (reason: string) => void } }
-    ).__agentNetworkRecovery?.trigger('stream-ack');
-  });
-  await expect.poll(() => heldLists, { timeout: 15_000 }).toBeGreaterThan(0);
-  await expect.poll(() => heldTraces, { timeout: 15_000 }).toBeGreaterThan(0);
-
-  // 重读尚未返回：旧条目必须已被丢弃，而不是 invalidate 后继续显示。
-  await expect(page.locator('#task-dock-count')).toHaveText('…');
-  await expect(page.locator('#task-dock .task-dock-item')).toHaveCount(0);
-  await expect(page.locator('#task-trace-items .task-trace-item')).toHaveCount(0);
-  const itemsWhileHeld = await page.locator('#task-dock .task-dock-item').count();
-
-  holdReads = false;
-  const held = releases.splice(0);
-  for (const release of held) release();
-  await expect(taskItem(page, rootId)).toHaveCount(1, { timeout: 15_000 });
-  await expect(page.locator('#task-dock-count')).toHaveText('1');
-  await expect(page.locator('#task-trace-items .task-trace-item')).toHaveCount(1, {
-    timeout: 15_000,
-  });
-  console.log(JSON.stringify({
-    probe: 'ack-task-reset',
-    heldLists,
-    heldTraces,
-    itemsWhileHeld,
-    reloadedItems: await page.locator('#task-dock .task-dock-item').count(),
-  }));
-});
-
 test('21 页缺口分批追平并显示进度，已读不超过展示水位', async ({ page }) => {
   const base = await baseUrl();
   const fixture = await createComponentRoom(base);
@@ -1440,286 +1268,9 @@ test('旧身份晚到的 mark_read 不清理新身份未读', async ({ page }) =
   }));
 });
 
-test('切号后释放旧身份的 task_complete 不闪掉新身份的 dock', async ({ page }) => {
-  const base = await baseUrl();
-  const fixture = await createLateTaskRoom(base, 0);
-  await login(page, base, fixture.b.token);
-  await openRoom(page, base, fixture.b.token, fixture.roomId, fixture.roomTitle);
-  await expandTaskDock(page);
-  await expect(taskItem(page, fixture.rootId)).toHaveCount(1, { timeout: 15_000 });
-
-  let releaseComplete: () => void = () => undefined;
-  const held = new Promise<void>((resolve) => {
-    releaseComplete = resolve;
-  });
-  let completeHeld = 0;
-  let failIdentity = true;
-  let identityCalls = 0;
-  // 旧回执若真的触发重建，会发 `network_task_list`；延迟它让 0 状态可被采样。
-  let delayTaskList = false;
-  await page.route('**/mcp', async (route) => {
-    const request = route.request();
-    const name = request.headers()['mcp-name'];
-    if (name === 'network_me' && request.headers()['authorization'] === `Bearer ${fixture.c.token}`) {
-      identityCalls += 1;
-      if (failIdentity) {
-        await route.abort('failed');
-        return;
-      }
-      await route.continue();
-      return;
-    }
-    if (
-      name === 'network_task_list' &&
-      delayTaskList &&
-      request.headers()['authorization'] === `Bearer ${fixture.c.token}`
-    ) {
-      await delay(400);
-      await route.continue();
-      return;
-    }
-    if (name !== 'network_task_complete') {
-      await route.continue();
-      return;
-    }
-    completeHeld += 1;
-    await held;
-    const body = JSON.parse(request.postData() ?? '{}') as RpcBody;
-    await postJson(route, body, {
-      room_id: fixture.roomId,
-      root_message_id: fixture.rootId,
-      status: 'completed',
-      completed_at: String(Date.now()),
-      completed_by: fixture.b.actorId,
-    });
-  });
-
-  await page.locator('#task-dock .task-dock-complete').click();
-  await page.locator('#task-complete-confirm').click();
-  await expect.poll(() => completeHeld, { timeout: 15_000 }).toBeGreaterThan(0);
-
-  // 先让 C 的 network_me 失败，确保遮罩真正绘制并卸载 RoomTaskDock；
-  // 旧实例的 ref 冻结在 B，只有模块级代次能拦住晚到回写。
-  await switchIdentityUnderMask(page, fixture.c.token);
-  expect(identityCalls).toBeGreaterThan(0);
-  failIdentity = false;
-  await finishIdentitySwitch(page, fixture.c.name);
-  await expandTaskDock(page);
-  await expect(taskItem(page, fixture.rootId)).toHaveCount(1, { timeout: 15_000 });
-  await page.waitForTimeout(300);
-
-  const sampling = page.evaluate(async ({ rootId }) => {
-    const read = () => {
-      const item = document.querySelector(
-        `#task-dock .task-dock-item[data-task-root="${rootId}"]`,
-      );
-      const count = document.querySelector('#task-dock-count')?.textContent?.trim() ?? '';
-      const dock = document.querySelector('#task-dock');
-      return { item: item ? 1 : 0, count, dock: dock ? 1 : 0 };
-    };
-    const samples: { item: number; count: string; dock: number }[] = [];
-    for (let index = 0; index < 70; index += 1) {
-      samples.push(read());
-      await new Promise<void>((resolve) => setTimeout(resolve, 20));
-    }
-    return samples;
-  }, { rootId: fixture.rootId });
-
-  const lateResponse = page.waitForResponse(
-    (response) =>
-      response.request().headers()['authorization'] === `Bearer ${fixture.b.token}` &&
-      response.request().headers()['mcp-name'] === 'network_task_complete',
-    { timeout: 15_000 },
-  );
-  await page.waitForTimeout(120);
-  delayTaskList = true;
-  releaseComplete();
-  await lateResponse;
-  const samples = await sampling;
-  const badSamples = samples.filter(
-    (sample) => sample.dock !== 1 || sample.item !== 1 || sample.count.startsWith('0'),
-  );
-  expect(badSamples, JSON.stringify(samples)).toEqual([]);
-  await page.waitForTimeout(300);
-  await expect(taskItem(page, fixture.rootId)).toHaveCount(1);
-
-  const serverList = await callTool<{
-    total_count: number;
-    items: { root_message_id: string }[];
-  }>(base, fixture.c.token, 'network_task_list', {
-    room_id: fixture.roomId,
-    status: 'open',
-    limit: 10,
-  });
-  expect(serverList.total_count).toBe(1);
-  expect(serverList.items.map((item) => item.root_message_id)).toContain(fixture.rootId);
-  console.log(JSON.stringify({
-    probe: 'late-task-complete',
-    samples: samples.length,
-    badSamples: badSamples.length,
-    serverTotal: serverList.total_count,
-    serverOpen: true,
-  }));
-});
-
-test('切号后释放旧身份的 Trace 分页不并入新身份缓存', async ({ page }) => {
-  const base = await baseUrl();
-  const fixture = await createLateTaskRoom(base, 52);
-  await login(page, base, fixture.b.token);
-  await openRoom(page, base, fixture.b.token, fixture.roomId, fixture.roomTitle);
-  await expandTaskDock(page);
-  await openTaskTrace(page, fixture.rootId);
-  await expect(page.locator('#task-trace-items .task-trace-item')).toHaveCount(50, {
-    timeout: 15_000,
-  });
-  await expect(page.locator('#task-trace-newer')).toBeVisible();
-  await expect(page.locator('#task-trace-newer')).toBeEnabled();
-
-  let releasePage: () => void = () => undefined;
-  const held = new Promise<void>((resolve) => {
-    releasePage = resolve;
-  });
-  let heldPages = 0;
-  let failIdentity = true;
-  let identityCalls = 0;
-  await page.route('**/mcp', async (route) => {
-    const request = route.request();
-    const name = request.headers()['mcp-name'];
-    if (name === 'network_me' && request.headers()['authorization'] === `Bearer ${fixture.c.token}`) {
-      identityCalls += 1;
-      if (failIdentity) {
-        await route.abort('failed');
-        return;
-      }
-      await route.continue();
-      return;
-    }
-    if (name !== 'network_task_trace') {
-      await route.continue();
-      return;
-    }
-    let body: RpcBody;
-    try {
-      body = JSON.parse(request.postData() ?? '{}') as RpcBody;
-    } catch {
-      await route.continue();
-      return;
-    }
-    const cursor = body.params?.arguments?.cursor;
-    if (!cursor || request.headers()['authorization'] !== `Bearer ${fixture.b.token}`) {
-      await route.continue();
-      return;
-    }
-    heldPages += 1;
-    await held;
-    await postJson(route, body, {
-      root_message_id: fixture.rootId,
-      items: [
-        {
-          message_id: 'probe-b-only',
-          sender_id: fixture.b.actorId,
-          sender_name: fixture.b.name,
-          sender_kind: 'human',
-          created_seq: '999999',
-          created_at: String(Date.now()),
-          preview: 'B 晚到分页标记',
-          body_bytes: 8,
-          recalled: false,
-          role: 'member',
-          reply_to: null,
-          referenced_by: null,
-          has_unavailable_reference: false,
-        },
-      ],
-      next_cursor: null,
-      prev_cursor: 'probe-prev',
-      has_more_before: true,
-      has_more_after: false,
-      message_count: 51,
-      focus_message_id: null,
-      status: 'open',
-      completed_at: null,
-      completed_by: null,
-      authorization: AUTHORIZATION,
-    });
-  });
-
-  await page.locator('#task-trace-newer').click();
-  await expect.poll(() => heldPages, { timeout: 15_000 }).toBeGreaterThan(0);
-
-  // 强制遮罩可见：ChatDialogsMount 卸载并把 trace tokenRef 冻结在 B。
-  await switchIdentityUnderMask(page, fixture.c.token);
-  expect(identityCalls).toBeGreaterThan(0);
-  failIdentity = false;
-  await finishIdentitySwitch(page, fixture.c.name);
-  // ChatPage 的 Trace 目标状态跨遮罩保留；恢复后 C 可能已自动重开抽屉。
-  if ((await page.locator('#task-trace-drawer').count()) === 0) {
-    await expandTaskDock(page);
-    await openTaskTrace(page, fixture.rootId);
-  }
-  await expect(page.locator('#task-trace-items .task-trace-item')).toHaveCount(50, {
-    timeout: 15_000,
-  });
-
-  const lateResponse = page.waitForResponse(
-    (response) =>
-      response.request().headers()['authorization'] === `Bearer ${fixture.b.token}` &&
-      response.request().headers()['mcp-name'] === 'network_task_trace',
-    { timeout: 15_000 },
-  );
-  releasePage();
-  await lateResponse;
-  await page.waitForTimeout(800);
-
-  // Trace 键不含 actor；B 的合成分页不能把 C 的 50 条变成 51 条。
-  await expect(page.locator('#task-trace-items .task-trace-item')).toHaveCount(50);
-  await expect(page.locator('#task-trace-items')).not.toContainText('B 晚到分页标记');
-  await expect(page.locator('.task-trace-meta').last()).toContainText('50 / 53 条已加载');
-
-  const serverTrace = await callTool<{
-    items: { message_id: string }[];
-    message_count: number;
-  }>(base, fixture.c.token, 'network_task_trace', {
-    room_id: fixture.roomId,
-    root_message_id: fixture.rootId,
-    limit: 50,
-  });
-  expect(serverTrace.items).toHaveLength(50);
-  expect(serverTrace.message_count).toBe(fixture.messageCount);
-  expect(serverTrace.items.some((item) => item.message_id === 'probe-b-only')).toBe(false);
-  console.log(JSON.stringify({
-    probe: 'late-task-trace-page',
-    localItems: 50,
-    localCount: 53,
-    markerPresent: false,
-    serverItems: serverTrace.items.length,
-    serverMessageCount: serverTrace.message_count,
-    heldPages,
-  }));
-});
-
 test('撤权后遮住旧视图、关闭预览并释放 object URL；晚到历史响应不复活', async ({ page }) => {
   const base = await baseUrl();
   const fixture = await createComponentRoom(base);
-  const taskBody = `REVOKE-PRIVATE-TASK ${crypto.randomUUID().slice(0, 8)}`;
-  const taskSent = await callTool<{ message: { message_id: string } }>(
-    base,
-    fixture.tokenB,
-    'network_message_send',
-    {
-      request_id: requestId('e2e_revoke_task'),
-      client_message_id: requestId('e2e_revoke_task_client'),
-      room_id: fixture.roomId,
-      body: taskBody,
-      invoke: [],
-    },
-  );
-  const taskRootId = taskSent.message.message_id;
-  await callTool(base, fixture.tokenB, 'network_task_mark', {
-    request_id: requestId('e2e_revoke_mark'),
-    room_id: fixture.roomId,
-    message_id: taskRootId,
-  });
   const outsiderToken = crypto.randomUUID();
   await callTool(base, outsiderToken, 'network_register', {
     request_id: requestId('e2e_reg'),
@@ -1807,18 +1358,8 @@ test('撤权后遮住旧视图、关闭预览并释放 object URL；晚到历史
   await page.locator('.file-item[data-file-id="probe-file"] .file-action').first().click();
   await expect(page.locator('#file-preview')).toBeVisible();
   await expect(page.locator('#file-preview-body')).toContainText('preview secret');
-  // 先关闭预览弹窗，避免它拦截 dock/Trace 的点击；释放 object URL 的探针不受影响。
   await page.locator('#file-preview-close').click();
   await expect(page.locator('#file-preview')).toHaveCount(0);
-
-  // 撤权前先让 Task dock 与 Trace 都持有旧身份的私有条目。
-  await expandTaskDock(page);
-  await expect(taskItem(page, taskRootId)).toHaveCount(1, { timeout: 15_000 });
-  await openTaskTrace(page, taskRootId);
-  await expect(page.locator('#task-trace-items .task-trace-item')).toHaveCount(1, {
-    timeout: 15_000,
-  });
-  await expect(page.locator('#task-trace-items')).toContainText(taskBody);
 
   const blobUrl = await page.evaluate(() => {
     const original = URL.revokeObjectURL.bind(URL);
@@ -1847,14 +1388,6 @@ test('撤权后遮住旧视图、关闭预览并释放 object URL；晚到历史
   await expect(page.locator('#recovery-mask')).toBeVisible({ timeout: 15_000 });
   await expect(page.locator('#messages')).toBeHidden();
   await expect(page.locator('#file-preview')).toHaveCount(0);
-  // 旧身份的 Task/Trace 不能留在遮罩后的 DOM 或可见文本里。
-  await expect(page.locator('#task-dock .task-dock-item')).toHaveCount(0);
-  await expect(page.locator('#task-trace-items .task-trace-item')).toHaveCount(0);
-  await expect(page.getByText(taskBody)).toHaveCount(0);
-  const taskItemsAfterRevoke = await page.locator('#task-dock .task-dock-item').count();
-  const traceItemsAfterRevoke = await page
-    .locator('#task-trace-items .task-trace-item')
-    .count();
   await expect
     .poll(() =>
       page.evaluate(() => (window as unknown as { __revokedObjectUrls: string[] }).__revokedObjectUrls),
@@ -1869,47 +1402,10 @@ test('撤权后遮住旧视图、关闭预览并释放 object URL；晚到历史
             (
               window as unknown as {
                 __agentNetworkRecoveryHost?: {
-                  cache: () => {
-                    room: number;
-                    roomTasks: number;
-                    removedRoom: number;
-                    removedRoomTasks: number;
-                  };
-                };
-              }
-            ).__agentNetworkRecoveryHost?.cache() ?? null,
-        ),
-      { timeout: 10_000 },
-    )
-    .toMatchObject({ roomTasks: 0 });
-  await expect
-    .poll(
-      () =>
-        page.evaluate(
-          () =>
-            (
-              window as unknown as {
-                __agentNetworkRecoveryHost?: {
-                  cache: () => { removedRoom: number; removedRoomTasks: number };
+                  cache: () => { removedRoom: number };
                 };
               }
             ).__agentNetworkRecoveryHost?.cache().removedRoom ?? 0,
-        ),
-      { timeout: 10_000 },
-    )
-    .toBeGreaterThan(0);
-  await expect
-    .poll(
-      () =>
-        page.evaluate(
-          () =>
-            (
-              window as unknown as {
-                __agentNetworkRecoveryHost?: {
-                  cache: () => { removedRoom: number; removedRoomTasks: number };
-                };
-              }
-            ).__agentNetworkRecoveryHost?.cache().removedRoomTasks ?? 0,
         ),
       { timeout: 10_000 },
     )
@@ -1926,8 +1422,6 @@ test('撤权后遮住旧视图、关闭预览并释放 object URL；晚到历史
     previewCount: await page.locator('#file-preview').count(),
     revokedObjectUrls: revokedUrls.length,
     lateContentCount: await page.getByText('LATE-PRIVATE-CONTENT').count(),
-    taskItemsAfterRevoke,
-    traceItemsAfterRevoke,
     streamOpens,
     streamAborts,
   }));

@@ -4,8 +4,8 @@ import { useSyncExternalStore } from 'react';
 /**
  * actor 头像的轻量缓存。
  *
- * 好友列表、会话列表与 `network_room_get` 成员都会带来 `avatar_url`；消息与
- * Task 摘要只持有 actor_id，因此这里把已加载的展示资料汇成一张内存表。
+ * 好友列表、会话列表与 `network_room_get` 成员都会带来 `avatar_url`；消息
+ * 只持有 actor_id，因此这里把已加载的展示资料汇成一张内存表。
  * 缓存不发起请求、不持有凭据，仅作为缺失头像时的回退来源；权威数据仍在
  * React Query 与 MCP 工具响应里。
  */
@@ -70,7 +70,7 @@ export function useActorAvatarRecord(
   );
 }
 
-/** 一次订阅整张表，供 Task 参与者等需要按多个 actor_id 查找的组件使用。 */
+/** 一次订阅整张表，供需要按多个 actor_id 查找的组件使用。 */
 export function useActorAvatarMap(): ReadonlyMap<string, ActorAvatarRecord> {
   return useSyncExternalStore(
     subscribe,

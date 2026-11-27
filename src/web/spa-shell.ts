@@ -6,8 +6,6 @@ import { MESSAGE_ACTIONS_STYLE } from './chat-message-actions-styles';
 import { MESSAGE_FILES_STYLE } from './chat-message-files-styles';
 import { MEMORY_STYLE } from './chat-memory-styles';
 import { MONITOR_STYLE } from './chat-monitor-styles';
-import { TASK_DOCK_STYLE } from './chat-task-dock-styles';
-import { TASK_TRACE_STYLE } from './chat-task-trace-styles';
 import { UPLOAD_STYLE } from './chat-upload-styles';
 import { DEVICE_HANDOFF_STYLE } from './device-handoff-styles';
 import { FOCUS_STYLE } from './focus-styles';
@@ -131,7 +129,7 @@ const SPA_STYLE = `${APP_STYLE}${DEVICE_HANDOFF_STYLE}${MEMORY_STYLE}${PWA_STYLE
 `;
 
 /** Chat 复用 Markdown、回执菜单、附件、文件、监控与画板样式。 */
-const CHAT_STYLE = `${SPA_STYLE}${MARKDOWN_STYLE}${MESSAGE_ACTIONS_STYLE}${MESSAGE_FILES_STYLE}${UPLOAD_STYLE}${FILES_STYLE}${MONITOR_STYLE}${TASK_TRACE_STYLE}${TASK_DOCK_STYLE}${DRAWBOARD_FALLBACK_STYLE}`;
+const CHAT_STYLE = `${SPA_STYLE}${MARKDOWN_STYLE}${MESSAGE_ACTIONS_STYLE}${MESSAGE_FILES_STYLE}${UPLOAD_STYLE}${FILES_STYLE}${MONITOR_STYLE}${DRAWBOARD_FALLBACK_STYLE}`;
 
 /**
  * 输出 React 壳 HTML。

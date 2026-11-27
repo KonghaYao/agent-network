@@ -1,7 +1,7 @@
 /**
  * 模块级身份代次。
  *
- * 切号/撤权时恢复遮罩会把 RoomTaskDock、ChatDialogsMount 等组件卸载；
+ * 切号/撤权时恢复遮罩会把 ChatDialogsMount 等组件卸载；
  * 组件内 `useRef` 随闭包冻结在旧身份，晚到的 mutation 回调仍会通过旧 ref
  * 校验，把旧身份的结果写进新身份的 React Query 缓存。代次必须存放在模块
  * 作用域：组件卸载不重置，页面刷新自然回到 0。

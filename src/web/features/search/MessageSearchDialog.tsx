@@ -1,5 +1,5 @@
 import { LensoBackendProvider, useBackendLease } from '../../app/lenso-runtime';
-import { Button, Checkbox, Label, SearchInput } from '../../app/lenso-controls';
+import { Button, Label, SearchInput } from '../../app/lenso-controls';
 import {
   useCallback,
   useEffect,
@@ -14,18 +14,17 @@ import {
 import { LIMITS } from '../../../contracts/limits';
 import type { McpError } from '../../lib/mcp-client';
 import { callTool } from '../../lib/mcp-client';
-import type { TaskSummary } from './TaskSummaryBar';
 import { Modal } from '../overlays/Modal';
-import { MessageSearchControls } from '../search/MessageSearchControls';
-import { MessageSearchSnippet } from '../search/MessageSearchSnippet';
+import { MessageSearchControls } from './MessageSearchControls';
+import { MessageSearchSnippet } from './MessageSearchSnippet';
 import type {
   LocateResult,
   MessageSearchHit,
   MessageSearchMode,
   MessageSearchScope,
   SearchNavigationTarget,
-} from '../search/message-search-types';
-import { useMessageSearchQuery } from '../search/useMessageSearchQuery';
+} from './message-search-types';
+import { useMessageSearchQuery } from './useMessageSearchQuery';
 
 interface ContextPage {
   items: {
@@ -66,7 +65,7 @@ const SEARCH_RESULT_STYLE: CSSProperties = {
 };
 
 /**
- * 搜索聊天记录：精确/模糊、当前会话/全部会话，以及“只看任务”。
+ * 搜索聊天记录：精确/模糊与当前会话/全部会话。
  *
  * 输入 300ms 防抖；中文输入法组合期间不发请求也不处理导航键。
  * 请求由 generation + AbortController 保护，旧响应不会覆盖新结果。
@@ -76,7 +75,6 @@ export function MessageSearchDialog({
   onOpenChange,
   roomId,
   token,
-  onOpenTask,
   onLocate,
   returnFocusRef,
 }: {
@@ -84,7 +82,6 @@ export function MessageSearchDialog({
   onOpenChange: (open: boolean) => void;
   roomId: string;
   token: string;
-  onOpenTask: (rootId: string, focusMessageId: string | null) => void;
   onLocate: (target: SearchNavigationTarget) => Promise<LocateResult>;
   returnFocusRef?: RefObject<HTMLElement | null>;
 }) {
@@ -92,7 +89,6 @@ export function MessageSearchDialog({
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<MessageSearchMode>('exact');
   const [scope, setScope] = useState<MessageSearchScope>('room');
-  const [taskOnly, setTaskOnly] = useState(false);
   const [composing, setComposing] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(-1);
   const [locating, setLocating] = useState(false);
@@ -116,17 +112,15 @@ export function MessageSearchDialog({
     query,
     mode,
     scope,
-    taskOnly,
     composing,
   });
-  const resultCount = taskOnly ? search.tasks.length : search.hits.length;
+  const resultCount = search.hits.length;
 
   useEffect(() => {
     if (!open) return;
     setQuery('');
     setMode('exact');
     setScope('room');
-    setTaskOnly(false);
     setComposing(false);
     composingRef.current = false;
     setSelectedIndex(-1);
@@ -265,21 +259,14 @@ export function MessageSearchDialog({
     [locating, mode, onLocate, query, scope],
   );
 
-  // 输入框 Enter 与结果按钮 Enter 走同一动作：任务打开抽屉，消息滚动/锚点/切房。
+  // 输入框 Enter 与结果按钮 Enter 走同一动作：滚动/锚点/切房。
   const activateResult = useCallback(
     (index: number) => {
       if (index < 0 || index >= resultCount) return;
-      if (taskOnly) {
-        const entry = search.tasks[index];
-        if (!entry) return;
-        onOpenTask(entry.task.root_message_id, entry.matches[0]?.message_id ?? null);
-        onOpenChange(false);
-        return;
-      }
       const item = search.hits[index];
       if (item) void locateHit(item);
     },
-    [locateHit, onOpenChange, onOpenTask, resultCount, search.hits, search.tasks, taskOnly],
+    [locateHit, resultCount, search.hits],
   );
 
   const submit = (event: FormEvent) => {
@@ -342,14 +329,12 @@ export function MessageSearchDialog({
     if (search.phase === 'loading-more') return '正在加载更多…';
     if (search.error) return search.error;
     if (search.phase === 'scan-limited-empty') return '本批未命中，可继续搜索更早记录';
-    if (search.phase === 'empty') return taskOnly ? '没有匹配的任务' : '没有找到匹配消息';
+    if (search.phase === 'empty') return '没有找到匹配消息';
     if (resultCount > 0) {
-      const count = taskOnly ? `已找到 ${resultCount} 个任务` : `已找到 ${resultCount} 条消息`;
       const selected =
         selectedIndex >= 0 && selectedIndex < resultCount ? `第 ${selectedIndex + 1} / ` : '';
-      const truncated = search.truncated ? ' · 命中过多，仅显示部分任务' : '';
       const more = search.hasMore ? ' · 还有更早记录可搜索' : '';
-      return `${selected}${count}${truncated}${more}`;
+      return `${selected}已找到 ${resultCount} 条消息${more}`;
     }
     return '';
   })();
@@ -360,9 +345,7 @@ export function MessageSearchDialog({
   const emptyText =
     search.phase === 'scan-limited-empty'
       ? '本批未命中，可继续搜索更早记录'
-      : taskOnly
-        ? '没有匹配的任务'
-        : '没有找到匹配消息';
+      : '没有找到匹配消息';
 
   return (
     <LensoBackendProvider backend={backend}>
@@ -419,7 +402,6 @@ export function MessageSearchDialog({
           <MessageSearchControls
             mode={mode}
             scope={scope}
-            taskOnly={taskOnly}
             onModeChange={(next) => {
               setMode(next);
               setLocateError('');
@@ -427,36 +409,16 @@ export function MessageSearchDialog({
             }}
             onScopeChange={(next) => {
               setScope(next);
-              if (next === 'all') setTaskOnly(false);
               setLocateError('');
               resetSelection();
             }}
           />
           <p id="message-search-mode-help" className="message-search-help">
-            {taskOnly
-              ? '任务搜索沿用关键词规则，不支持精确/模糊切换'
-              : mode === 'exact'
-                ? '连续原文匹配，忽略英文字母大小写'
-                : '字符按顺序出现即可命中；稀疏时继续搜索更早记录'}
+            {mode === 'exact'
+              ? '连续原文匹配，忽略英文字母大小写'
+              : '字符按顺序出现即可命中；稀疏时继续搜索更早记录'}
           </p>
           <div className="message-search-actions">
-            <Checkbox
-              className="message-search-filter"
-              data-task-only
-              checked={taskOnly}
-              disabled={scope === 'all'}
-              onCheckedChange={(checked) => {
-                setTaskOnly(checked);
-                resetSelection();
-              }}
-            >
-              只看任务
-            </Checkbox>
-            {scope === 'all' ? (
-              <span id="message-search-task-note" className="message-search-filter-note">
-                全部会话不支持只看任务
-              </span>
-            ) : null}
             <Button className="primary" type="submit" disabled={search.busy}>
               {search.busy ? '搜索中…' : '搜索'}
             </Button>
@@ -487,96 +449,66 @@ export function MessageSearchDialog({
               {emptyText}
             </p>
           ) : null}
-          {taskOnly
-            ? search.tasks.map((entry, index) => (
-                <Button
-                  type="button"
-                  className={`task-search-result${selectedIndex === index ? ' is-active' : ''}`}
-                  style={SEARCH_RESULT_STYLE}
-                  key={entry.task.root_message_id}
-                  data-search-index={index}
-                  data-active={selectedIndex === index ? 'true' : 'false'}
-                  aria-current={selectedIndex === index ? 'true' : undefined}
-                  onFocus={() => setSelectedIndex(index)}
-                  onClick={() => {
-                    onOpenTask(
-                      entry.task.root_message_id,
-                      entry.matches[0]?.message_id ?? null,
-                    );
-                    onOpenChange(false);
-                  }}
-                >
-                  <span className="task-search-main">
-                    <span className="task-search-top">
-                      <strong>{entry.task.preview || 'Task'}</strong>
-                      <span className="task-search-count">{entry.task.message_count} 消息</span>
-                    </span>
-                    <span className="task-search-preview">
-                      {entry.matches[0]?.snippet || entry.task.preview}
-                    </span>
-                  </span>
-                </Button>
-              ))
-            : search.hits.map((item, index) => (
-                <article
-                  className={`message-search-result${selectedIndex === index ? ' is-active' : ''}`}
-                  key={`${item.room_id}:${item.message_id}`}
-                  data-search-index={index}
-                  data-active={selectedIndex === index ? 'true' : 'false'}
-                  aria-current={selectedIndex === index ? 'true' : undefined}
-                >
-                  <Button
-                    type="button"
-                    className="message-search-locate"
-                    variant="borderless"
-                    style={{ ...SEARCH_RESULT_STYLE, minHeight: 0, padding: 0 }}
-                    data-search-locate
-                    disabled={locating}
-                    onFocus={() => setSelectedIndex(index)}
-                    onClick={() => void locateHit(item)}
-                  >
-                    <span className="message-search-meta">
-                      {scope === 'all' ? (
-                        <>
-                          <span className="message-search-room">{item.room_display_name}</span>
-                          <span className="message-search-kind">
-                            {item.room_kind === 'group' ? '群聊' : '私聊'}
-                          </span>
-                          <span className="message-search-separator" aria-hidden="true">
-                            ·
-                          </span>
-                        </>
-                      ) : null}
-                      <strong>{item.sender_name}</strong>
+          {search.hits.map((item, index) => (
+            <article
+              className={`message-search-result${selectedIndex === index ? ' is-active' : ''}`}
+              key={`${item.room_id}:${item.message_id}`}
+              data-search-index={index}
+              data-active={selectedIndex === index ? 'true' : 'false'}
+              aria-current={selectedIndex === index ? 'true' : undefined}
+            >
+              <Button
+                type="button"
+                className="message-search-locate"
+                variant="borderless"
+                style={{ ...SEARCH_RESULT_STYLE, minHeight: 0, padding: 0 }}
+                data-search-locate
+                disabled={locating}
+                onFocus={() => setSelectedIndex(index)}
+                onClick={() => void locateHit(item)}
+              >
+                <span className="message-search-meta">
+                  {scope === 'all' ? (
+                    <>
+                      <span className="message-search-room">{item.room_display_name}</span>
+                      <span className="message-search-kind">
+                        {item.room_kind === 'group' ? '群聊' : '私聊'}
+                      </span>
                       <span className="message-search-separator" aria-hidden="true">
                         ·
                       </span>
-                      <time>{timeLabel(item.created_at)}</time>
-                    </span>
-                    <span className="message-search-snippet">
-                      <MessageSearchSnippet
-                        text={item.snippet || item.preview || '（消息已撤回）'}
-                        ranges={item.match_ranges}
-                      />
-                    </span>
-                  </Button>
-                  <div className="message-search-result-actions">
-                    <Button
-                      type="button"
-                      className="message-search-context"
-                      variant="bordered"
-                      size="sm"
-                      data-search-context
-                      onClick={(event) => {
-                        contextTrigger.current = event.currentTarget;
-                        setContextTarget({ roomId: item.room_id, messageId: item.message_id });
-                      }}
-                    >
-                      上下文
-                    </Button>
-                  </div>
-                </article>
-              ))}
+                    </>
+                  ) : null}
+                  <strong>{item.sender_name}</strong>
+                  <span className="message-search-separator" aria-hidden="true">
+                    ·
+                  </span>
+                  <time>{timeLabel(item.created_at)}</time>
+                </span>
+                <span className="message-search-snippet">
+                  <MessageSearchSnippet
+                    text={item.snippet || item.preview || '（消息已撤回）'}
+                    ranges={item.match_ranges}
+                  />
+                </span>
+              </Button>
+              <div className="message-search-result-actions">
+                <Button
+                  type="button"
+                  className="message-search-context"
+                  variant="bordered"
+                  size="sm"
+                  data-search-context
+                  onClick={(event) => {
+                    contextTrigger.current = event.currentTarget;
+                    setContextTarget({ roomId: item.room_id, messageId: item.message_id });
+                  }}
+                >
+                  上下文
+                </Button>
+              </div>
+            </article>
+          ))}
         </div>
         {search.hasMore ? (
           <Button

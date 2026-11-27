@@ -99,8 +99,6 @@ export function TimelineVirtual({
   onQuote,
   onStatus,
   onMarkRead,
-  onToggleTask,
-  onOpenTask,
   onOpenFile,
   onRecall,
   onReedit,
@@ -219,7 +217,7 @@ export function TimelineVirtual({
     [indexState.items.length],
   );
 
-  // 搜索/引用/Task 跳转共用：只有目标在已加载数据窗口内才滚动。
+  // 搜索/引用跳转共用：只有目标在已加载数据窗口内才滚动。
   const jumpToMessage = useCallback(
     (messageId: string) => {
       const index = indexState.items.findIndex(
@@ -498,8 +496,6 @@ export function TimelineVirtual({
               searchFlash={flashId === item.message_id}
               onQuote={onQuote}
               onStatus={onStatus}
-              onToggleTask={onToggleTask}
-              onOpenTask={onOpenTask}
               onOpenFile={onOpenFile}
               onRecall={onRecall}
               onReedit={onReedit}
@@ -524,13 +520,11 @@ export function TimelineVirtual({
       moderationBusy,
       onForward,
       onOpenFile,
-      onOpenTask,
       onQuote,
       onRecall,
       onReedit,
       onSetPinned,
       onStatus,
-      onToggleTask,
       pinnedMessageIds,
       room,
       searchNavigation?.activeMessageId,
