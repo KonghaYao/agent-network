@@ -308,6 +308,16 @@ export const GUARDS = {
     code: 'NOT_FOUND',
     message: '消息不存在或当前不可见',
   },
+  focusArchiveConflict: {
+    table: 'guard_focus_archive_conflict',
+    code: 'CONFLICT',
+    message: '事项已归档，不能再更新',
+  },
+  focusStaleAttempt: {
+    table: 'guard_focus_stale_attempt',
+    code: 'STALE_ATTEMPT',
+    message: '任务秘书的启用代次、作业租约或来源修订已失效',
+  },
 } as const satisfies Record<string, GuardDefinition>;
 
 export type GuardName = keyof typeof GUARDS;

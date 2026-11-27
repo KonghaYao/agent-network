@@ -132,6 +132,7 @@ import { DEFAULT_MEMORY_HOST_POLICY } from '../memory/host-bridge';
 import type { RegistrationServer } from './registration';
 import { register } from './tool-registration';
 import { registerContactTools } from './contact-tools';
+import { registerFocusTools } from './focus-tools';
 import { registerRoomTools } from './room-tools';
 import { registerMessageTools, type ToolHooks } from './message-tools';
 
@@ -611,4 +612,5 @@ export function registerTools(
   registerContactTools(server, db, principal, origin);
   registerRoomTools(server, env, principal);
   registerMessageTools(server, env, principal, memory, hooks);
+  registerFocusTools(server, { db: env.DB, principal, env }, register);
 }

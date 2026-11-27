@@ -47,14 +47,15 @@
     "0048_message_task_completion.sql",
     "0049_message_global_order_index.sql",
     "0050_actor_avatar.sql",
-    "0051_group_message_moderation.sql"
+    "0051_group_message_moderation.sql",
+    "0052_focus_kanban.sql"
   ],
-  "migrationsDigest": "8cb35f085e2faa8b8ed624cd9450c693b4e47c79cb8583c69f94acb15514d14f",
+  "migrationsDigest": "6720bd3cbb62018a5224ed0463665bef4306d5d7aa0f6e1588f2df78ab3960d9",
   "counts": {
-    "tables": 124,
-    "guardTables": 51,
+    "tables": 134,
+    "guardTables": 53,
     "messageSearchTables": 5,
-    "indexes": 222,
+    "indexes": 244,
     "triggers": 7
   },
   "tables": {
@@ -739,6 +740,237 @@
       ],
       "sqlDigest": "e60c57ea0cd0ee519ca00cb6050f3cbf54b8005c8465ff2e4d234003dc2c3e01"
     },
+    "focus_bindings": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "owner_actor_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "secretary_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "provisioning_key|TEXT|nn=1|d=null|pk=0|h=0",
+        "session_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "root_session_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "status|TEXT|nn=1|d=null|pk=0|h=0",
+        "generation|INTEGER|nn=1|d=1|pk=0|h=0",
+        "event_from_seq|INTEGER|nn=1|d=0|pk=0|h=0",
+        "enabled_at|INTEGER|nn=1|d=0|pk=0|h=0",
+        "paused_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=0|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=0|pk=0|h=0"
+      ],
+      "indexes": [
+        "sqlite_autoindex_focus_bindings_1|u=1|o=pk|p=0|cols=owner_actor_id|desc=0",
+        "sqlite_autoindex_focus_bindings_2|u=1|o=u|p=0|cols=secretary_actor_id|desc=0",
+        "sqlite_autoindex_focus_bindings_3|u=1|o=u|p=0|cols=provisioning_key|desc=0",
+        "sqlite_autoindex_focus_bindings_4|u=1|o=u|p=0|cols=session_id|desc=0"
+      ],
+      "foreignKeys": [
+        "owner_actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none",
+        "secretary_actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(generation>=1)",
+        "(status in('provisioning','active','paused','failed'))"
+      ],
+      "sqlDigest": "613ebf1f5c6ec824de06d60b96b89f58dfcd878615a399463de21fef26ae1498"
+    },
+    "focus_candidates": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "candidate_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "owner_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "job_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "source_kind|TEXT|nn=1|d=null|pk=0|h=0",
+        "event_seq|INTEGER|nn=1|d=null|pk=0|h=0",
+        "room_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "message_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "delivery_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "source_key|TEXT|nn=1|d=null|pk=0|h=0",
+        "reason|TEXT|nn=1|d=''|pk=0|h=0",
+        "state|TEXT|nn=1|d='pending'|pk=0|h=0",
+        "decision|TEXT|nn=0|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=0|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=0|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_focus_candidates_job|u=0|o=c|p=0|cols=job_id,state|desc=0,0",
+        "idx_focus_candidates_pending|u=0|o=c|p=0|cols=owner_actor_id,state,event_seq|desc=0,0,0",
+        "sqlite_autoindex_focus_candidates_1|u=1|o=pk|p=0|cols=candidate_id|desc=0",
+        "sqlite_autoindex_focus_candidates_2|u=1|o=u|p=0|cols=owner_actor_id,event_seq,source_key|desc=0,0,0"
+      ],
+      "foreignKeys": [
+        "owner_actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(state in('pending','assigned','consumed','skipped'))"
+      ],
+      "sqlDigest": "1e998188c4653c9f6e6c260d9e75dd1cfb46f263f99a283aff105ff5846a36ba"
+    },
+    "focus_delivery_claims": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "delivery_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "room_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "message_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "recipient_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "claimed_by|TEXT|nn=1|d=null|pk=0|h=0",
+        "attempt|INTEGER|nn=1|d=0|pk=0|h=0",
+        "event_seq|INTEGER|nn=1|d=0|pk=0|h=0",
+        "claimed_at|INTEGER|nn=1|d=0|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_focus_delivery_claims_recipient|u=0|o=c|p=0|cols=recipient_actor_id,event_seq|desc=0,0",
+        "sqlite_autoindex_focus_delivery_claims_1|u=1|o=pk|p=0|cols=delivery_id|desc=0"
+      ],
+      "foreignKeys": [
+        "recipient_actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [],
+      "sqlDigest": "0fbd1a02773be34bd9a2a7cbd26b7024c59f44ca1eca72cc87ba663d17312b76"
+    },
+    "focus_evidence": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "evidence_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "item_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "owner_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "source_kind|TEXT|nn=1|d=null|pk=0|h=0",
+        "source_key|TEXT|nn=1|d=null|pk=0|h=0",
+        "room_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "message_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "delivery_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "source_revision|INTEGER|nn=1|d=0|pk=0|h=0",
+        "purpose|TEXT|nn=1|d=null|pk=0|h=0",
+        "occurred_at|INTEGER|nn=1|d=0|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=0|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_focus_evidence_item|u=0|o=c|p=0|cols=item_id,created_at,evidence_id|desc=0,0,0",
+        "sqlite_autoindex_focus_evidence_1|u=1|o=pk|p=0|cols=evidence_id|desc=0",
+        "sqlite_autoindex_focus_evidence_2|u=1|o=u|p=0|cols=item_id,source_key,purpose|desc=0,0,0"
+      ],
+      "foreignKeys": [
+        "item_id->focus_items.item_id|on_update=no action|on_delete=no action|match=none",
+        "owner_actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(source_kind in('message','delivery'))"
+      ],
+      "sqlDigest": "243cde1b14f4ec0bc13a9362c8bc1e99bd8b4017021813a7b5606dcdd62d2ab9"
+    },
+    "focus_items": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "item_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "owner_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "secretary_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "title|TEXT|nn=1|d=''|pk=0|h=0",
+        "column_key|TEXT|nn=1|d=null|pk=0|h=0",
+        "next_step|TEXT|nn=1|d=''|pk=0|h=0",
+        "waiting_on|TEXT|nn=0|d=null|pk=0|h=0",
+        "due_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "due_text|TEXT|nn=0|d=null|pk=0|h=0",
+        "summary|TEXT|nn=1|d=''|pk=0|h=0",
+        "version|INTEGER|nn=1|d=1|pk=0|h=0",
+        "archived_at|INTEGER|nn=0|d=null|pk=0|h=0",
+        "archived_by|TEXT|nn=0|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=0|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=0|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_focus_items_owner|u=0|o=c|p=0|cols=owner_actor_id,archived_at,column_key,updated_at,item_id|desc=0,0,0,1,1",
+        "sqlite_autoindex_focus_items_1|u=1|o=pk|p=0|cols=item_id|desc=0"
+      ],
+      "foreignKeys": [
+        "archived_by->actors.actor_id|on_update=no action|on_delete=no action|match=none",
+        "owner_actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none",
+        "secretary_actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "((archived_at is null and archived_by is null)or(archived_at is not null and archived_by is not null))",
+        "(column_key in('needs_me','tracking','done'))",
+        "(version>=1)"
+      ],
+      "sqlDigest": "eedbc490a507b576933b499253f8c62cd3773b7a01afd8e1574b388a3b52d3b7"
+    },
+    "focus_jobs": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "job_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "owner_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "secretary_actor_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "attempt_ref|TEXT|nn=1|d=null|pk=0|h=0",
+        "submission_key|TEXT|nn=1|d=null|pk=0|h=0",
+        "status|TEXT|nn=1|d=null|pk=0|h=0",
+        "generation|INTEGER|nn=1|d=null|pk=0|h=0",
+        "event_from_seq|INTEGER|nn=1|d=0|pk=0|h=0",
+        "event_to_seq|INTEGER|nn=1|d=0|pk=0|h=0",
+        "turn_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "input_id|TEXT|nn=0|d=null|pk=0|h=0",
+        "lease_until|INTEGER|nn=0|d=null|pk=0|h=0",
+        "attempt_count|INTEGER|nn=1|d=0|pk=0|h=0",
+        "last_error|TEXT|nn=0|d=null|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=0|pk=0|h=0",
+        "updated_at|INTEGER|nn=1|d=0|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_focus_jobs_one_active|u=1|o=c|p=1|cols=owner_actor_id|desc=0",
+        "sqlite_autoindex_focus_jobs_1|u=1|o=pk|p=0|cols=job_id|desc=0",
+        "sqlite_autoindex_focus_jobs_2|u=1|o=u|p=0|cols=attempt_ref|desc=0",
+        "sqlite_autoindex_focus_jobs_3|u=1|o=u|p=0|cols=submission_key|desc=0"
+      ],
+      "foreignKeys": [
+        "owner_actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none",
+        "secretary_actor_id->actors.actor_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [
+        "(status in('queued','submitted','running','waiting','completed','failed','cancelled'))"
+      ],
+      "sqlDigest": "1ae9243c7550b32a1d595a152c733961ccfdf5cdaa688ab4773a4d97560b12ce"
+    },
+    "focus_revisions": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "revision_id|TEXT|nn=0|d=null|pk=1|h=0",
+        "item_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "version|INTEGER|nn=1|d=null|pk=0|h=0",
+        "decision_id|TEXT|nn=1|d=null|pk=0|h=0",
+        "changes_json|TEXT|nn=1|d='{}'|pk=0|h=0",
+        "reason|TEXT|nn=1|d=''|pk=0|h=0",
+        "evidence_json|TEXT|nn=1|d='[]'|pk=0|h=0",
+        "created_at|INTEGER|nn=1|d=0|pk=0|h=0"
+      ],
+      "indexes": [
+        "idx_focus_revisions_item|u=0|o=c|p=0|cols=item_id,version,revision_id|desc=0,0,0",
+        "sqlite_autoindex_focus_revisions_1|u=1|o=pk|p=0|cols=revision_id|desc=0",
+        "sqlite_autoindex_focus_revisions_2|u=1|o=u|p=0|cols=decision_id|desc=0"
+      ],
+      "foreignKeys": [
+        "item_id->focus_items.item_id|on_update=no action|on_delete=no action|match=none"
+      ],
+      "checks": [],
+      "sqlDigest": "bd961bc11067a9872ebdc5d5ce1b1c3c88249c4081f1ba1c563fd63465172b9f"
+    },
+    "focus_scan_state": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "id|INTEGER|nn=0|d=null|pk=1|h=0",
+        "event_seq|INTEGER|nn=1|d=0|pk=0|h=0",
+        "last_scan_at|INTEGER|nn=1|d=0|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(id=1)"
+      ],
+      "sqlDigest": "66774b31e5522f557e610afce6177eccee5c8d42447c1f5ad365b1fab99ccb84"
+    },
     "guard_actor_disabled": {
       "type": "table",
       "virtual": false,
@@ -933,6 +1165,32 @@
         "(x=0)"
       ],
       "sqlDigest": "f776444da08b53dfa6e38c2444b9d4025ea5e1d63131c5b04474d15de36f8bab"
+    },
+    "guard_focus_archive_conflict": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "e16de6246fceeca1b6fc1ecbc7f2204002e2e12e60d3061c5a39477f5e839bb0"
+    },
+    "guard_focus_stale_attempt": {
+      "type": "table",
+      "virtual": false,
+      "columns": [
+        "x|INTEGER|nn=1|d=null|pk=0|h=0"
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "checks": [
+        "(x=0)"
+      ],
+      "sqlDigest": "769585be8514c7b65dd5f69573198e01033a3913ec194b9e0c884b2ff34dd8f4"
     },
     "guard_friend_required": {
       "type": "table",
@@ -2908,5 +3166,5 @@
     "message_search_fts_ai": "c0d538ed07edf48bcc8dfff50d1adf2158b1ef1c75e528640877b7ac08b0fe71",
     "message_search_fts_au": "af71582b06026e26c1b0acb0e15b6d4e504f8b85450ac9351d70042408abbaf7"
   },
-  "digest": "b4c96a7d5c7a334231c0f1533a8d71551c46894c9c02e0f52d3e31518f5ff6c7"
+  "digest": "d23a76bad14172995e2861c248c831459b1229401f375cbf5cb55bd4efc21195"
 }

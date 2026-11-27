@@ -6,7 +6,7 @@ import { stableStringify } from '../storage/db';
 import { memoryCatalogSchema } from '../memory/tool-schemas';
 import type { MemoryCapabilityCatalog } from '../memory/capability-catalog';
 
-export const CLIENT_CONTRACT_VERSION = '2026-11-13.2';
+export const CLIENT_CONTRACT_VERSION = '2026-11-27.1';
 export const MCP_PROTOCOL_VERSION = '2026-07-28';
 
 /** Keep the complete bootstrap below connector instruction truncation limits. */

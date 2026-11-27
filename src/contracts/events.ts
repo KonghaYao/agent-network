@@ -16,6 +16,8 @@ export const MESSAGE_TASK_MARKED_EVENT = 'message_task_marked';
 export const MESSAGE_TASK_UNMARKED_EVENT = 'message_task_unmarked';
 /** 消息式 Task 起点被标记完成；与 delivery 完成无关，不推进 head。 */
 export const MESSAGE_TASK_COMPLETED_EVENT = 'message_task_completed';
+/** Task Focus 看板变化；只写 actor scope 提示，不写 inbox、不推进 head。 */
+export const FOCUS_UPDATED_EVENT = 'focus_updated';
 
 /**
  * Callback endpoint 验证失败的错误码。

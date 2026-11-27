@@ -799,6 +799,15 @@ export const LIMITS = {
   memoryPanelDateSpanDays: 366,
   /** 列表 offset 上限，避免深分页放大上游压力。 */
   memoryPanelOffsetMax: 5_000,
+  /** Task Focus 看板每页默认 / 最大条数。 */
+  focusListPageDefault: 20,
+  focusListPageMax: 50,
+  /** 详情证据摘录字符上限（码点）；完整正文仍走消息读取。 */
+  focusEvidenceExcerptChars: 600,
+  /** 单次作业最多读取的候选批大小。 */
+  focusCandidateBatchMax: 50,
+  /** 列表搜索词字符上限。 */
+  focusQueryMax: 200,
 } as const;
 
 export function clampPage(value: number | undefined, fallback: number, max: number): number {
