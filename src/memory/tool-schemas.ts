@@ -183,6 +183,12 @@ export const memoryStatusOutputSchema = z.looseObject({
     retain_pending: z.number(),
     contexts_ready: z.number(),
   }),
+  backfill: z.looseObject({
+    space_catchup_enabled: z.boolean(),
+    space_catchup_pending: z.boolean(),
+    space_catchup_completed: z.boolean(),
+    window_enabled: z.boolean(),
+  }),
   unsupported: z.array(z.string()).readonly(),
 });
 

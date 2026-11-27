@@ -55,6 +55,10 @@ export interface Env {
    * 缺省开（`MEMORY_PROVISION=0` 回滚），已建空间保留。
    */
   MEMORY_PROVISION?: boolean;
+  /** 部署配置快照：整点窗口回填是否启用（只读展示，不参与授权）。 */
+  MEMORY_BACKFILL_ENABLED?: boolean;
+  /** 部署配置快照：空间首次 catch-up 是否启用（只读展示，不参与授权）。 */
+  MEMORY_SPACE_CATCHUP_ENABLED?: boolean;
   /**
    * Phase C：delivery 记忆参考包开关；缺省开。
    *

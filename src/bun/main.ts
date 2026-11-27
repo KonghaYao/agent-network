@@ -7,7 +7,7 @@ import { LIMITS } from '../contracts/limits';
 import { createDrive } from '../drive/service';
 import { MemoryRuntime } from '../memory/runtime';
 import { MemoryIntegration } from '../memory/integration';
-import { MemoryBackfill } from '../memory/backfill';
+import { MemoryBackfill, memoryBackfillFlagsFromEnv } from '../memory/backfill';
 import { MemoryProvisioner } from '../memory/provision';
 import { memoryEngineInfo, type MemoryEngineStatus } from '../memory/capability-catalog';
 import { memoryHostPolicyFromEnv } from '../memory/host-bridge';
@@ -182,6 +182,11 @@ envRef = env;
 // Phase A：空间 provisioning 默认开；MEMORY_PROVISION=0 回滚。缺失 MEMORY
 // 运行时（MEMORY_ENABLED!=1）时 login/message 入口仍保持 no-op。
 env.MEMORY_PROVISION = process.env.MEMORY_PROVISION !== '0';
+// 空间首次 catch-up 默认开；MEMORY_SPACE_CATCHUP=0 可立即停止新补历史。
+// 整点窗口回填代码默认仍关闭，生产需要显式 MEMORY_BACKFILL=1 才持续捕获新消息。
+const memoryBackfillFlags = memoryBackfillFlagsFromEnv(process.env);
+const memoryWindowBackfillEnabled = memoryBackfillFlags.windowEnabled;
+const memorySpaceCatchupEnabled = memoryBackfillFlags.spaceCatchup;
 
 // Phase C：delivery 参考包默认开；off/0/false/login 关闭本阶段的 message pack。
 // 关闭只影响主动注入，不删除已建空间，也不回滚已落库的来源/经历。
@@ -291,25 +296,30 @@ if (process.env.MEMORY_ENABLED === '1') {
   }
 }
 
-// 只读 insight 始终构造：关闭 Memory 时仍先做授权再返回 panel_disabled，
-// 不因降级状态绕过“谁能看”的判断。
-env.MEMORY_INSIGHT = new MemoryInsightService({
-  db: d1,
-  reader: insightReader,
-  memoryEnabled: memoryRuntime !== undefined,
-});
+// 窗口回填关闭时新消息不会自动进入记忆；启动即提示，避免把“只补了历史”
+// 误认为持续捕获。
+if (process.env.MEMORY_ENABLED === '1' && !memoryWindowBackfillEnabled) {
+  console.warn(
+    'memory window backfill disabled (MEMORY_BACKFILL!=1): new messages will not be captured automatically; space catch-up only covers history. Set MEMORY_BACKFILL=1 for continuous capture.',
+  );
+}
 
 // MF10：作业 tick、unknown 对账由 MemoryIntegration 统一调度；tick 内部保证
-// 单轮不重入。定时回填默认关闭，MEMORY_BACKFILL=1 才把最近窗口入队。
+// 单轮不重入。窗口回填默认关闭（MEMORY_BACKFILL=1 开启）；空间首次 catch-up
+// 默认开启（MEMORY_SPACE_CATCHUP=0 关闭）。两者都关时不构造 runner。
 if (memoryRuntime) {
-  if (process.env.MEMORY_BACKFILL === '1') {
+  if (memoryWindowBackfillEnabled || memorySpaceCatchupEnabled) {
     if (env.MEMORY_ENGINE?.status === 'ready') {
       memoryBackfill = new MemoryBackfill({
         db: d1,
         instanceId: memoryRuntime.instanceId!,
         capture: () => memoryRuntime!.captureEnabled,
+        spaceCatchup: memorySpaceCatchupEnabled,
+        windowEnabled: memoryWindowBackfillEnabled,
       });
-      console.log('memory backfill enabled (hourly aligned window)');
+      console.log(
+        `memory backfill enabled (window=${memoryWindowBackfillEnabled ? 'hourly' : 'off'}, space_catchup=${memorySpaceCatchupEnabled ? 'on' : 'off'})`,
+      );
     } else {
       // stub/unavailable 时不制造必然失败的 retain 作业。
       console.warn('memory backfill skipped: engine not ready');
@@ -355,6 +365,22 @@ if (memoryRuntime) {
   });
   await memoryIntegration.start();
 }
+
+// 状态展示只反映实际会运行的 runner：引擎未就绪、Memory 关闭或两个开关都关时
+// 都显示为未启用，避免把“配置想要”误报成“正在补历史”。
+const effectiveWindowBackfill = memoryBackfill !== undefined && memoryWindowBackfillEnabled;
+const effectiveSpaceCatchup = memoryBackfill !== undefined && memorySpaceCatchupEnabled;
+env.MEMORY_BACKFILL_ENABLED = effectiveWindowBackfill;
+env.MEMORY_SPACE_CATCHUP_ENABLED = effectiveSpaceCatchup;
+// 只读 insight 始终构造：关闭 Memory 时仍先做授权再返回 panel_disabled，
+// 不因降级状态绕过“谁能看”的判断。
+env.MEMORY_INSIGHT = new MemoryInsightService({
+  db: d1,
+  reader: insightReader,
+  memoryEnabled: memoryRuntime !== undefined,
+  spaceCatchupEnabled: effectiveSpaceCatchup,
+  windowEnabled: effectiveWindowBackfill,
+});
 
 // 启动扫描：崩溃遗留的 online 转为 pending/inferred；已到期的 pending 立即确认。
 await presence.recover();

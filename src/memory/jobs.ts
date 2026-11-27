@@ -33,6 +33,10 @@ export const MEMORY_CURSOR_KINDS = {
   backfillWindowTo: 'backfill_window_to',
   /** 回填：已检查到的最大 messages.rowid；恢复时回看安全行数。 */
   backfillScanRowid: 'backfill_scan_rowid',
+  /** 空间首次 catch-up：已扫描到的最大 messages.rowid（scope=space）。 */
+  spaceCatchupRowid: 'space_catchup_rowid',
+  /** 空间首次 catch-up：1 表示该空间已完成初始补历史。 */
+  spaceCatchupDone: 'space_catchup_done',
   /** provisioning sweep：已处理的最大 actors.rowid；扫完一轮后复位。 */
   provisionActorRowid: 'actor_rowid',
 } as const;

@@ -2,7 +2,7 @@
   "version": 1,
   "protocolVersion": "2026-07-28",
   "toolCount": 143,
-  "toolsetSha256": "feb8656d3ef8329e52c5b8ae030e2e220ba8805473651d7c6898d4ccfa6889ee",
+  "toolsetSha256": "e568b447d58af00370cfe0a230a10460b7166af3f0699c9111e071c1ce533cc1",
   "instructionsSha256": "ec26290a0a6cbe945cdcad7dc8d860207013de90817b700422d26c8214e577e8",
   "frames": [
     {
@@ -207,8 +207,8 @@
       "response": {
         "result": {
           "toolCount": 143,
-          "toolset_sha256": "feb8656d3ef8329e52c5b8ae030e2e220ba8805473651d7c6898d4ccfa6889ee",
-          "listing_sha256": "39eed0bafbd1aa958512d7ac4cacc8f1a7654b1fdb889601e3fcfa5d291f7724",
+          "toolset_sha256": "e568b447d58af00370cfe0a230a10460b7166af3f0699c9111e071c1ce533cc1",
+          "listing_sha256": "a1b24bb4698ee186d905be012cb57ef43bf9a7d2a5bb1fa1ebb2e31e45fe43e6",
           "tools": [
             {
               "name": "network_issue_token",
@@ -640,7 +640,7 @@
             },
             {
               "name": "network_memory_status",
-              "digest": "9c43deca47920fe87b3899ec2a2a9a813abf4c948724d864d0a0fd7c78cbfc88"
+              "digest": "86acaa9243999f319fc9deea2e5ffd4e75e3b910c0c40116707930cfe3790c31"
             },
             {
               "name": "network_memory_context_pack",
@@ -720,27 +720,27 @@
             },
             {
               "name": "network_agent_memory_overview",
-              "digest": "447837255a9687c1e6873c9722054b3c7a6308d8dccbe75e8d51a28e9b29c15c"
+              "digest": "b68d6225d733880c0531471a0226548155a6b6e282a4eb0984f83355ebaf8745"
             },
             {
               "name": "network_agent_memory_graph",
-              "digest": "ccc39ee19106a76f0cf11268ef0b6947bfa34c5c9f36a61bcbb108f99f05a448"
+              "digest": "54d21a88fd67d88fd3558a45698887136847fc17f6ed58ca47cf07f1177a478b"
             },
             {
               "name": "network_agent_memory_list",
-              "digest": "55d1c20f6b52557b3ccf68560011230a9c9f5c0422adbc4baab005884057a6b7"
+              "digest": "9cd726e05dccb0b9a27b0443a9ecfa7d3826a90ba8c81f82fcc594b37eee7eab"
             },
             {
               "name": "network_agent_memory_timeline",
-              "digest": "e265e6f1da1f067361719bf0c72d876c12f20b51efd8c2d5570331d52c855b3e"
+              "digest": "2b92ffcbc53da82861f7dc6902a77330e9fc5bc34b366ab2877dddfddda656ba"
             },
             {
               "name": "network_agent_memory_get",
-              "digest": "b8173e1b46c1e6d98f247450c54da51d8c9865c976eff6e3dd0bd1e822e304ee"
+              "digest": "70d595a79743994a0687e375ba70b2d2414c3af8b9a599ba44ab206ba81252e5"
             },
             {
               "name": "network_agent_memory_entities",
-              "digest": "bf834a256aeb8edc8b293a6905d472e8c0f49512eca785d0ba44140bcba9acf5"
+              "digest": "52d21e6c4d939c06beacbb8afa8f178f53ecebf2341d946a50042bcfda9645c5"
             },
             {
               "name": "drive_file_info",
@@ -814,7 +814,7 @@
           "content": [
             {
               "type": "text",
-              "text": "{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"agent_session_id\":\"sess_parity_owner\",\"name\":\"Parity Owner\",\"metadata\":{},\"pending_count\":0,\"inbox_head_seq\":\"0\",\"created_at\":\"<ts>\",\"share_url\":\"<origin>/a/sess_parity_owner\",\"avatar_url\":null,\"resources\":[\"agentnet://stream\"],\"service\":{\"protocol_version\":\"2026-07-28\",\"contract_version\":\"2026-11-13.2\",\"toolset_sha256\":\"feb8656d3ef8329e52c5b8ae030e2e220ba8805473651d7c6898d4ccfa6889ee\",\"tool_count\":143,\"guide_tool\":\"network_client_guide\",\"files_enabled\":true,\"events_enabled\":false,\"memory\":{\"enabled\":false,\"contract_version\":\"2026-11-10.1\",\"capture\":false,\"engine_status\":\"unavailable\",\"host_modes\":[\"tool_only\"],\"recall_modes\":[\"bootstrap\",\"related\",\"task\",\"lookup\",\"reflect\"],\"tools\":[\"network_memory_admit\",\"network_memory_catchup_get\",\"network_memory_catchup_prepare\",\"network_memory_context_get\",\"network_memory_context_list\",\"network_memory_context_pack\",\"network_memory_correct\",\"network_memory_experience_get\",\"network_memory_experience_list\",\"network_memory_forget\",\"network_memory_get\",\"network_memory_host_bind\",\"network_memory_host_close\",\"network_memory_input_prepare\",\"network_memory_input_status\",\"network_memory_list\",\"network_memory_operation_get\",\"network_memory_put\",\"network_memory_recall\",\"network_memory_status\"],\"supported\":[],\"unsupported\":[\"all\"],\"reason\":\"memory_disabled\"},\"connector_refresh\":\"将当前连接器工具名/描述/输入输出 schema 与实时 tools/list 比对；缺失或摘要不同需刷新目录。服务端无法替宿主刷新缓存。\"}}"
+              "text": "{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"agent_session_id\":\"sess_parity_owner\",\"name\":\"Parity Owner\",\"metadata\":{},\"pending_count\":0,\"inbox_head_seq\":\"0\",\"created_at\":\"<ts>\",\"share_url\":\"<origin>/a/sess_parity_owner\",\"avatar_url\":null,\"resources\":[\"agentnet://stream\"],\"service\":{\"protocol_version\":\"2026-07-28\",\"contract_version\":\"2026-11-13.2\",\"toolset_sha256\":\"e568b447d58af00370cfe0a230a10460b7166af3f0699c9111e071c1ce533cc1\",\"tool_count\":143,\"guide_tool\":\"network_client_guide\",\"files_enabled\":true,\"events_enabled\":false,\"memory\":{\"enabled\":false,\"contract_version\":\"2026-11-10.1\",\"capture\":false,\"engine_status\":\"unavailable\",\"host_modes\":[\"tool_only\"],\"recall_modes\":[\"bootstrap\",\"related\",\"task\",\"lookup\",\"reflect\"],\"tools\":[\"network_memory_admit\",\"network_memory_catchup_get\",\"network_memory_catchup_prepare\",\"network_memory_context_get\",\"network_memory_context_list\",\"network_memory_context_pack\",\"network_memory_correct\",\"network_memory_experience_get\",\"network_memory_experience_list\",\"network_memory_forget\",\"network_memory_get\",\"network_memory_host_bind\",\"network_memory_host_close\",\"network_memory_input_prepare\",\"network_memory_input_status\",\"network_memory_list\",\"network_memory_operation_get\",\"network_memory_put\",\"network_memory_recall\",\"network_memory_status\"],\"supported\":[],\"unsupported\":[\"all\"],\"reason\":\"memory_disabled\"},\"connector_refresh\":\"将当前连接器工具名/描述/输入输出 schema 与实时 tools/list 比对；缺失或摘要不同需刷新目录。服务端无法替宿主刷新缓存。\"}}"
             }
           ],
           "structuredContent": {
@@ -834,7 +834,7 @@
             "service": {
               "protocol_version": "2026-07-28",
               "contract_version": "2026-11-13.2",
-              "toolset_sha256": "feb8656d3ef8329e52c5b8ae030e2e220ba8805473651d7c6898d4ccfa6889ee",
+              "toolset_sha256": "e568b447d58af00370cfe0a230a10460b7166af3f0699c9111e071c1ce533cc1",
               "tool_count": 143,
               "guide_tool": "network_client_guide",
               "files_enabled": true,
@@ -1023,7 +1023,7 @@
               "resources": [
                 {
                   "uri": "skill://agent-network/agent-network/SKILL.md",
-                  "digest": "sha256:368583d632eef5d8fee9551b1be6911740c3c57175e9ea3d63e9586daf7dccff"
+                  "digest": "sha256:4884119a4a69b4f3b882f03f125573fc0d48ec473977865529b47b3deea98db3"
                 }
               ]
             }
@@ -1067,7 +1067,7 @@
             "resources": [
               {
                 "uri": "skill://agent-network/agent-network/SKILL.md",
-                "digest": "sha256:368583d632eef5d8fee9551b1be6911740c3c57175e9ea3d63e9586daf7dccff"
+                "digest": "sha256:4884119a4a69b4f3b882f03f125573fc0d48ec473977865529b47b3deea98db3"
               }
             ]
           },
@@ -1101,7 +1101,7 @@
             {
               "uri": "skill://agent-network/agent-network/SKILL.md",
               "mimeType": "text/markdown",
-              "text": "<text:sha256:368583d632eef5d8:len=51052>"
+              "text": "<text:sha256:4884119a4a69b4f3:len=51267>"
             }
           ],
           "resultType": "complete",
@@ -1978,8 +1978,8 @@
       "response": {
         "result": {
           "toolCount": 143,
-          "toolset_sha256": "feb8656d3ef8329e52c5b8ae030e2e220ba8805473651d7c6898d4ccfa6889ee",
-          "listing_sha256": "39eed0bafbd1aa958512d7ac4cacc8f1a7654b1fdb889601e3fcfa5d291f7724",
+          "toolset_sha256": "e568b447d58af00370cfe0a230a10460b7166af3f0699c9111e071c1ce533cc1",
+          "listing_sha256": "a1b24bb4698ee186d905be012cb57ef43bf9a7d2a5bb1fa1ebb2e31e45fe43e6",
           "tools": [
             {
               "name": "network_issue_token",
@@ -2411,7 +2411,7 @@
             },
             {
               "name": "network_memory_status",
-              "digest": "9c43deca47920fe87b3899ec2a2a9a813abf4c948724d864d0a0fd7c78cbfc88"
+              "digest": "86acaa9243999f319fc9deea2e5ffd4e75e3b910c0c40116707930cfe3790c31"
             },
             {
               "name": "network_memory_context_pack",
@@ -2491,27 +2491,27 @@
             },
             {
               "name": "network_agent_memory_overview",
-              "digest": "447837255a9687c1e6873c9722054b3c7a6308d8dccbe75e8d51a28e9b29c15c"
+              "digest": "b68d6225d733880c0531471a0226548155a6b6e282a4eb0984f83355ebaf8745"
             },
             {
               "name": "network_agent_memory_graph",
-              "digest": "ccc39ee19106a76f0cf11268ef0b6947bfa34c5c9f36a61bcbb108f99f05a448"
+              "digest": "54d21a88fd67d88fd3558a45698887136847fc17f6ed58ca47cf07f1177a478b"
             },
             {
               "name": "network_agent_memory_list",
-              "digest": "55d1c20f6b52557b3ccf68560011230a9c9f5c0422adbc4baab005884057a6b7"
+              "digest": "9cd726e05dccb0b9a27b0443a9ecfa7d3826a90ba8c81f82fcc594b37eee7eab"
             },
             {
               "name": "network_agent_memory_timeline",
-              "digest": "e265e6f1da1f067361719bf0c72d876c12f20b51efd8c2d5570331d52c855b3e"
+              "digest": "2b92ffcbc53da82861f7dc6902a77330e9fc5bc34b366ab2877dddfddda656ba"
             },
             {
               "name": "network_agent_memory_get",
-              "digest": "b8173e1b46c1e6d98f247450c54da51d8c9865c976eff6e3dd0bd1e822e304ee"
+              "digest": "70d595a79743994a0687e375ba70b2d2414c3af8b9a599ba44ab206ba81252e5"
             },
             {
               "name": "network_agent_memory_entities",
-              "digest": "bf834a256aeb8edc8b293a6905d472e8c0f49512eca785d0ba44140bcba9acf5"
+              "digest": "52d21e6c4d939c06beacbb8afa8f178f53ecebf2341d946a50042bcfda9645c5"
             },
             {
               "name": "drive_file_info",
@@ -3380,5 +3380,5 @@
       "response": ""
     }
   ],
-  "digest": "122953da9e0082bb28adb3e96e6ba8157e8c8c31ab4d2fc5f2b731d3a553b09b"
+  "digest": "02df1ef1c15551fb06ab41cc03d4f2d139023707585d7bffbea2c778a9b04800"
 }

@@ -671,6 +671,12 @@ interface MemoryStatusView {
   enabled: boolean;
   engine_status: string;
   capture: boolean;
+  backfill: {
+    space_catchup_enabled: boolean;
+    space_catchup_pending: boolean;
+    space_catchup_completed: boolean;
+    window_enabled: boolean;
+  };
 }
 
 function restoreEnv(key: string, value: string | undefined): void {
@@ -685,6 +691,8 @@ async function mcpServerChecks(): Promise<void> {
     'MEMORY_LOCAL_PATH',
     'MEMORY_CAPTURE',
     'MEMORY_INSTANCE_ID',
+    'MEMORY_BACKFILL',
+    'MEMORY_SPACE_CATCHUP',
   ] as const;
   const saved = new Map(keys.map((key) => [key, process.env[key]]));
   let enabledServer: Q05Server | null = null;
@@ -721,6 +729,12 @@ async function mcpServerChecks(): Promise<void> {
       checkEqual('MF10 状态 enabled', status.enabled, true);
       checkEqual('MF10 状态 engine ready', status.engine_status, 'ready');
       checkEqual('MF10 状态 capture', status.capture, true);
+      checkEqual('MF10 状态 space catch-up 默认开启', status.backfill.space_catchup_enabled, true);
+      checkEqual('MF10 状态窗口回填默认关闭', status.backfill.window_enabled, false);
+      check(
+        'MF10 状态 pending/completed 互斥',
+        status.backfill.space_catchup_pending !== status.backfill.space_catchup_completed,
+      );
       check(
         'MF10 状态不再声明 Memory 来源能力',
         !('sources' in (status as unknown as Record<string, unknown>)),

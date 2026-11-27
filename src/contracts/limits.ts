@@ -690,6 +690,9 @@ export const LIMITS = {
   /** 回填单页消息数与 rowid 越界回看行数。 */
   memoryBackfillPageSize: 100,
   memoryBackfillScanSafetyRows: 200,
+  /** 空间首次创建后的历史 catch-up：单轮最多处理的空间数与每空间消息数。 */
+  memorySpaceCatchupSpaces: 2,
+  memorySpaceCatchupMessages: 500,
   /** prepared selection / catchup 计划的短期 TTL（毫秒）。 */
   memoryPreparedTtlMs: 10 * 60_000,
   memoryCatchupTtlMs: 24 * 60 * 60_000,

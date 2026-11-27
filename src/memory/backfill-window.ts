@@ -50,6 +50,14 @@ export interface BackfillFanoutRow {
   capture: 'none' | 'pending' | 'extracted' | 'excluded';
 }
 
+export interface SpaceCatchupCandidate {
+  space_id: string;
+  agent_actor_id: string;
+  ownership_epoch: number;
+  backend_binding_epoch: number;
+  created_at: number;
+}
+
 export interface BackfillWindowPlan {
   windows: BackfillWindow[];
   skippedWindows: number;
@@ -168,6 +176,40 @@ export async function scanMessagePage(
   return result.results;
 }
 
+/**
+ * 按 Agent 当前可见边界扫描消息。
+ *
+ * direct 与 group `full` 保持全历史；`from_join` 从 `joined_seq` 开始；解散群
+ * 以 `archive_head_seq` 为上界。SQL 只做收窄，逐条读取仍必须经过
+ * `authorizeSourceRead`，不能把这里当成授权。
+ */
+export async function scanSpaceVisibleMessagePage(
+  db: D1Like,
+  input: { agentId: string; afterRowid: number; limit: number },
+): Promise<MessageScanRow[]> {
+  const result = await db
+    .prepare(
+      `SELECT m.rowid AS rowid, m.message_id, m.room_id, m.sender_id,
+              m.created_seq, m.created_at, m.body_bytes
+         FROM messages m
+         JOIN rooms r ON r.room_id = m.room_id
+         JOIN room_members rm
+           ON rm.room_id = m.room_id
+          AND rm.actor_id = ?
+          AND rm.status = 'active'
+        WHERE m.rowid > ?
+          AND (r.kind = 'direct'
+               OR r.member_history_policy = 'full'
+               OR m.created_seq >= rm.joined_seq)
+          AND (r.archive_head_seq IS NULL OR m.created_seq <= r.archive_head_seq)
+        ORDER BY m.rowid
+        LIMIT ?`,
+    )
+    .bind(input.agentId, input.afterRowid, input.limit)
+    .all<MessageScanRow>();
+  return result.results;
+}
+
 export async function readMessageBody(db: D1Like, messageId: string): Promise<string | null> {
   const row = await db
     .prepare('SELECT body FROM messages WHERE message_id = ?')
@@ -210,7 +252,7 @@ export async function readRoomMember(
  */
 export async function listBackfillFanout(
   db: D1Like,
-  input: { roomId: string; instanceId: string },
+  input: { roomId: string; instanceId: string; spaceId?: string },
 ): Promise<BackfillFanoutRow[]> {
   const result = await db
     .prepare(
@@ -226,10 +268,52 @@ export async function listBackfillFanout(
           AND s.instance_id = ?
           AND s.active = 1
           AND s.capture IN ('pending', 'extracted')
+          ${input.spaceId ? 'AND s.space_id = ?' : ''}
         ORDER BY rm.actor_id`,
     )
-    .bind(input.roomId, input.instanceId)
+    .bind(
+      input.roomId,
+      input.instanceId,
+      ...(input.spaceId ? [input.spaceId] : []),
+    )
     .all<BackfillFanoutRow>();
+  return result.results;
+}
+
+/**
+ * 首次 catch-up 候选：active、可捕获、尚未写 `space_catchup_done=1` 的空间。
+ *
+ * 惰性发现让新建空间自动进入队列，存量空间不需要迁移；sort 先按创建时间，
+ * 避免长期饥饿。
+ */
+export async function listSpaceCatchupCandidates(
+  db: D1Like,
+  input: { instanceId: string; limit: number },
+): Promise<SpaceCatchupCandidate[]> {
+  const result = await db
+    .prepare(
+      `SELECT s.space_id, s.agent_actor_id, s.ownership_epoch, s.backend_binding_epoch,
+              s.created_at
+         FROM memory_spaces s
+         JOIN actors a ON a.actor_id = s.agent_actor_id
+        WHERE s.instance_id = ?
+          AND s.active = 1
+          AND s.capture IN ('pending', 'extracted')
+          AND a.kind = 'agent'
+          AND a.disabled_at IS NULL
+          AND a.archived_at IS NULL
+          AND NOT EXISTS (
+                SELECT 1 FROM memory_cursors c
+                 WHERE c.scope_kind = 'space'
+                   AND c.scope_id = s.space_id
+                   AND c.cursor_kind = 'space_catchup_done'
+                   AND c.value = 1
+              )
+        ORDER BY s.created_at, s.space_id
+        LIMIT ?`,
+    )
+    .bind(input.instanceId, input.limit)
+    .all<SpaceCatchupCandidate>();
   return result.results;
 }
 
