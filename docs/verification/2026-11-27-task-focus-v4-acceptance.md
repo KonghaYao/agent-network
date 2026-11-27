@@ -19,7 +19,7 @@
 
 | # | 计划验收项 | 证据 | 状态 |
 | --- | --- | --- | --- |
-| P0-1 | 代表性备份升级、空库启动、迁移中断重试、干净快照恢复、旧 Task 零残留、普通 IM 对照 | `q01-upgrade-check` 80 项：0053 后无 task 列/索引/guard/旧表，普通消息/引用链/delivery/未读保留；`verify-drizzle-schema` 397 项；空库与升级库索引一致。受管备份/生产快照不可得 | 本地通过（受管副本外部阻塞） |
+| P0-1 | 代表性备份升级、空库启动、迁移中断重试、干净快照恢复、旧 Task 零残留、普通 IM 对照 | `q01-upgrade-check` 81 项：0053 后无 task 列/索引/guard/旧表，普通消息/引用链/delivery/未读保留；`verify-drizzle-schema` 397 项；空库与升级库索引一致。受管备份/生产快照不可得 | 本地通过（受管副本外部阻塞） |
 | P0-2 | 两位用户同群、仅林舟开启、周敏独立开启；各自秘书/看板；开启前零作业 | `verify-focus-e2e`：两 Human、同一条消息各自建卡、不同秘书、状态 active；`verify-focus-runtime` 141 项（provisioning 不派模型） | 本地通过（HTTP 链路，假 Swarm） |
 | P0-3 | 逐条回放第 1 节；同账号同卡；两人同刻不同列；周敏不泄露验收群/32/32 | E2E 首条消息→林舟跟进中、周敏需要我；`verify-focus-web` 59 项覆盖 restricted 卡、另一 owner 数据不出现；`verify-focus-runtime` 覆盖验收群候选仅林舟可见 | 本地部分（未跑完整 09:00–09:36 叙事） |
 | P0-4 | 林舟归档后迟到回执、同包补发、旧作业重试、同线程独立复盘 | E2E：归档→迟到消息→秘书更新整批 CONFLICT→忽略候选→归档卡不回三列、仍可回看；运行时覆盖归档/版本/代次闸门 | 本地通过（同线程新卡未单列） |
@@ -47,8 +47,11 @@
 | `bun scripts/verify-focus-e2e.ts` | 22 项 HTTP 端到端检查通过（两 owner、归档、重启） |
 | `bun scripts/verify-drizzle-schema.ts` | `schema parity checks passed: 397`（49 个迁移） |
 | `bun scripts/verify-mcp-parity.ts` | `MCP parity passed`，tools 146 |
-| `bun scripts/q01-upgrade-check.ts` | `Q01 升级检查通过: 80 项`（含 0053 零残留） |
+| `bun scripts/q01-upgrade-check.ts` | `Q01 升级检查通过: 81 项`（含 0053 零残留） |
 | `bun scripts/verify-protocol.ts` | `协议验收通过: 1101 项`（需本地实例，`PUBLIC_ORIGIN` 显式设置） |
+| `bun scripts/q01-doc-check.ts` | `Q01 文档/工具一致性检查通过: 48 项` |
+| `bun scripts/verify-web.ts` | `浏览器验收通过 266 项` |
+| Playwright `search-ui` / `chat` / `entries` | 17 / 17 / 12 通过 |
 | `bun scripts/verify-client-contract.ts` | `client contract acceptance: 70 checks passed` |
 | `bun scripts/verify-client-cli.ts` | `358 checks passed` |
 | `bun scripts/verify-memory-intake.ts` / `injection` / `contracts` | 全部通过 |
@@ -57,6 +60,8 @@
 | `bun run test:units` | 21 pass / 0 fail |
 | `bun scripts/verify-pwa-recovery.ts` / `verify-pwa-update.ts` | 通过 |
 | `git diff --check` | 无输出 |
+
+补充：`lenso-alerts` / `lenso-overlays` 的 6 个既有失败在基线 `3227fb9` 同样复现（基线 7 个，含已删除的 TaskTrace 用例）；失败签名与本次改动无关，未纳入本 PR 修复。
 
 ## 4. 未覆盖 / 残留风险
 
