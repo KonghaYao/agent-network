@@ -729,6 +729,9 @@ export function useRoomChat(roomId: string, options: RoomChatOptions = {}) {
         }),
       );
     }
+    if (pending.focus) {
+      jobs.push(queryClient.invalidateQueries({ queryKey: queryKeys.focus() }));
+    }
     for (const messageId of pending.messageIds) {
       jobs.push(refreshVisibleMessage(messageId));
     }

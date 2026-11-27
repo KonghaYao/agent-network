@@ -24,6 +24,7 @@ import {
   type RoomSummary,
 } from '../../lib/rooms';
 import { useUiPrefStore } from '../../stores/ui';
+import { FocusEntry } from '../focus/FocusEntry';
 import { ContactRequestsButton } from './ContactRequestsButton';
 import { LoggedOutStart } from './LoggedOutStart';
 import { RoomRow } from './RoomRow';
@@ -478,6 +479,7 @@ export function Sidebar(props: SidebarProps) {
             data-state={streamError.startsWith('实时连接已停止') ? 'stopped' : undefined}
           />
         ) : null}
+        <FocusEntry me={me} />
         <SidebarAccount me={me} />
       </footer>
     </aside>

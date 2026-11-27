@@ -550,10 +550,16 @@ async function run(): Promise<void> {
   checkEqual('失权证据不带 message_id', hiddenEvidence?.message_id, undefined);
   checkEqual('失权证据不带摘录', hiddenEvidence?.excerpt, undefined);
   checkEqual('失权证据保留用途', hiddenEvidence?.purpose, 'request');
+  checkEqual('失权证据不带房间名', hiddenEvidence?.room_name, undefined);
+  checkEqual('失权证据不带发送者', hiddenEvidence?.sender_id, undefined);
   checkEqual('失权详情不返回修订', mixed.revisions.length, 0);
   const clean = await focusGet(d1, owner, { item_id: 'fit_evidence_clean' });
   checkEqual('可读卡不遮蔽', clean.item.restricted, false);
   checkEqual('可读卡返回来源计数', clean.item.source_count, 1);
+  checkEqual('可读证据带房间名', clean.evidence[0]?.room_name, 'Focus Main');
+  checkEqual('可读证据带发送者 ID', clean.evidence[0]?.sender_id, AGENT);
+  checkEqual('可读证据带发送者名称', clean.evidence[0]?.sender_name, 'Focus Agent');
+  checkEqual('可读证据带发送者类型', clean.evidence[0]?.sender_kind, 'agent');
   checkEqual('修订 changes 解析为对象', JSON.stringify(clean.revisions[0]?.changes), JSON.stringify({ column_key: 'needs_me' }));
   checkEqual('修订 evidence 解析为数组', JSON.stringify(clean.revisions[0]?.evidence), JSON.stringify(['fev_clean']));
 

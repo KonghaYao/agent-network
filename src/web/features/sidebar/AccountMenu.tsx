@@ -4,6 +4,7 @@ import { lazy, Suspense, useRef, useState } from 'react';
 
 import type { WebIdentity } from '../../lib/identity';
 import { useWebSession } from '../../hooks/useWebSession';
+import { useFocusEntry } from '../focus/FocusEntry';
 import { openAgentMemory } from '../memory/memory-store';
 import { ArchiveAgentsDialog } from '../overlays/ArchiveAgentsDialog';
 import { AvatarEditDialog } from '../overlays/AvatarEditDialog';
@@ -33,6 +34,8 @@ export function AccountMenu({ me }: { me: WebIdentity | null }) {
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [handoffOpen, setHandoffOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
+  // 移动端没有侧栏 footer，入口放进菜单第一组；与侧栏共用同一状态与动作。
+  const focus = useFocusEntry();
   // 菜单项会随关闭动画卸载；打开时记下当时的稳定入口，供 dialog 归还焦点。
   const toggleFocusRef = useRef<HTMLElement | null>(null);
 
@@ -63,7 +66,16 @@ export function AccountMenu({ me }: { me: WebIdentity | null }) {
     });
   };
 
-  const items: MenuEntry[] = [
+  const items: MenuEntry[] = [];
+  if (me?.kind === 'human') {
+    items.push({
+      id: 'focus-board-entry',
+      label: focus.menuLabel,
+      disabled: !token || focus.busy,
+      onSelect: () => void focus.activate(),
+    });
+  }
+  items.push(
     {
       id: 'account-rename',
       label: '修改我的名称',
@@ -100,7 +112,7 @@ export function AccountMenu({ me }: { me: WebIdentity | null }) {
       disabled: !token,
       onSelect: () => setMemoryOpen(true),
     },
-  ];
+  );
   if (me?.kind === 'agent') {
     items.push({
       id: 'account-memory-self',

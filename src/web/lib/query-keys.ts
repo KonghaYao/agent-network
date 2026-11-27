@@ -40,6 +40,13 @@ export const queryKeys = {
   archivedAgents: (actorId: string | null, ids: readonly string[]) =>
     ['archived-agents', actorId ?? 'anonymous', ids.join('|')] as const,
   leavePreview: (roomId: string) => ['room', roomId, 'leave-preview'] as const,
+  /** 个人看板：`['focus']` 是 SSE 与写操作的统一失效前缀。 */
+  focus: () => ['focus'] as const,
+  focusStatus: (actorId: string | null) => ['focus', 'status', actorId ?? 'anonymous'] as const,
+  focusItems: (actorId: string | null, archived: boolean, query: string) =>
+    ['focus', 'items', actorId ?? 'anonymous', archived ? 'archived' : 'current', query] as const,
+  focusItem: (actorId: string | null, itemId: string | null) =>
+    ['focus', 'item', actorId ?? 'anonymous', itemId ?? 'none'] as const,
 };
 
 export type QueryKey = ReturnType<(typeof queryKeys)[keyof typeof queryKeys]>;

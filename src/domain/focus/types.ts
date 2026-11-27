@@ -68,3 +68,48 @@ export interface FocusCountRow {
   done: number;
   archived: number;
 }
+
+/** 秘书作业；同一 owner 至多一个活跃作业（部分唯一索引）。 */
+export interface FocusJobRow {
+  job_id: string;
+  owner_actor_id: string;
+  secretary_actor_id: string;
+  attempt_ref: string;
+  submission_key: string;
+  status:
+    | 'queued'
+    | 'submitted'
+    | 'running'
+    | 'waiting'
+    | 'completed'
+    | 'failed'
+    | 'cancelled';
+  generation: number;
+  event_from_seq: number;
+  event_to_seq: number;
+  turn_id: string | null;
+  input_id: string | null;
+  lease_until: number | null;
+  attempt_count: number;
+  last_error: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+/** Watch 的持久候选索引；作业只能读取分配给自己的候选。 */
+export interface FocusCandidateRow {
+  candidate_id: string;
+  owner_actor_id: string;
+  job_id: string | null;
+  source_kind: 'message' | 'delivery';
+  event_seq: number;
+  room_id: string | null;
+  message_id: string | null;
+  delivery_id: string | null;
+  source_key: string;
+  reason: string;
+  state: 'pending' | 'assigned' | 'consumed' | 'skipped';
+  decision: string | null;
+  created_at: number;
+  updated_at: number;
+}

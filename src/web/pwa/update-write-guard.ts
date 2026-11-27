@@ -64,6 +64,9 @@ const UPDATE_BLOCKED_TOOLS: ReadonlySet<string> = new Set([
   'network_task_unmark',
   'network_task_complete',
   'network_memory_forget',
+  'network_focus_enable',
+  'network_focus_disable',
+  'network_focus_archive',
 ]);
 
 let writeBlocked = false;

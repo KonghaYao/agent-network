@@ -75,16 +75,20 @@ CREATE TABLE focus_revisions (
   revision_id TEXT PRIMARY KEY,
   item_id TEXT NOT NULL REFERENCES focus_items(item_id),
   version INTEGER NOT NULL,
-  -- 业务幂等键：同一决策重放收敛到同一修订。
-  decision_id TEXT NOT NULL UNIQUE,
+  -- 业务幂等键：同一 decision 可改多张卡，因此这里只建普通索引；
+  -- 每个决定只有一份业务回执由 operations(actor, request_id) 保证。
+  decision_id TEXT NOT NULL,
   changes_json TEXT NOT NULL DEFAULT '{}',
   reason TEXT NOT NULL DEFAULT '',
   evidence_json TEXT NOT NULL DEFAULT '[]',
-  created_at INTEGER NOT NULL DEFAULT 0
+  created_at INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (item_id, version)
 );
 
 CREATE INDEX idx_focus_revisions_item
   ON focus_revisions(item_id, version, revision_id);
+CREATE INDEX idx_focus_revisions_decision
+  ON focus_revisions(decision_id);
 
 CREATE TABLE focus_jobs (
   job_id TEXT PRIMARY KEY,

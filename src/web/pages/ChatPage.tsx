@@ -29,6 +29,11 @@ import { RoomTaskDock } from '../features/tasks/RoomTaskDock';
 import { useRoomTaskController } from '../features/tasks/useRoomTaskController';
 import { useTaskAskProgress } from '../features/tasks/useTaskAskProgress';
 import { openAgentMemory } from '../features/memory/memory-store';
+import {
+  returnToFocusBoard,
+  takePendingJump,
+  useFocusView,
+} from '../features/focus/focus-store';
 import { useChatSearchNavigation } from '../features/search/useChatSearchNavigation';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { useMediaQuery } from '../hooks/useMediaQuery';
@@ -566,6 +571,20 @@ export function ChatPage({ roomId }: ChatPageProps) {
   const navState = searchNav.navigation.state;
   const anchored = navState.status === 'anchored';
   searchNavRef.current = searchNav;
+  const focusView = useFocusView();
+
+  // 看板收起后的原消息目标只在房间就绪时消费一次；跨房由 locate 导航，
+  // 新房继续复用同一定位实现，失败只给一行状态并已经清掉 pending。
+  useEffect(() => {
+    if (!ready || !token) return;
+    const target = takePendingJump();
+    if (!target) return;
+    setStatus('正在定位原消息…');
+    void searchNav.locate(target).then((result) => {
+      if (!result.ok) setStatus(result.error);
+      else setStatus('');
+    });
+  }, [ready, searchNav, token]);
 
   // 首载骨架与静态输入区：错误态让位给错误页，避免骨架长期占位。
   const loadingShell = !ready && chat.status !== 'error';
@@ -804,6 +823,16 @@ export function ChatPage({ roomId }: ChatPageProps) {
                   'aria-busy': loadingShell,
                 })}
               >
+                {focusView.jumpActive ? (
+                  <button
+                    type="button"
+                    id="focus-return"
+                    className="focus-return"
+                    onClick={returnToFocusBoard}
+                  >
+                    返回看板
+                  </button>
+                ) : null}
                 {dropEnabled ? (
                   <div id="composer-drop" className="composer-drop" hidden={!isDragActive}>
                     <span className="composer-drop-title">松开上传附件</span>

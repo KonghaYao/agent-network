@@ -10,6 +10,7 @@ import { TASK_DOCK_STYLE } from './chat-task-dock-styles';
 import { TASK_TRACE_STYLE } from './chat-task-trace-styles';
 import { UPLOAD_STYLE } from './chat-upload-styles';
 import { DEVICE_HANDOFF_STYLE } from './device-handoff-styles';
+import { FOCUS_STYLE } from './focus-styles';
 import { pwaHeadTags } from './pwa/manifest';
 import { PWA_STYLE } from './pwa-styles';
 import { escapeHtml, jsonForScript } from './layout';
@@ -121,7 +122,7 @@ const BOOT_ERROR_STYLE = `
  * React 壳复用原有的应用页样式：会话项、头像、空状态、移动端单栏
  * 与 Memory 抽屉都沿用同一套 CSS 变量和选择器。
  */
-const SPA_STYLE = `${APP_STYLE}${DEVICE_HANDOFF_STYLE}${MEMORY_STYLE}${PWA_STYLE}
+const SPA_STYLE = `${APP_STYLE}${DEVICE_HANDOFF_STYLE}${MEMORY_STYLE}${PWA_STYLE}${FOCUS_STYLE}
   html, body { height: 100%; }
   body.wide { display: block; min-height: 100dvh; height: 100dvh; padding: 0;
     overflow: hidden; background: var(--wx-bg); }

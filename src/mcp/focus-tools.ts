@@ -18,7 +18,13 @@ import { focusDisable, focusEnable, focusStatus } from '../domain/focus/bindings
 import { focusArchive, focusGet, focusList } from '../domain/focus/items';
 import type { Principal } from '../domain/principal';
 import type { Env } from '../env';
+import {
+  cancelFocusTurn,
+  focusCancelTarget,
+  provisionFocusBinding,
+} from '../focus/jobs';
 import { requireActor } from './auth';
+import { registerFocusSecretaryTools } from './focus-secretary-tools';
 import {
   focusArchiveResultSchema,
   focusGetResultSchema,
@@ -34,7 +40,7 @@ type RegisterFn = typeof register;
 export interface FocusToolDeps {
   db: D1Database;
   principal: Principal;
-  /** 预留：本阶段秘书远端运行时不在此处接入。 */
+  /** 秘书运行时的 Swarm 配置；缺失时秘书工具返回 FOCUS_RUNTIME_UNAVAILABLE。 */
   env: Env;
 }
 
@@ -43,13 +49,13 @@ export function registerFocusTools(
   deps: FocusToolDeps,
   registerTool: RegisterFn,
 ): void {
-  const { db, principal } = deps;
+  const { db, principal, env } = deps;
   const register = registerTool;
 
   register(
     server,
     'network_focus_status',
-    '查看本人任务秘书的开启状态与看板计数（needs_me / tracking / done / archived）。owner 由当前 Bearer 身份推导，不接受 owner 参数；Agent 身份调用返回 PERMISSION_DENIED。本阶段只返回绑定状态，runtime_ready 恒为 false。只读：不写 events/outbox/operations，不推进已读、pending_count 或 head_seq。',
+    '查看本人任务秘书的开启状态与看板计数（needs_me / tracking / done / archived）。owner 由当前 Bearer 身份推导，不接受 owner 参数；Agent 身份调用返回 PERMISSION_DENIED。runtime_ready 仅在绑定 active 且远端 session_id 与 root_session_id 都已登记时为 true。只读：不写 events/outbox/operations，不推进已读、pending_count 或 head_seq。',
     focusStatusSchema,
     focusStatusResultSchema,
     async () => {
@@ -62,12 +68,15 @@ export function registerFocusTools(
   register(
     server,
     'network_focus_enable',
-    '开启本人的任务秘书：首次调用在同一事务创建秘书 Agent、唯一绑定与幂等结果，status 为 provisioning；并发或重复开启返回同一秘书与同一绑定，不产生第二名秘书。已 paused 时再次开启会提升启用代次并重置事件水位。本阶段不调用远端 Swarm，runtime_ready 恒为 false。幂等键为 request_id；只写 actor scope 的 focus_updated 提示，不写 inbox、不增加 pending_count、不产生 delivery。',
+    '开启本人的任务秘书：首次调用在同一事务创建秘书 Agent、唯一绑定与幂等结果，status 为 provisioning；并发或重复开启返回同一秘书与同一绑定，不产生第二名秘书。已 paused 时再次开启会提升启用代次并重置事件水位。提交后异步幂等开通固定 Swarm 会话；失败保留 provisioning/failed，不会产生第二秘书。幂等键为 request_id；只写 actor scope 的 focus_updated 提示，不写 inbox、不增加 pending_count、不产生 delivery。',
     focusEnableSchema,
     focusMutationResultSchema,
     async (input) => {
-      requireActor(principal);
-      return focusEnable(db, principal, input);
+      const actor = requireActor(principal);
+      const result = await focusEnable(db, principal, input);
+      // 远端开通在响应后异步进行；失败不会回滚本地唯一绑定。
+      void provisionFocusBinding(env, actor.actor_id);
+      return result;
     },
     { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   );
@@ -75,12 +84,15 @@ export function registerFocusTools(
   register(
     server,
     'network_focus_disable',
-    '暂停本人的任务秘书：提升启用代次、记录暂停时间、取消该 owner 的活跃作业，已有个人卡与归档记录全部保留。已暂停或从未开启时按幂等成功返回当前状态，不重复提升代次。只写 actor scope 的 focus_updated 提示，不写 inbox、不增加 pending_count、不产生 delivery。',
+    '暂停本人的任务秘书：提升启用代次、记录暂停时间、取消该 owner 的活跃作业并释放候选，已有个人卡与归档记录全部保留。提交后异步取消当前远端 turn；旧 turn 的后续写入会被代次与租约拒绝。已暂停或从未开启时按幂等成功返回当前状态，不重复提升代次。只写 actor scope 的 focus_updated 提示，不写 inbox、不增加 pending_count、不产生 delivery。',
     focusDisableSchema,
     focusMutationResultSchema,
     async (input) => {
-      requireActor(principal);
-      return focusDisable(db, principal, input);
+      const actor = requireActor(principal);
+      const target = await focusCancelTarget(db, actor.actor_id);
+      const result = await focusDisable(db, principal, input);
+      void cancelFocusTurn(env, target);
+      return result;
     },
     { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   );
@@ -123,4 +135,6 @@ export function registerFocusTools(
     },
     { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   );
+
+  registerFocusSecretaryTools(server, { env, principal }, register);
 }

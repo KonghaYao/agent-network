@@ -50,12 +50,12 @@
     "0051_group_message_moderation.sql",
     "0052_focus_kanban.sql"
   ],
-  "migrationsDigest": "6720bd3cbb62018a5224ed0463665bef4306d5d7aa0f6e1588f2df78ab3960d9",
+  "migrationsDigest": "74652d8d2de1c02f03415aefcf7598ce351b04c6c8be0f168dad3fb95a7a621b",
   "counts": {
     "tables": 134,
     "guardTables": 53,
     "messageSearchTables": 5,
-    "indexes": 244,
+    "indexes": 245,
     "triggers": 7
   },
   "tables": {
@@ -946,15 +946,16 @@
         "created_at|INTEGER|nn=1|d=0|pk=0|h=0"
       ],
       "indexes": [
+        "idx_focus_revisions_decision|u=0|o=c|p=0|cols=decision_id|desc=0",
         "idx_focus_revisions_item|u=0|o=c|p=0|cols=item_id,version,revision_id|desc=0,0,0",
         "sqlite_autoindex_focus_revisions_1|u=1|o=pk|p=0|cols=revision_id|desc=0",
-        "sqlite_autoindex_focus_revisions_2|u=1|o=u|p=0|cols=decision_id|desc=0"
+        "sqlite_autoindex_focus_revisions_2|u=1|o=u|p=0|cols=item_id,version|desc=0,0"
       ],
       "foreignKeys": [
         "item_id->focus_items.item_id|on_update=no action|on_delete=no action|match=none"
       ],
       "checks": [],
-      "sqlDigest": "bd961bc11067a9872ebdc5d5ce1b1c3c88249c4081f1ba1c563fd63465172b9f"
+      "sqlDigest": "044094ae6add2b4a4964eb28c3135d5112c956f735ac3cafd959bdfc110cc2d6"
     },
     "focus_scan_state": {
       "type": "table",
@@ -3166,5 +3167,5 @@
     "message_search_fts_ai": "c0d538ed07edf48bcc8dfff50d1adf2158b1ef1c75e528640877b7ac08b0fe71",
     "message_search_fts_au": "af71582b06026e26c1b0acb0e15b6d4e504f8b85450ac9351d70042408abbaf7"
   },
-  "digest": "d23a76bad14172995e2861c248c831459b1229401f375cbf5cb55bd4efc21195"
+  "digest": "8125652ca46dc69dd212c81bea7b3c95da2c21752a62616aa4f85e09c84d86aa"
 }

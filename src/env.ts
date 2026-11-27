@@ -7,6 +7,26 @@ import type { MemoryInsightService } from './memory/insight/service';
 import type { NotificationHub } from './realtime/hub';
 import type { AgentPresenceTimeline } from './realtime/presence-timeline';
 
+/**
+ * Task Focus 秘书运行时配置。
+ *
+ * 五项必须同时存在；任一项缺失时启动失败并只列出变量名。`null` 表示
+ * 本实例未配置秘书运行时：绑定与看板仍可用，秘书工具返回
+ * `FOCUS_RUNTIME_UNAVAILABLE`。
+ */
+export interface FocusRuntimeConfig {
+  /** Peri-Swarm `/v1` 入口。 */
+  baseUrl: string;
+  /** 访问 Swarm 的部署 Bearer，只保存在服务端。 */
+  apiKey: string;
+  /** 秘书会话使用的模型。 */
+  model: string;
+  /** Swarm 可访问的 WeBots MCP 入口。 */
+  mcpUrl: string;
+  /** 秘书调用 WeBots MCP 时使用的服务凭据。 */
+  serviceToken: string;
+}
+
 /** MCP Events 运行配置；只有 EVENTS_ENABLED=1 且密钥有效时才构造。 */
 export interface EventsConfig {
   /** AES-256-GCM 密钥，只用于加密 webhook secret。 */
@@ -78,4 +98,10 @@ export interface Env {
    * MEMORY_ADAPTER=hindsight 且配置完整时存在。缺失时工具返回降级原因。
    */
   MEMORY_INSIGHT?: MemoryInsightService;
+  /**
+   * Task Focus 秘书运行时；五项配置全空时为 null。
+   * 缺失时绑定仍可暂停/开启，但不会调用 Swarm，秘书工具返回
+   * `FOCUS_RUNTIME_UNAVAILABLE`。
+   */
+  FOCUS?: FocusRuntimeConfig | null;
 }

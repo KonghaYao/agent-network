@@ -17,6 +17,8 @@ export interface PendingRefresh {
   tasks: boolean;
   /** 成员代次、历史策略或生命周期变化：丢弃旧授权下的 Task 缓存。 */
   taskReset: boolean;
+  /** 个人看板变化：只失效 `['focus']`，与房间窗口无关。 */
+  focus: boolean;
   contacts: boolean;
   contactBadge: boolean;
   /** 当前房间内需要按锚点重读的消息（回执等旧窗口项）。 */
@@ -32,6 +34,7 @@ export function emptyPendingRefresh(): PendingRefresh {
     taskSummaries: false,
     tasks: false,
     taskReset: false,
+    focus: false,
     contacts: false,
     contactBadge: false,
     messageIds: new Set(),
@@ -70,6 +73,12 @@ export function markPendingRefresh(
     pending.history = true;
     pending.tasks = true;
     pending.taskSummaries = true;
+    pending.focus = true;
+    return;
+  }
+  // actor scope 的看板提示不带房间定位，必须在缺 roomId 前分流。
+  if (source === 'focus.updated' || kind === 'focus') {
+    pending.focus = true;
     return;
   }
   if (!roomId) {

@@ -8,7 +8,13 @@
 import { FOCUS_UPDATED_EVENT } from '../../contracts/events';
 import { actorTopic, eventStatementIfAbsent, outboxStatementIfAbsent } from '../../storage/events';
 
-export type FocusUpdatedChange = 'enabled' | 'resumed' | 'paused' | 'archived';
+export type FocusUpdatedChange =
+  | 'enabled'
+  | 'resumed'
+  | 'paused'
+  | 'created'
+  | 'updated'
+  | 'archived';
 
 export interface FocusUpdatedSpec {
   ownerActorId: string;

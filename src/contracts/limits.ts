@@ -805,7 +805,21 @@ export const LIMITS = {
   /** 详情证据摘录字符上限（码点）；完整正文仍走消息读取。 */
   focusEvidenceExcerptChars: 600,
   /** 单次作业最多读取的候选批大小。 */
-  focusCandidateBatchMax: 50,
+  focusJobCandidatesMax: 50,
+  /** 同一作业最多重派次数；超过后失败并把候选释放回 pending。 */
+  focusJobAttemptMax: 3,
+  /** 秘书作业租约；每次工具调用续租，过期后可被恢复任务重派。 */
+  focusJobLeaseMs: 10 * 60_000,
+  /** Watch 单次数据库读取的已提交事件条数。 */
+  focusScanBatchMax: 200,
+  /** 单次唤醒最多连续追赶的批数，剩余的留到下一次唤醒。 */
+  focusScanBatchesMax: 20,
+  /** 秘书单次读取的证据来源条数上限。 */
+  focusSecretaryEvidenceMax: 20,
+  /** 秘书查重返回的紧凑卡上限。 */
+  focusSecretaryFindMax: 20,
+  /** 秘书提交单条 decision 的文本长度上限。 */
+  focusSecretaryTextMax: 2_000,
   /** 列表搜索词字符上限。 */
   focusQueryMax: 200,
 } as const;

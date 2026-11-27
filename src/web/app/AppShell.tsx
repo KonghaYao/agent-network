@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
 
+import { FocusHost } from '../features/focus/FocusHost';
+
 /**
  * React 运行壳：只接管应用页的 `<main>` 容器，侧栏/主区由页面组合。
  * 保留 legacy 的 `main` 语义与 APP_STYLE 双栏布局。
@@ -9,6 +11,7 @@ export function AppShell({ sidebar, main }: { sidebar?: ReactNode; main: ReactNo
     <main>
       {sidebar}
       {main}
+      <FocusHost />
     </main>
   );
 }

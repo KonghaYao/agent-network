@@ -390,6 +390,7 @@ export async function deliveryClaim(
   const at = nowMs();
   const claimId = crypto.randomUUID();
   const eventKey = `claim:${delivery.delivery_id}:${input.request_id}`;
+  const roomEventKey = `room_delivery:claim:${delivery.delivery_id}:${input.request_id}`;
   const payloadHash = await sha256Hex(stableStringify(input));
   const sender = await deliverySender(db, delivery);
 
@@ -453,6 +454,27 @@ export async function deliveryClaim(
             sender_kind: sender.kind,
           },
         ),
+        // 同一领取事务追加 Watch 中心领取流水；无论是否开启秘书都留痕。
+        // 事件已在本 batch 前段写入，SELECT 找不到时静默不插入，不影响领取。
+        db
+          .prepare(
+            `INSERT INTO focus_delivery_claims
+               (delivery_id, room_id, message_id, recipient_actor_id, claimed_by,
+                attempt, event_seq, claimed_at)
+             SELECT ?, ?, ?, ?, ?, ?, event_seq, ?
+               FROM events WHERE event_key = ?
+             ON CONFLICT(delivery_id) DO NOTHING`,
+          )
+          .bind(
+            delivery.delivery_id,
+            delivery.room_id,
+            delivery.message_id,
+            delivery.recipient_id,
+            actor,
+            delivery.attempt + 1,
+            at,
+            roomEventKey,
+          ),
       ],
     });
   } catch (error) {

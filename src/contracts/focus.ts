@@ -106,8 +106,12 @@ export interface FocusEvidenceView {
   readable: boolean;
   occurred_at: string;
   room_id?: string;
+  room_name?: string;
   message_id?: string;
   delivery_id?: string;
+  sender_id?: string;
+  sender_name?: string;
+  sender_kind?: 'human' | 'agent';
   excerpt?: string;
   revision: number;
 }
@@ -137,4 +141,174 @@ export interface FocusArchiveResult {
   archived_at: string;
   version: number;
   idempotent: boolean;
+}
+
+/* ------------------------------------------------------------------ */
+/* 秘书工具（固定服务身份）：owner 从 attempt_ref 对应的作业推导      */
+/* ------------------------------------------------------------------ */
+
+const attemptRef = z.string().min(1).max(128);
+const focusCandidateId = z.string().min(1).max(128);
+const focusDueAt = z.union([z.number().int().nonnegative(), z.string().min(1).max(64)]);
+
+export const focusJobGetSchema = z.object({
+  attempt_ref: attemptRef,
+});
+
+const focusEvidenceSourceSchema = z.object({
+  candidate_id: focusCandidateId,
+});
+
+export const focusEvidenceReadSchema = z.object({
+  attempt_ref: attemptRef,
+  sources: z
+    .array(focusEvidenceSourceSchema)
+    .min(1)
+    .max(LIMITS.focusSecretaryEvidenceMax),
+  limit: z.number().int().min(1).max(LIMITS.focusSecretaryEvidenceMax).optional(),
+});
+
+export const focusItemsFindSchema = z.object({
+  attempt_ref: attemptRef,
+  query: z.string().min(1).max(LIMITS.focusQueryMax).optional(),
+  /** `message:<id>` / `delivery:<id>` 或候选 ID。 */
+  sources: z.array(z.string().min(1).max(256)).max(20).optional(),
+});
+
+const focusEvidenceRefSchema = z.object({
+  candidate_id: focusCandidateId,
+  purpose: z.string().min(1).max(64).optional(),
+});
+
+const focusCreateDecisionSchema = z.object({
+  type: z.literal('create'),
+  title: z.string().min(1).max(LIMITS.focusSecretaryTextMax),
+  column_key: z.enum(FOCUS_COLUMNS),
+  next_step: z.string().max(LIMITS.focusSecretaryTextMax).default(''),
+  waiting_on: z.string().max(LIMITS.focusSecretaryTextMax).nullable().optional(),
+  due_at: focusDueAt.nullable().optional(),
+  due_text: z.string().max(LIMITS.focusSecretaryTextMax).nullable().optional(),
+  summary: z.string().max(LIMITS.focusSecretaryTextMax).optional(),
+  evidence: z.array(focusEvidenceRefSchema).min(1).max(LIMITS.focusSecretaryEvidenceMax),
+});
+
+const focusUpdateChangesSchema = z.object({
+  title: z.string().min(1).max(LIMITS.focusSecretaryTextMax).optional(),
+  column_key: z.enum(FOCUS_COLUMNS).optional(),
+  next_step: z.string().max(LIMITS.focusSecretaryTextMax).optional(),
+  waiting_on: z.string().max(LIMITS.focusSecretaryTextMax).nullable().optional(),
+  due_at: focusDueAt.nullable().optional(),
+  due_text: z.string().max(LIMITS.focusSecretaryTextMax).nullable().optional(),
+  summary: z.string().max(LIMITS.focusSecretaryTextMax).optional(),
+});
+
+const focusUpdateDecisionSchema = z.object({
+  type: z.literal('update'),
+  item_id: itemId,
+  expected_version: z.number().int().positive(),
+  changes: focusUpdateChangesSchema.default({}),
+  evidence: z.array(focusEvidenceRefSchema).max(LIMITS.focusSecretaryEvidenceMax).optional(),
+});
+
+const focusDispositionDecisionSchema = z.object({
+  type: z.enum(['ignore', 'pending']),
+  candidate_ids: z.array(focusCandidateId).min(1).max(LIMITS.focusJobCandidatesMax),
+  reason: z.string().min(1).max(LIMITS.focusSecretaryTextMax),
+});
+
+export const focusCommitSchema = z.object({
+  attempt_ref: attemptRef,
+  decision_id: z.string().min(1).max(128),
+  complete: z.boolean(),
+  decisions: z
+    .array(
+      z.discriminatedUnion('type', [
+        focusCreateDecisionSchema,
+        focusUpdateDecisionSchema,
+        focusDispositionDecisionSchema,
+      ]),
+    )
+    .min(1)
+    .max(LIMITS.focusJobCandidatesMax),
+});
+
+export type FocusCommitInput = z.input<typeof focusCommitSchema>;
+export type FocusCreateDecision = z.input<typeof focusCreateDecisionSchema>;
+export type FocusUpdateDecision = z.input<typeof focusUpdateDecisionSchema>;
+export type FocusDispositionDecision = z.input<typeof focusDispositionDecisionSchema>;
+
+export interface FocusJobCandidateView {
+  candidate_id: string;
+  source_kind: 'message' | 'delivery';
+  room_id: string | null;
+  message_id: string | null;
+  delivery_id: string | null;
+  reason: string;
+  event_seq: number;
+}
+
+export interface FocusJobGetResult {
+  job_id: string;
+  attempt_ref: string;
+  owner_name: string;
+  generation: number;
+  event_from_seq: number;
+  event_to_seq: number;
+  status: string;
+  candidates: FocusJobCandidateView[];
+  counts: FocusCounts;
+}
+
+export interface FocusEvidenceReadItem {
+  candidate_id: string;
+  source_kind: 'message' | 'delivery';
+  readable: boolean;
+  reason?: string;
+  room_id?: string;
+  room_name?: string;
+  room_kind?: 'direct' | 'group';
+  message_id?: string;
+  sender_id?: string;
+  sender_name?: string;
+  sender_kind?: 'human' | 'agent';
+  created_at?: string;
+  excerpt?: string;
+  delivery_id?: string;
+  delivery_state?: string;
+  delivery_attempt?: number;
+}
+
+export interface FocusEvidenceReadResult {
+  items: FocusEvidenceReadItem[];
+}
+
+export interface FocusFindItem {
+  item_id: string;
+  title: string;
+  column_key: FocusColumn;
+  version: number;
+  archived: boolean;
+  next_step: string;
+}
+
+export interface FocusItemsFindResult {
+  items: FocusFindItem[];
+}
+
+export interface FocusCommitItem {
+  item_id: string;
+  version: number;
+  column_key: FocusColumn;
+  archived: boolean;
+}
+
+export interface FocusCommitReceipt {
+  decision_id: string;
+  job_id: string;
+  complete: boolean;
+  job_status: string;
+  items: FocusCommitItem[];
+  ignored: string[];
+  pending: string[];
+  covered: number;
 }

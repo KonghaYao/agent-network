@@ -30,20 +30,34 @@ interface EvidenceMessageRow {
   body: string;
   body_bytes: number;
   created_seq: number;
+  sender_id: string;
+  sender_name: string | null;
+  sender_kind: 'human' | 'agent' | null;
+  created_at: number;
 }
 
 interface EvidenceDeliveryRow {
   delivery_id: string;
   room_id: string;
   message_id: string;
+  state: string;
+  attempt: number;
 }
 
 export interface FocusEvidenceRead {
   readable: boolean;
   roomId?: string;
+  roomName?: string;
+  roomKind?: 'direct' | 'group';
   messageId?: string;
   deliveryId?: string;
+  senderId?: string;
+  senderName?: string;
+  senderKind?: 'human' | 'agent';
+  createdAt?: number;
   excerpt?: string;
+  deliveryState?: string;
+  deliveryAttempt?: number;
 }
 
 function placeholders(count: number): string {
@@ -96,8 +110,10 @@ export async function resolveEvidenceReads(
   for (const ids of chunks(messageIds)) {
     const result = await db
       .prepare(
-        `SELECT message_id, room_id, body, body_bytes, created_seq
-           FROM messages WHERE message_id IN (${placeholders(ids.length)})`,
+        `SELECT m.message_id, m.room_id, m.body, m.body_bytes, m.created_seq, m.created_at,
+                m.sender_id, a.name AS sender_name, a.kind AS sender_kind
+           FROM messages m LEFT JOIN actors a ON a.actor_id = m.sender_id
+          WHERE m.message_id IN (${placeholders(ids.length)})`,
       )
       .bind(...ids)
       .all<EvidenceMessageRow>();
@@ -108,7 +124,7 @@ export async function resolveEvidenceReads(
   for (const ids of chunks(deliveryIds)) {
     const result = await db
       .prepare(
-        `SELECT delivery_id, room_id, message_id
+        `SELECT delivery_id, room_id, message_id, state, attempt
            FROM deliveries WHERE delivery_id IN (${placeholders(ids.length)})`,
       )
       .bind(...ids)
@@ -142,12 +158,34 @@ export async function resolveEvidenceReads(
         reads.set(row.evidence_id, { readable: false });
         continue;
       }
+      reads.set(row.evidence_id, {
+        readable: true,
+        roomId: room.room_id,
+        roomName: room.title,
+        roomKind: room.kind,
+        messageId: message.message_id,
+        deliveryId: row.delivery_id ?? undefined,
+        senderId: message.sender_id,
+        ...(message.sender_name ? { senderName: message.sender_name } : {}),
+        ...(message.sender_kind ? { senderKind: message.sender_kind } : {}),
+        createdAt: message.created_at,
+        excerpt: truncateChars(message.body, LIMITS.focusEvidenceExcerptChars),
+        deliveryState: delivery.state,
+        deliveryAttempt: delivery.attempt,
+      });
+      continue;
     }
     reads.set(row.evidence_id, {
       readable: true,
       roomId: room.room_id,
+      roomName: room.title,
+      roomKind: room.kind,
       messageId: message.message_id,
       ...(row.delivery_id ? { deliveryId: row.delivery_id } : {}),
+      senderId: message.sender_id,
+      ...(message.sender_name ? { senderName: message.sender_name } : {}),
+      ...(message.sender_kind ? { senderKind: message.sender_kind } : {}),
+      createdAt: message.created_at,
       excerpt: truncateChars(message.body, LIMITS.focusEvidenceExcerptChars),
     });
   }
@@ -170,8 +208,12 @@ export function evidenceView(
   };
   if (readable && read) {
     if (read.roomId) view.room_id = read.roomId;
+    if (read.roomName !== undefined) view.room_name = read.roomName;
     if (read.messageId) view.message_id = read.messageId;
     if (read.deliveryId) view.delivery_id = read.deliveryId;
+    if (read.senderId) view.sender_id = read.senderId;
+    if (read.senderName !== undefined) view.sender_name = read.senderName;
+    if (read.senderKind) view.sender_kind = read.senderKind;
     if (read.excerpt !== undefined) view.excerpt = read.excerpt;
   }
   return view;

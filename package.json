@@ -106,6 +106,7 @@
     "jsqr": "1.4.0",
     "lucide-react": "1.73.0",
     "mcp-use": "2.12.4",
+    "openai": "7.60.0",
     "p-limit": "^7.3.3",
     "proper-lockfile": "4.1.2",
     "react": "19",
