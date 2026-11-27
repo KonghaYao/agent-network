@@ -28,6 +28,7 @@
         "drizzle-orm": "0.45.4",
         "eventsource-parser": "^3.1.1",
         "fabric": "^6.7.0",
+        "file-saver": "^2.0.5",
         "flydrive": "2.2.0",
         "hono": "^4.13.13",
         "jsqr": "1.4.0",
@@ -58,6 +59,7 @@
         "@stylexjs/unplugin": "0.19.1",
         "@tailwindcss/vite": "4.3.5",
         "@types/bun": "^1.4.2",
+        "@types/file-saver": "^2.0.7",
         "@types/proper-lockfile": "4.1.4",
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
@@ -506,6 +508,8 @@
 
     "@types/estree-jsx": ["@types/estree-jsx@1.0.5", "", { "dependencies": { "@types/estree": "*" } }, "sha512-52CcUVNFyfb1A2ALocQw/Dd1BQFNmSdkuC3BkZ6iqhdMfQz7JWOFRuJFloOzjk+6WijU56m9oKXFAXc7o3Towg=="],
 
+    "@types/file-saver": ["@types/file-saver@2.0.7", "", {}, "sha512-dNKVfHd/jk0SkR/exKGj2ggkB45MAkzvWCaqLUUgkyjITkGNzH8H+yUwr+BLJUBjZOe9w8X3wgmXhZDRg1ED6A=="],
+
     "@types/hast": ["@types/hast@3.0.5", "", { "dependencies": { "@types/unist": "*" } }, "sha512-rp/ezSWaD1m44dPKICGhiskI13nVr7qTloFwDa/IYkhhf5nzwP+zIQcIJh3WIFSBOy/H1PzB40jPjMDksN4F+g=="],
 
     "@types/mdast": ["@types/mdast@4.0.4", "", { "dependencies": { "@types/unist": "*" } }, "sha512-kGaNbPh1k7AFzgpud/gMdvIm5xuECykRR+JnWKQno9TAXVa6WIVCGTPvYGekIDL4uwCZQSYbUxNBSb1aUo79oA=="],
@@ -735,6 +739,8 @@
     "fabric": ["fabric@6.9.1", "", { "optionalDependencies": { "canvas": "^2.11.2", "jsdom": "^20.0.1" } }, "sha512-TqG08Xbt4rtlPsXgCjSUcZz/RsyEP57Qo21nCVRkw7zz9nR0co4SLkL9Q/zQh3tC1Yxap6M5jKFHUKV6SgPovg=="],
 
     "fdir": ["fdir@6.5.0", "", { "peerDependencies": { "picomatch": "^3 || ^4" }, "optionalPeers": ["picomatch"] }, "sha512-tIbYtZbucOs0BRGqPJkshJUYdL+SDH7dVM8gjy+ERp3WAUjLEFJE+02kanyHtwjWOnwrKYBiwAmM0p4kLJAnXg=="],
+
+    "file-saver": ["file-saver@2.0.5", "", {}, "sha512-P9bmyZ3h/PRG+Nzga+rbdI4OEpNDzAVyy74uVO9ATgzLK6VtAsYybF/+TOCvrc0MO793d6+42lLyZTw7/ArVzA=="],
 
     "file-selector": ["file-selector@5.0.2", "", {}, "sha512-1hAy178VaMCWWj/vSUITOTpLWH1PoGW3eO7i3kPIppuSyOHBm3o1cHq+CvKAM5hQKQXlazrDt/3K1HCXgs7MpQ=="],
 

@@ -1,5 +1,6 @@
 import { Tooltip } from '../../app/lenso-tooltip';
 import { Button } from '../../app/lenso-controls';
+import { saveAs } from 'file-saver';
 import {
   memo,
   useCallback,
@@ -242,7 +243,13 @@ export const MessageFileCard = memo(function MessageFileCard({
     if (!fresh) return;
     const url = fileDownloadUrl(fresh);
     if (!url) return;
-    triggerDownload(url, cleanFileName(fresh.name) || name);
+    try {
+      saveAs(url, cleanFileName(fresh.name) || name);
+    } catch (error) {
+      if (mountedRef.current) {
+        setActionError(`文件下载失败：${errorMessage(error)}。请重试。`);
+      }
+    }
   };
 
   const retry = () => {
@@ -383,17 +390,6 @@ function cachedFromEntry(entry: FileMetaEntry): MetaState {
     status: 'error',
     message: entry.error?.message || '文件信息读取失败',
   };
-}
-
-function triggerDownload(url: string, name: string): void {
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = name;
-  anchor.rel = 'noopener noreferrer';
-  anchor.referrerPolicy = 'no-referrer';
-  document.body.append(anchor);
-  anchor.click();
-  anchor.remove();
 }
 
 function errorMessage(error: unknown): string {

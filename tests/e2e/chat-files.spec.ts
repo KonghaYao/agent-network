@@ -436,6 +436,45 @@ test.describe('SPA Chat file cards', () => {
     await expect(page.locator('#file-preview')).toHaveCount(0);
   });
 
+  test('re-signs an expired ticket and downloads without surfacing an error', async ({ page }) => {
+    await page.clock.setFixedTime(new Date('2026-11-13T12:00:00Z'));
+    const file = await seedRoomFile(base, humanToken, directRoomId, {
+      name: '过期下载.txt',
+      mimeType: 'text/plain',
+      body: Buffer.from('expired ticket download'),
+    });
+    const marker = `FILE-EXPIRED-DL-${crypto.randomUUID().slice(0, 8)}`;
+    await sendFileMessage(
+      base,
+      humanToken,
+      directRoomId,
+      `${marker}\n[过期下载.txt](${file.publicUrl})`,
+    );
+
+    await page.goto(`${base}/c/${directRoomId}`);
+    const message = page.locator('#messages .msg').filter({ hasText: marker });
+    await message.scrollIntoViewIfNeeded();
+    const download = message.locator('.msg-file-download');
+    await expect(download).toBeVisible({ timeout: 10_000 });
+    const initialHref = await download.getAttribute('href');
+    expect(initialHref).toMatch(/\/f\/f_[A-Za-z0-9_-]{22}\?download=1&t=/u);
+
+    // 关闭缓存 TTL 后点击下载：卡片先重签，再把新票据交给下载触发。
+    await page.clock.setFixedTime(new Date('2026-11-13T13:00:00Z'));
+    const [saved] = await Promise.all([
+      page.waitForEvent('download'),
+      download.click(),
+    ]);
+    expect(saved.suggestedFilename()).toBe('过期下载.txt');
+    const savedUrl = new URL(saved.url());
+    expect(savedUrl.origin).toBe(new URL(base).origin);
+    expect(savedUrl.pathname).toMatch(/^\/f\/f_[A-Za-z0-9_-]{22}$/u);
+    expect(savedUrl.searchParams.get('download')).toBe('1');
+    expect(savedUrl.searchParams.get('t')).toBeTruthy();
+    expect(savedUrl.searchParams.get('t')).not.toBe(new URL(initialHref!).searchParams.get('t'));
+    await expect(message.locator('.msg-file-note[role="alert"]')).toHaveCount(0);
+  });
+
   test('separates image MIME variants, non-images and active content', async ({ page }) => {
     const marker = `FILE-TYPES-${crypto.randomUUID().slice(0, 8)}`;
     const pdf = await seedRoomFile(base, humanToken, directRoomId, {
