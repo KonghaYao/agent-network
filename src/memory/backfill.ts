@@ -45,6 +45,16 @@ import {
   type BackfillWindow,
   type MessageScanRow,
 } from './backfill-window';
+import { SpaceCatchupRunner } from './backfill-space-catchup';
+import {
+  classifyError,
+  emptyCreated,
+  emptySkips,
+  emptySpaceCatchup,
+  type MemoryBackfillCreated,
+  type MemoryBackfillSkips,
+  type MemorySpaceCatchupRun,
+} from './backfill-shared';
 import {
   MEMORY_POLICY_VERSION,
   type MemoryExactRepresentation,
@@ -60,6 +70,12 @@ import {
   memorySourceMutationStatements,
 } from './statements';
 
+export type {
+  MemoryBackfillCreated,
+  MemoryBackfillSkips,
+  MemorySpaceCatchupRun,
+} from './backfill-shared';
+
 /** 内部游标命名空间，不是 actor 身份；它不参与鉴权。 */
 const BACKFILL_SCOPE_ID = 'memory-backfill';
 
@@ -70,6 +86,26 @@ const PRIVATE_TARGET: MemoryTargetScope = {
   member_seq: null,
   policy_revision: null,
 };
+
+export interface MemoryBackfillFlags {
+  windowEnabled: boolean;
+  spaceCatchup: boolean;
+}
+
+/**
+ * 部署开关到 runner 选项的唯一映射。
+ *
+ * 窗口回填保持“代码默认关闭、生产显式开启”；空间 catch-up 默认开启，可用
+ * `MEMORY_SPACE_CATCHUP=0` 立即停止新的初始补历史。
+ */
+export function memoryBackfillFlagsFromEnv(
+  env: Record<string, string | undefined>,
+): MemoryBackfillFlags {
+  return {
+    windowEnabled: env.MEMORY_BACKFILL === '1',
+    spaceCatchup: env.MEMORY_SPACE_CATCHUP !== '0',
+  };
+}
 
 export interface MemoryBackfillOptions {
   db: D1Database;
@@ -85,27 +121,11 @@ export interface MemoryBackfillOptions {
   replayUntil?: number;
   pageSize?: number;
   scanSafetyRows?: number;
+  /** 空间首次创建后的历史 catch-up；默认关闭，入口显式开启。 */
+  spaceCatchup?: boolean;
+  /** 整点窗口回填；默认开启。关闭后只跑空间 catch-up。 */
+  windowEnabled?: boolean;
   log?: (message: string, detail: Record<string, unknown>) => void;
-}
-
-export interface MemoryBackfillCreated {
-  representations: number;
-  receipts: number;
-  intents: number;
-  jobs: number;
-  experiences: number;
-}
-
-export interface MemoryBackfillSkips {
-  empty_body: number;
-  out_of_window: number;
-  source_inactive: number;
-  source_missing: number;
-  no_agent: number;
-  no_space: number;
-  capture_off: number;
-  denied: number;
-  already: number;
 }
 
 export interface MemoryBackfillRun {
@@ -120,6 +140,8 @@ export interface MemoryBackfillRun {
   errors: number;
   pending_backlog: number;
   duration_ms: number;
+  /** 独立的 per-space 首次补历史统计；不改变上方 window 字段语义。 */
+  space_catchup: MemorySpaceCatchupRun;
 }
 
 export interface MemoryBackfillStatus {
@@ -128,25 +150,7 @@ export interface MemoryBackfillStatus {
   last_run: MemoryBackfillRun | null;
 }
 
-function emptyCreated(): MemoryBackfillCreated {
-  return { representations: 0, receipts: 0, intents: 0, jobs: 0, experiences: 0 };
-}
-
-function emptySkips(): MemoryBackfillSkips {
-  return {
-    empty_body: 0,
-    out_of_window: 0,
-    source_inactive: 0,
-    source_missing: 0,
-    no_agent: 0,
-    no_space: 0,
-    capture_off: 0,
-    denied: 0,
-    already: 0,
-  };
-}
-
-function skippedRun(): MemoryBackfillRun {
+function skippedRun(spaceCatchupEnabled: boolean): MemoryBackfillRun {
   return {
     skipped: true,
     windows: 0,
@@ -159,6 +163,7 @@ function skippedRun(): MemoryBackfillRun {
     errors: 0,
     pending_backlog: 0,
     duration_ms: 0,
+    space_catchup: emptySpaceCatchup(spaceCatchupEnabled),
   };
 }
 
@@ -190,7 +195,10 @@ export class MemoryBackfill {
   readonly #replayUntil: number | null;
   readonly #pageSize: number;
   readonly #scanSafetyRows: number;
+  readonly #spaceCatchup: boolean;
+  readonly #windowEnabled: boolean;
   readonly #log: NonNullable<MemoryBackfillOptions['log']>;
+  readonly #spaceCatchupRunner: SpaceCatchupRunner;
 
   #running = false;
   #lastRunAt: number | null = null;
@@ -213,11 +221,22 @@ export class MemoryBackfill {
       0,
       options.scanSafetyRows ?? LIMITS.memoryBackfillScanSafetyRows,
     );
+    this.#spaceCatchup = options.spaceCatchup ?? false;
+    this.#windowEnabled = options.windowEnabled ?? true;
     this.#log =
       options.log ??
       ((message, detail) => {
         console.log(message, JSON.stringify(detail));
       });
+    this.#spaceCatchupRunner = new SpaceCatchupRunner({
+      db: this.#db,
+      instanceId: this.#instanceId,
+      pageSize: this.#pageSize,
+      now: () => this.#now(),
+      log: (message, detail) => this.#log(message, detail),
+      writeMessage: (row, window, skips, onlySpaceId) =>
+        this.#processMessage(row, window, skips, onlySpaceId),
+    });
   }
 
   status(): MemoryBackfillStatus {
@@ -228,7 +247,7 @@ export class MemoryBackfill {
   async runOnce(): Promise<MemoryBackfillRun> {
     if (this.#running) {
       this.#log('memory-backfill skip', { reason: 'already_running' });
-      return skippedRun();
+      return skippedRun(this.#spaceCatchup);
     }
     this.#running = true;
     try {
@@ -246,6 +265,7 @@ export class MemoryBackfill {
         errors: run.errors,
         pending_backlog: run.pending_backlog,
         duration_ms: run.duration_ms,
+        space_catchup: run.space_catchup,
       });
       return run;
     } finally {
@@ -275,6 +295,7 @@ export class MemoryBackfill {
         created,
         skips,
         errors,
+        spaceCatchup: emptySpaceCatchup(this.#spaceCatchup),
       });
     }
     const captureDefault = await readInstanceCaptureDefault(this.#db, this.#instanceId);
@@ -289,76 +310,86 @@ export class MemoryBackfill {
         created,
         skips,
         errors,
+        spaceCatchup: emptySpaceCatchup(this.#spaceCatchup),
       });
     }
 
     const now = this.#now();
-    const watermark = await readMemoryCursor(this.#db, {
-      scopeKind: 'agent',
-      scopeId: BACKFILL_SCOPE_ID,
-      cursorKind: MEMORY_CURSOR_KINDS.backfillWindowTo,
-    });
-    const plan =
-      this.#replayFrom === null
-        ? planBackfillWindows({
-            watermark,
-            now,
-            windowMs: this.#windowMs,
-            maxCatchupWindows: this.#maxCatchupWindows,
-          })
-        : planBackfillReplayWindows({
-            watermark,
-            from: this.#replayFrom,
-            until: Math.min(this.#replayUntil ?? now, now),
-            windowMs: this.#windowMs,
-            maxWindows: this.#maxCatchupWindows,
-          });
-    skippedWindows = plan.skippedWindows;
-    if (plan.skippedWindows > 0) {
-      this.#log('memory-backfill skipped_windows', {
-        skipped_windows: plan.skippedWindows,
-        max_catchup_windows: this.#maxCatchupWindows,
-      });
-    }
-
-    let currentTo = watermark;
-    for (const window of plan.windows) {
-      const result = await this.#processWindow(window, skips);
-      windowsRun += 1;
-      scanned += result.scanned;
-      pairs += result.pairs;
-      created.representations += result.created.representations;
-      created.receipts += result.created.receipts;
-      created.intents += result.created.intents;
-      created.jobs += result.created.jobs;
-      created.experiences += result.created.experiences;
-      errors += result.errors;
-      this.#log('memory-backfill window', {
-        from: window.from,
-        to: window.to,
-        scanned: result.scanned,
-        pairs: result.pairs,
-        created: result.created,
-        skips: result.skips,
-        errors: result.errors,
-      });
-      if (result.errors > 0) break;
-      await advanceMemoryCursor(this.#db, {
+    if (this.#windowEnabled) {
+      const watermark = await readMemoryCursor(this.#db, {
         scopeKind: 'agent',
         scopeId: BACKFILL_SCOPE_ID,
         cursorKind: MEMORY_CURSOR_KINDS.backfillWindowTo,
-        value: window.to,
-        now,
       });
-      currentTo = window.to;
-    }
-    caughtUp =
-      errors === 0 &&
-      plan.windows.length > 0 &&
-      currentTo !== null &&
-      currentTo >= plan.currentTo;
-    if (plan.windows.length === 0) caughtUp = errors === 0;
+      const plan =
+        this.#replayFrom === null
+          ? planBackfillWindows({
+              watermark,
+              now,
+              windowMs: this.#windowMs,
+              maxCatchupWindows: this.#maxCatchupWindows,
+            })
+          : planBackfillReplayWindows({
+              watermark,
+              from: this.#replayFrom,
+              until: Math.min(this.#replayUntil ?? now, now),
+              windowMs: this.#windowMs,
+              maxWindows: this.#maxCatchupWindows,
+            });
+      skippedWindows = plan.skippedWindows;
+      if (plan.skippedWindows > 0) {
+        this.#log('memory-backfill skipped_windows', {
+          skipped_windows: plan.skippedWindows,
+          max_catchup_windows: this.#maxCatchupWindows,
+        });
+      }
 
+      let currentTo = watermark;
+      for (const window of plan.windows) {
+        const result = await this.#processWindow(window, skips);
+        windowsRun += 1;
+        scanned += result.scanned;
+        pairs += result.pairs;
+        created.representations += result.created.representations;
+        created.receipts += result.created.receipts;
+        created.intents += result.created.intents;
+        created.jobs += result.created.jobs;
+        created.experiences += result.created.experiences;
+        errors += result.errors;
+        this.#log('memory-backfill window', {
+          from: window.from,
+          to: window.to,
+          scanned: result.scanned,
+          pairs: result.pairs,
+          created: result.created,
+          skips: result.skips,
+          errors: result.errors,
+        });
+        if (result.errors > 0) break;
+        await advanceMemoryCursor(this.#db, {
+          scopeKind: 'agent',
+          scopeId: BACKFILL_SCOPE_ID,
+          cursorKind: MEMORY_CURSOR_KINDS.backfillWindowTo,
+          value: window.to,
+          now,
+        });
+        currentTo = window.to;
+      }
+      caughtUp =
+        errors === 0 &&
+        plan.windows.length > 0 &&
+        currentTo !== null &&
+        currentTo >= plan.currentTo;
+      if (plan.windows.length === 0) caughtUp = errors === 0;
+    } else {
+      // 没有窗口水位就无法证明“已追平”；不要用 true 伪装。调用方通过
+      // status 的 window_enabled=false 区分。
+      this.#log('memory-backfill window disabled', { space_catchup: this.#spaceCatchup });
+    }
+
+    const spaceCatchup = this.#spaceCatchup
+      ? await this.#spaceCatchupRunner.run(now)
+      : emptySpaceCatchup(false);
     const pendingBacklog = await this.#pendingBacklog();
     return this.#result({
       windowsRun,
@@ -371,6 +402,7 @@ export class MemoryBackfill {
       errors,
       pendingBacklog,
       durationMs: Date.now() - started,
+      spaceCatchup,
     });
   }
 
@@ -383,6 +415,7 @@ export class MemoryBackfill {
     created: MemoryBackfillCreated;
     skips: MemoryBackfillSkips;
     errors: number;
+    spaceCatchup: MemorySpaceCatchupRun;
     pendingBacklog?: number;
     durationMs?: number;
   }): MemoryBackfillRun {
@@ -398,6 +431,7 @@ export class MemoryBackfill {
       errors: input.errors,
       pending_backlog: input.pendingBacklog ?? 0,
       duration_ms: input.durationMs ?? 0,
+      space_catchup: input.spaceCatchup,
     };
   }
 
@@ -490,6 +524,7 @@ export class MemoryBackfill {
     row: MessageScanRow,
     window: BackfillWindow,
     skips: MemoryBackfillSkips,
+    onlySpaceId?: string,
   ): Promise<{
     pairs: number;
     representations: number;
@@ -523,8 +558,15 @@ export class MemoryBackfill {
     const fanout = await listBackfillFanout(this.#db, {
       roomId: room.room_id,
       instanceId: this.#instanceId,
+      ...(onlySpaceId ? { spaceId: onlySpaceId } : {}),
     });
     if (fanout.length === 0) {
+      // 空间过滤后无扇出：空间可能在扫描期间被排除、停用或成员变化。
+      // 这不是全局窗口的“没有 Agent/没有空间”，不推进窗口分类。
+      if (onlySpaceId) {
+        skips.space_capture_changed += 1;
+        return empty;
+      }
       const candidates = await countBackfillCandidates(this.#db, {
         roomId: room.room_id,
         instanceId: this.#instanceId,
@@ -918,14 +960,4 @@ export class MemoryBackfill {
       updated_at: now,
     };
   }
-}
-
-function classifyError(error: unknown): string {
-  if (error instanceof Error) {
-    const text = error.message;
-    if (text.includes('UNIQUE') || text.includes('FOREIGN KEY')) return 'constraint';
-    if (text.includes('SQLITE')) return 'sqlite';
-    return error.name;
-  }
-  return 'unknown';
 }

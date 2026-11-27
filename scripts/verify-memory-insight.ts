@@ -1156,6 +1156,52 @@ async function main(): Promise<void> {
   const noSpace = await service.overview(viewer('human', friend), { actor_id: noSpaceAgent });
   checkEqual('无 active space 返回 no_space', noSpace.reason, 'no_space');
   checkEqual('no_space 不伪造 stats', noSpace.stats, null);
+  checkEqual('no_space 显示 catch-up 关闭', noSpace.backfill.space_catchup, 'disabled');
+  checkEqual('no_space 显示窗口关闭', noSpace.backfill.window_enabled, false);
+
+  const catchupService = new MemoryInsightService({
+    db: env.d1,
+    reader,
+    memoryEnabled: true,
+    spaceCatchupEnabled: true,
+    windowEnabled: true,
+    now: () => clock,
+  });
+  const pendingCatchup = await catchupService.overview(viewer('human', friend), {
+    actor_id: target,
+    refresh: true,
+  });
+  checkEqual('空间未 done 显示 catch-up pending', pendingCatchup.backfill.space_catchup, 'pending');
+  checkEqual('空间显示窗口回填开启', pendingCatchup.backfill.window_enabled, true);
+  const noSpaceCatchup = await catchupService.overview(viewer('human', friend), {
+    actor_id: noSpaceAgent,
+  });
+  checkEqual('no_space 且启用时显示 pending', noSpaceCatchup.backfill.space_catchup, 'pending');
+  await env.d1
+    .prepare(
+      `INSERT INTO memory_cursors (scope_kind, scope_id, cursor_kind, value, updated_at)
+       VALUES ('space', ?, 'space_catchup_done', 1, ?)`,
+    )
+    .bind(targetSpace.space_id, clock)
+    .run();
+  const completedCatchup = await catchupService.overview(viewer('human', friend), {
+    actor_id: target,
+    refresh: true,
+  });
+  checkEqual(
+    '空间 done 后显示 catch-up completed',
+    completedCatchup.backfill.space_catchup,
+    'completed',
+  );
+  const completedButDisabled = await service.overview(viewer('human', friend), {
+    actor_id: target,
+    refresh: true,
+  });
+  checkEqual(
+    '关闭 catch-up 时 done 游标仍显示 disabled',
+    completedButDisabled.backfill.space_catchup,
+    'disabled',
+  );
 
   console.log('--- graph 裁剪 ---');
   fake.resetRequests();
@@ -2125,6 +2171,8 @@ async function main(): Promise<void> {
   checkEqual('实体列表页大小', entityList.items.length, 100);
   checkEqual('实体列表 has_more', entityList.has_more, true);
   checkEqual('实体列表 next_offset', entityList.next_offset, 100);
+  checkEqual('实体列表带 catch-up 状态', entityList.backfill.space_catchup, 'disabled');
+  checkEqual('实体列表带窗口状态', entityList.backfill.window_enabled, false);
   assertNoSensitive('entities list 输出', entityList, targetBank);
 
   fake.resetRequests();

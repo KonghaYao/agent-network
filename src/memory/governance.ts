@@ -34,6 +34,7 @@ import {
   roomAccessVersion,
 } from './access';
 import { getSource, applyMemoryForget } from './store';
+import { MEMORY_CURSOR_KINDS, readMemoryCursor } from './jobs';
 import {
   memoryGovernanceCommandStatement,
   memoryJobStatement,
@@ -884,6 +885,8 @@ export async function memoryStatusSnapshot(
     runtimeAvailable: boolean;
     hostLevel: string;
     supportedHostModes: readonly string[];
+    spaceCatchupEnabled: boolean;
+    windowEnabled: boolean;
   },
 ): Promise<{
   enabled: boolean;
@@ -895,6 +898,12 @@ export async function memoryStatusSnapshot(
   supported_host_modes: readonly string[];
   modes: readonly string[];
   counts: { jobs_pending: number; jobs_unknown: number; jobs_failed: number; retain_pending: number; contexts_ready: number };
+  backfill: {
+    space_catchup_enabled: boolean;
+    space_catchup_pending: boolean;
+    space_catchup_completed: boolean;
+    window_enabled: boolean;
+  };
   unsupported: readonly string[];
 }> {
   const context = await requireCurrentMemorySpace(db, {
@@ -926,6 +935,12 @@ export async function memoryStatusSnapshot(
     )
     .bind(context.space.space_id, context.space.ownership_epoch)
     .first<{ n: number }>();
+  const catchupDone = await readMemoryCursor(db, {
+    scopeKind: 'space',
+    scopeId: context.space.space_id,
+    cursorKind: MEMORY_CURSOR_KINDS.spaceCatchupDone,
+  });
+  const catchupCompleted = catchupDone === 1;
   return {
     enabled: options.runtimeAvailable,
     capture: options.captureEnabled,
@@ -941,6 +956,13 @@ export async function memoryStatusSnapshot(
       jobs_failed: byStatus.get('failed') ?? 0,
       retain_pending: retain?.n ?? 0,
       contexts_ready: contexts?.n ?? 0,
+    },
+    backfill: {
+      space_catchup_enabled: options.spaceCatchupEnabled,
+      // 关闭时只暴露 disabled，不让 pending/completed 与 enabled 互相矛盾。
+      space_catchup_pending: options.spaceCatchupEnabled && !catchupCompleted,
+      space_catchup_completed: options.spaceCatchupEnabled && catchupCompleted,
+      window_enabled: options.windowEnabled,
     },
     unsupported: options.runtimeAvailable ? ['task_target', 'auto_injection'] : ['all'],
   };

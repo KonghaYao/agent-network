@@ -164,11 +164,24 @@ export interface InsightEntityGraph {
   truncated: boolean;
 }
 
+export interface InsightBackfillState {
+  /**
+   * 当前 space 的首次历史补扫状态。
+   * - `disabled`：部署关闭了 MEMORY_SPACE_CATCHUP；
+   * - `pending`：尚无 active space，或空间存在但尚未扫完历史；
+   * - `completed`：该空间已完成初始 catch-up，之后的新消息依赖窗口回填。
+   */
+  space_catchup: 'disabled' | 'pending' | 'completed';
+  /** 整点窗口回填是否启用；false 表示 catch-up 之后的新消息不会自动进入记忆。 */
+  window_enabled: boolean;
+}
+
 export interface InsightOverviewResult {
   available: boolean;
   reason: InsightAvailabilityReason;
   actor: InsightActorView;
   fetched_at: number;
+  backfill: InsightBackfillState;
   stats: InsightStats | null;
 }
 
@@ -177,6 +190,7 @@ export interface InsightGraphResult {
   reason: InsightAvailabilityReason;
   actor: InsightActorView;
   fetched_at: number;
+  backfill: InsightBackfillState;
   nodes: InsightGraphNode[];
   edges: InsightGraphEdge[];
   total_units: number | null;
@@ -222,6 +236,7 @@ export interface InsightListResult {
   reason: InsightAvailabilityReason;
   actor: InsightActorView;
   fetched_at: number;
+  backfill: InsightBackfillState;
   items: InsightMemoryItem[];
   total: number | null;
   limit: number;
@@ -266,6 +281,7 @@ export interface InsightTimelineResult {
   reason: InsightAvailabilityReason;
   actor: InsightActorView;
   fetched_at: number;
+  backfill: InsightBackfillState;
   items: InsightTimelineItem[];
   groups: Record<InsightTimelineGranularity, InsightTimelineGroup[]>;
   summary: InsightTimelineSummary;
@@ -279,6 +295,7 @@ export interface InsightGetResult {
   reason: InsightAvailabilityReason;
   actor: InsightActorView;
   fetched_at: number;
+  backfill: InsightBackfillState;
   memory: InsightMemoryDetail | null;
 }
 
@@ -287,6 +304,7 @@ export interface InsightEntitiesResult {
   reason: InsightAvailabilityReason;
   actor: InsightActorView;
   fetched_at: number;
+  backfill: InsightBackfillState;
   view: 'list' | 'graph' | 'detail';
   items: InsightEntityItem[];
   total: number | null;
@@ -522,11 +540,17 @@ const entityGraphSchema = z.looseObject({
   truncated: z.boolean(),
 });
 
+const backfillStateSchema = z.looseObject({
+  space_catchup: z.enum(['disabled', 'pending', 'completed']),
+  window_enabled: z.boolean(),
+});
+
 export const insightOverviewOutputSchema = z.looseObject({
   available: z.boolean(),
   reason: reasonSchema,
   actor: actorSchema,
   fetched_at: z.number(),
+  backfill: backfillStateSchema,
   stats: statsSchema.nullable(),
 });
 
@@ -582,6 +606,7 @@ export const insightGraphOutputSchema = z.looseObject({
   reason: reasonSchema,
   actor: actorSchema,
   fetched_at: z.number(),
+  backfill: backfillStateSchema,
   nodes: z.array(graphNodeSchema),
   edges: z.array(graphEdgeSchema),
   total_units: z.number().nullable(),
@@ -600,6 +625,7 @@ export const insightListOutputSchema = z.looseObject({
   reason: reasonSchema,
   actor: actorSchema,
   fetched_at: z.number(),
+  backfill: backfillStateSchema,
   items: z.array(memoryItemSchema),
   total: z.number().nullable(),
   limit: z.number(),
@@ -624,6 +650,7 @@ export const insightTimelineOutputSchema = z.looseObject({
   reason: reasonSchema,
   actor: actorSchema,
   fetched_at: z.number(),
+  backfill: backfillStateSchema,
   items: z.array(timelineItemSchema),
   groups: z.looseObject({
     day: z.array(timelineGroupSchema),
@@ -641,6 +668,7 @@ export const insightGetOutputSchema = z.looseObject({
   reason: reasonSchema,
   actor: actorSchema,
   fetched_at: z.number(),
+  backfill: backfillStateSchema,
   memory: memoryDetailSchema.nullable(),
 });
 
@@ -649,6 +677,7 @@ export const insightEntitiesOutputSchema = z.looseObject({
   reason: reasonSchema,
   actor: actorSchema,
   fetched_at: z.number(),
+  backfill: backfillStateSchema,
   view: z.enum(['list', 'graph', 'detail']),
   items: z.array(entityItemSchema),
   total: z.number().nullable(),

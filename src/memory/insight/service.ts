@@ -22,6 +22,7 @@ import {
   insightBusinessError,
   type InsightActorView,
   type InsightAvailabilityReason,
+  type InsightBackfillState,
   type InsightEntitiesInput,
   type InsightEntitiesResult,
   type InsightGetInput,
@@ -56,6 +57,7 @@ import {
   normalizeStats,
   normalizeTimelineItem,
 } from './normalize';
+import { MEMORY_CURSOR_KINDS, readMemoryCursor } from '../jobs';
 import { resolveTimelineZone, type TimelineZone } from './timeline-zone';
 import { graphTimeline, sortTimelineItems, timelineGroups, timelineSummary } from './timeline-projection';
 
@@ -69,6 +71,10 @@ export interface MemoryInsightServiceOptions {
   db: D1Like;
   reader: InsightReader | null;
   memoryEnabled: boolean;
+  /** 空间首次 catch-up 是否启用；只用于只读状态展示。 */
+  spaceCatchupEnabled?: boolean;
+  /** 整点窗口回填是否启用；只用于只读状态展示。 */
+  windowEnabled?: boolean;
   cache?: InsightCache;
   now?: () => number;
 }
@@ -76,6 +82,7 @@ export interface MemoryInsightServiceOptions {
 interface BaseView {
   actor: InsightActorView;
   fetched_at: number;
+  backfill: InsightBackfillState;
 }
 
 function actorView(target: ActorRow): InsightActorView {  return {
@@ -132,6 +139,8 @@ export class MemoryInsightService {
   readonly #db: D1Like;
   readonly #reader: InsightReader | null;
   readonly #memoryEnabled: boolean;
+  readonly #spaceCatchupEnabled: boolean;
+  readonly #windowEnabled: boolean;
   readonly #cache: InsightCache;
   readonly #now: () => number;
 
@@ -139,6 +148,8 @@ export class MemoryInsightService {
     this.#db = options.db;
     this.#reader = options.reader;
     this.#memoryEnabled = options.memoryEnabled;
+    this.#spaceCatchupEnabled = options.spaceCatchupEnabled ?? false;
+    this.#windowEnabled = options.windowEnabled ?? false;
     this.#now = options.now ?? Date.now;
     this.#cache =
       options.cache ??
@@ -154,18 +165,19 @@ export class MemoryInsightService {
     input: InsightOverviewInput,
   ): Promise<InsightOverviewResult> {
     return this.#run(viewer, input.actor_id, 'overview', async (target) => {
-      const base = this.#base(target);
+      const base = await this.#base(target);
       const gate = this.#gate();
       if (gate) return { ...base, available: false, reason: gate, stats: null };
       const reader = this.#reader!;
       const space = await loadInsightSpace(this.#db, target.actor_id);
       if (!space) return { ...base, available: false, reason: 'no_space', stats: null };
+      const spaceBase = await this.#base(target, space);
       const bank = await reader.bankFor(spaceRef(space));
       return this.#cache.getOrLoad(
         this.#cacheKey(space, 'overview', {}),
         async () => {
           const outcome = await reader.stats(bank);
-          return this.#overviewResult(target, outcome);
+          return this.#overviewResult(spaceBase, outcome);
         },
         { refresh: input.refresh },
       );
@@ -193,12 +205,13 @@ export class MemoryInsightService {
       const upstreamLimit = includeRows
         ? Math.min(Math.max(limit, rowsLimit), LIMITS.memoryPanelRowsMax)
         : limit;
-      const base = this.#base(target);
+      const base = await this.#base(target);
       const gate = this.#gate();
       if (gate) return this.#emptyGraph(base, gate, limit, includeRows, zone);
       const reader = this.#reader!;
       const space = await loadInsightSpace(this.#db, target.actor_id);
       if (!space) return this.#emptyGraph(base, 'no_space', limit, includeRows, zone);
+      const spaceBase = await this.#base(target, space);
       const bank = await reader.bankFor(spaceRef(space));
       return this.#cache.getOrLoad(
         this.#cacheKey(space, 'graph', {
@@ -222,10 +235,10 @@ export class MemoryInsightService {
             q: input.q,
           });
           if (httpStatusOf(outcome) === 404) {
-            return this.#emptyGraph(base, 'bank_missing', limit, includeRows, zone);
+            return this.#emptyGraph(spaceBase, 'bank_missing', limit, includeRows, zone);
           }
           if (httpStatusOf(outcome) === 405 || httpStatusOf(outcome) === 410) {
-            return this.#emptyGraph(base, 'backend_unsupported', limit, includeRows, zone);
+            return this.#emptyGraph(spaceBase, 'backend_unsupported', limit, includeRows, zone);
           }
           if (!outcome.ok) this.#throwReadFailure(outcome);
           const graph = normalizeMemoryGraph(outcome.body, {
@@ -235,7 +248,7 @@ export class MemoryInsightService {
           });
           if (!graph) throw insightBusinessError('UPSTREAM_UNAVAILABLE');
           const result: InsightGraphResult = {
-            ...base,
+            ...spaceBase,
             available: true,
             reason: 'ok',
             nodes: graph.nodes,
@@ -278,12 +291,13 @@ export class MemoryInsightService {
       );
       const offset = input.offset ?? 0;
       const textChars = input.text_chars ?? LIMITS.memoryPanelFactsTextChars;
-      const base = this.#base(target);
+      const base = await this.#base(target);
       const gate = this.#gate();
       if (gate) return this.#emptyList(base, gate, limit, offset);
       const reader = this.#reader!;
       const space = await loadInsightSpace(this.#db, target.actor_id);
       if (!space) return this.#emptyList(base, 'no_space', limit, offset);
+      const spaceBase = await this.#base(target, space);
       const bank = await reader.bankFor(spaceRef(space));
       const params = {
         limit,
@@ -301,10 +315,10 @@ export class MemoryInsightService {
         async () => {
           const outcome = await reader.memories(bank, params);
           if (httpStatusOf(outcome) === 404) {
-            return this.#emptyList(base, 'bank_missing', limit, offset);
+            return this.#emptyList(spaceBase, 'bank_missing', limit, offset);
           }
           if (httpStatusOf(outcome) === 405 || httpStatusOf(outcome) === 410) {
-            return this.#emptyList(base, 'backend_unsupported', limit, offset);
+            return this.#emptyList(spaceBase, 'backend_unsupported', limit, offset);
           }
           if (!outcome.ok) this.#throwReadFailure(outcome);
           const normalized = normalizeMemoryList(outcome.body, { textChars });
@@ -315,7 +329,7 @@ export class MemoryInsightService {
               ? offset + normalized.raw_count < normalized.total
               : normalized.raw_count === limit);
           const result: InsightListResult = {
-            ...base,
+            ...spaceBase,
             available: true,
             reason: 'ok',
             items: normalized.items,
@@ -351,12 +365,13 @@ export class MemoryInsightService {
         LIMITS.memoryPanelTimelineLimitMax,
       );
       const zone = resolveTimelineZone(input);
-      const base = this.#base(target);
+      const base = await this.#base(target);
       const gate = this.#gate();
       if (gate) return this.#emptyTimeline(base, gate, days, limit);
       const reader = this.#reader!;
       const space = await loadInsightSpace(this.#db, target.actor_id);
       if (!space) return this.#emptyTimeline(base, 'no_space', days, limit);
+      const spaceBase = await this.#base(target, space);
       const bank = await reader.bankFor(spaceRef(space));
       return this.#cache.getOrLoad(
         this.#cacheKey(space, 'timeline', {
@@ -391,10 +406,10 @@ export class MemoryInsightService {
               deadline_at: deadlineAt,
             });
             if (httpStatusOf(outcome) === 404) {
-              return this.#emptyTimeline(base, 'bank_missing', days, limit);
+              return this.#emptyTimeline(spaceBase, 'bank_missing', days, limit);
             }
             if (httpStatusOf(outcome) === 405 || httpStatusOf(outcome) === 410) {
-              return this.#emptyTimeline(base, 'backend_unsupported', days, limit);
+              return this.#emptyTimeline(spaceBase, 'backend_unsupported', days, limit);
             }
             if (!outcome.ok) this.#throwReadFailure(outcome);
             const normalized = normalizeMemoryList(outcome.body);
@@ -428,7 +443,7 @@ export class MemoryInsightService {
           if (total !== null) hasMore = total > collected.length;
           const sorted = sortTimelineItems(collected);
           const result: InsightTimelineResult = {
-            ...base,
+            ...spaceBase,
             available: true,
             reason: 'ok',
             items: sorted,
@@ -448,12 +463,13 @@ export class MemoryInsightService {
 
   async get(viewer: InsightViewer, input: InsightGetInput): Promise<InsightGetResult> {
     return this.#run(viewer, input.actor_id, 'get', async (target) => {
-      const base = this.#base(target);
+      const base = await this.#base(target);
       const gate = this.#gate();
       if (gate) return this.#emptyGet(base, gate);
       const reader = this.#reader!;
       const space = await loadInsightSpace(this.#db, target.actor_id);
       if (!space) return this.#emptyGet(base, 'no_space');
+      const spaceBase = await this.#base(target, space);
       const bank = await reader.bankFor(spaceRef(space));
       return this.#cache.getOrLoad(
         this.#cacheKey(space, 'get', { memory_id: input.memory_id }),
@@ -463,12 +479,12 @@ export class MemoryInsightService {
             throw insightBusinessError('NOT_FOUND');
           }
           if (httpStatusOf(outcome) === 405 || httpStatusOf(outcome) === 410) {
-            return this.#emptyGet(base, 'backend_unsupported');
+            return this.#emptyGet(spaceBase, 'backend_unsupported');
           }
           if (!outcome.ok) this.#throwReadFailure(outcome);
           const memory = normalizeMemoryDetail(outcome.body, input.memory_id);
           if (!memory) throw insightBusinessError('UPSTREAM_UNAVAILABLE');
-          return { ...base, available: true, reason: 'ok', memory };
+          return { ...spaceBase, available: true, reason: 'ok', memory };
         },
         { refresh: input.refresh },
       );
@@ -481,12 +497,13 @@ export class MemoryInsightService {
   ): Promise<InsightEntitiesResult> {
     return this.#run(viewer, input.actor_id, 'entities', async (target) => {
       const view = input.entity_id ? 'detail' : (input.view ?? 'list');
-      const base = this.#base(target);
+      const base = await this.#base(target);
       const gate = this.#gate();
       if (gate) return this.#emptyEntities(base, gate, view, input.limit ?? 0);
       const reader = this.#reader!;
       const space = await loadInsightSpace(this.#db, target.actor_id);
       if (!space) return this.#emptyEntities(base, 'no_space', view, input.limit ?? 0);
+      const spaceBase = await this.#base(target, space);
       const bank = await reader.bankFor(spaceRef(space));
       if (view === 'detail') {
         return this.#cache.getOrLoad(
@@ -495,7 +512,7 @@ export class MemoryInsightService {
             entity_id: input.entity_id,
           }),
           async () =>
-            this.#entityDetailResult(reader, bank, base, input.entity_id!),
+            this.#entityDetailResult(reader, bank, spaceBase, input.entity_id!),
           { refresh: input.refresh },
         );
       }
@@ -510,10 +527,10 @@ export class MemoryInsightService {
           async () => {
             const outcome = await reader.entityGraph(bank, { limit, min_count: minCount });
             if (httpStatusOf(outcome) === 404) {
-              return this.#emptyEntities(base, 'bank_missing', view, limit);
+              return this.#emptyEntities(spaceBase, 'bank_missing', view, limit);
             }
             if (httpStatusOf(outcome) === 405 || httpStatusOf(outcome) === 410) {
-              return this.#emptyEntities(base, 'backend_unsupported', view, limit);
+              return this.#emptyEntities(spaceBase, 'backend_unsupported', view, limit);
             }
             if (!outcome.ok) this.#throwReadFailure(outcome);
             const graph = normalizeEntityGraph(outcome.body, {
@@ -523,7 +540,7 @@ export class MemoryInsightService {
             });
             if (!graph) throw insightBusinessError('UPSTREAM_UNAVAILABLE');
             return {
-              ...base,
+              ...spaceBase,
               available: true,
               reason: 'ok' as const,
               view: 'graph' as const,
@@ -552,10 +569,10 @@ export class MemoryInsightService {
         async () => {
           const outcome = await reader.entities(bank, { limit, offset });
           if (httpStatusOf(outcome) === 404) {
-            return this.#emptyEntities(base, 'bank_missing', 'list', limit, offset);
+            return this.#emptyEntities(spaceBase, 'bank_missing', 'list', limit, offset);
           }
           if (httpStatusOf(outcome) === 405 || httpStatusOf(outcome) === 410) {
-            return this.#emptyEntities(base, 'backend_unsupported', 'list', limit, offset);
+            return this.#emptyEntities(spaceBase, 'backend_unsupported', 'list', limit, offset);
           }
           if (!outcome.ok) this.#throwReadFailure(outcome);
           const normalized = normalizeEntityList(outcome.body);
@@ -566,7 +583,7 @@ export class MemoryInsightService {
               ? offset + normalized.raw_count < normalized.total
               : normalized.raw_count === limit);
           const result: InsightEntitiesResult = {
-            ...base,
+            ...spaceBase,
             available: true,
             reason: 'ok',
             view: 'list',
@@ -694,8 +711,24 @@ export class MemoryInsightService {
     return null;
   }
 
-  #base(target: ActorRow): BaseView {
-    return { actor: actorView(target), fetched_at: this.#now() };
+  async #base(target: ActorRow, space?: MemorySpaceRow | null): Promise<BaseView> {
+    const done = space
+      ? await readMemoryCursor(this.#db, {
+          scopeKind: 'space',
+          scopeId: space.space_id,
+          cursorKind: MEMORY_CURSOR_KINDS.spaceCatchupDone,
+        })
+      : null;
+    const state: InsightBackfillState['space_catchup'] = !this.#spaceCatchupEnabled
+      ? 'disabled'
+      : done === 1
+        ? 'completed'
+        : 'pending';
+    return {
+      actor: actorView(target),
+      fetched_at: this.#now(),
+      backfill: { space_catchup: state, window_enabled: this.#windowEnabled },
+    };
   }
 
   #cacheKey(space: MemorySpaceRow, view: InsightView, params: unknown): string {
@@ -708,8 +741,7 @@ export class MemoryInsightService {
     ].join(':');
   }
 
-  #overviewResult(target: ActorRow, outcome: InsightReadResult): InsightOverviewResult {
-    const base = this.#base(target);
+  #overviewResult(base: BaseView, outcome: InsightReadResult): InsightOverviewResult {
     if (outcome.ok) {
       const stats = normalizeStats(outcome.body);
       if (!stats) throw insightBusinessError('UPSTREAM_UNAVAILABLE');

@@ -134,9 +134,10 @@ export function registerMemoryInsightTools(
     insightEntitiesInputSchema,
     insightEntitiesOutputSchema,
     async (input: InsightEntitiesInput) =>
-      (await serviceOf(env).entities(viewerOf(principal), input)) as StandardSchemaWithJSON.InferOutput<
-        typeof insightEntitiesOutputSchema
-      >,
+      (await serviceOf(env).entities(
+        viewerOf(principal),
+        input,
+      )) as StandardSchemaWithJSON.InferOutput<typeof insightEntitiesOutputSchema>,
     { readOnlyHint: true },
   );
 }

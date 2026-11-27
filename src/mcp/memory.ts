@@ -202,7 +202,7 @@ export function registerMemoryTools(
   registerMemoryTool(
     server,
     'network_memory_status',
-    '读取当前 Agent 的 Memory 能力与空间状态：是否启用、capture、宿主等级、可用召回模式、待处理作业/retain 计数与明确不支持项。Memory 关闭时返回 enabled=false，不伪造空库；不返回 provider/bank/密钥。',
+    '读取当前 Agent 的 Memory 能力与空间状态：是否启用、capture、宿主等级、可用召回模式、待处理作业/retain 计数、空间首次补历史状态与明确不支持项。Memory 关闭时返回 enabled=false，不伪造空库；不返回 provider/bank/密钥。',
     memoryEmptyInputSchema,
     memoryStatusOutputSchema,
     async () => {
@@ -220,6 +220,12 @@ export function registerMemoryTools(
           supported_host_modes: catalog.host_modes,
           modes: catalog.recall_modes,
           counts: { jobs_pending: 0, jobs_unknown: 0, jobs_failed: 0, retain_pending: 0, contexts_ready: 0 },
+          backfill: {
+            space_catchup_enabled: false,
+            space_catchup_pending: false,
+            space_catchup_completed: false,
+            window_enabled: false,
+          },
           unsupported: catalog.unsupported,
         };
       }
@@ -232,6 +238,8 @@ export function registerMemoryTools(
         runtimeAvailable: true,
         hostLevel: policy.trust_level,
         supportedHostModes: catalog.host_modes,
+        spaceCatchupEnabled: env.MEMORY_SPACE_CATCHUP_ENABLED === true,
+        windowEnabled: env.MEMORY_BACKFILL_ENABLED === true,
         now: nowMs(),
       });
       return {
