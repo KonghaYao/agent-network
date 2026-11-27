@@ -46,15 +46,28 @@ async function main() {
       agent_session_id: `sess_${crypto.randomUUID().replaceAll('-', '')}`,
     });
     const listed = (await rawRpc('tools/list')).body.result as { tools: ListedTool[] };
-    const guide = await callTool<Guide>(owner.client, 'network_client_guide', { client_tool_names: ['network_me'] });
+    const guide = await callTool<Guide>(owner.client, 'network_client_guide', {
+      client_tool_names: ['network_me'],
+    });
     const me = await callTool<{ service: ServiceInfo; pending_count: number }>(owner.client, 'network_me');
     checkEqual('default guide is one-shot', guide.mode, 'one_shot');
     checkEqual('catalog names match live tools/list', guide.tool_names.join(','), listed.tools.map((tool) => tool.name).sort().join(','));
     checkEqual('catalog hash matches live schemas and descriptions', guide.service.toolset_sha256, toolsetDigest(listed.tools));
     checkEqual('network_me exposes the same contract digest', me.service.toolset_sha256, guide.service.toolset_sha256);
     checkEqual('manifest count is actual registered tool count', me.service.tool_count, listed.tools.length);
-    check('missing task/send/upload tools diagnosed', ['network_task_mark', 'network_message_send_status', 'network_file_upload_prepare'].every((name) => guide.missing_tools.includes(name)));
+    check(
+      'missing send/upload/room tools diagnosed',
+      ['network_message_send_status', 'network_file_upload_prepare', 'network_room_get'].every(
+        (name) => guide.missing_tools.includes(name),
+      ),
+      guide.missing_tools,
+    );
     check('present tool is not reported missing', !guide.missing_tools.includes('network_me'));
+    check(
+      'retired task tools are not advertised',
+      !guide.missing_tools.some((name) => name.startsWith('network_task_')),
+      guide.missing_tools.filter((name) => name.startsWith('network_task_')),
+    );
     check('bootstrap fits observed 512-character connector prefix', CLIENT_INSTRUCTIONS.length <= 512);
     for (const mode of ['one_shot', 'webhook', 'persistent']) {
       const modeGuide = await callTool<Guide>(owner.client, 'network_client_guide', { mode });

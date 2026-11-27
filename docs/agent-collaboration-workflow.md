@@ -154,7 +154,7 @@ worktree 只隔离工作区：两个人可以在不同目录、不同分支上�
 | --- | --- | --- | --- |
 | 15:06 | `1f6c8d4` | 并行的成员头像样式修复：统一 `.avatar-icon` 的尺寸与裁剪 | 修改 `src/web/chat-styles.ts` 与 `tests/e2e/presence-avatars.spec.ts`；15:16 由 `21072b9` 合入 |
 | 16:40 | `9f3b79b` | 后端先落契约：迁移 0050 增加 `actors.avatar_file_id`，`network_profile_update` 支持设置/清除，GC 把头像当长期引用 | 迁移 `0050_actor_avatar.sql`；提交说明记录 `test:avatar` 45、`test:protocol` 1133、`test:acceptance` 2039 |
-| 17:15 | `a2c581c` | 前端统一头像渲染：新增 `ActorAvatar`，接入会话列表、成员弹窗、联系人搜索、消息、Task 摘要、账号区等入口 | 20 个文件；`ActorAvatar` 复用 `.avatar-icon` 契约，加载失败回退首字（`src/web/features/avatar/ActorAvatar.tsx:30-100`） |
+| 17:15 | `a2c581c` | 前端统一头像渲染：新增 `ActorAvatar`，接入会话列表、成员弹窗、联系人搜索、消息、账号区等入口 | 20 个文件；`ActorAvatar` 复用 `.avatar-icon` 契约，加载失败回退首字（`src/web/features/avatar/ActorAvatar.tsx:30-100`） |
 | 17:16 | `99ff7d9` | 上传/移除交互：`AvatarEditDialog`、预览、错误状态、e2e | `tests/e2e/avatar-ui.spec.ts` 496 行；覆盖六处显示、替换、移除、404 回退、SVG/非图片拒绝（`tests/e2e/avatar-ui.spec.ts:220`、`:315`、`:356`、`:389`、`:415`） |
 | 17:51 | `978657c` | PWA 恢复分支合入；两条线都改过 `src/web/hooks/useRoomChat.ts` | merge commit 第一父 `99ff7d9`（含头像），第二父 `98782db`（PWA 恢复） |
 
@@ -174,13 +174,13 @@ worktree 只隔离工作区：两个人可以在不同目录、不同分支上�
 | 13:24 | `622e0ae` | 扫码 / 设备配对 | `/pair` 页面、扫码器、5 分钟一次性挑战、设备列表；`scripts/verify-pwa-pair.ts`、`tests/e2e/pwa-pair.spec.ts` |
 | 14:23–15:15 | `e144be3`、`3aab633`、`45084eb` | 更新安全 | 更新提示、资源加载失败/入口 404 恢复、契约不兼容时的写保护 |
 | 15:55 | `e5d964b`、`95987e8` | 前台恢复 | 恢复合并、历史补洞、撤权与离线发送对账；`scripts/verify-pwa-recovery.ts`、`tests/e2e/pwa-recovery.spec.ts` |
-| 16:32–17:38 | `d496e8b`、`25d4531`、`98782db` | 恢复竞态收口 | 粘住身份切换遮罩、模块级身份代次、清空旧身份 Task/Trace 缓存 |
+| 16:32–17:38 | `d496e8b`、`25d4531`、`98782db` | 恢复竞态收口 | 粘住身份切换遮罩、模块级身份代次、清空旧身份缓存 |
 | 17:51 | `978657c` | 合并 | PWA 恢复分支合入 main |
 
 **这个案例说明什么：**
 
 - 四个阶段都是“可独立验证的增量”，不是一次大爆炸：每个阶段都有自己的 verify 脚本和 e2e，失败时能定位到阶段。
-- 阶段之间共享前端文件（例如 `useRoomChat.ts`、`TaskSummaryBar.tsx`、`useRoomTasks.ts`），所以并行分支越多，合并后统一验证越重要。
+- 阶段之间共享前端文件（例如 `useRoomChat.ts`、`useRoomMessageModeration.ts`），所以并行分支越多，合并后统一验证越重要。
 - 阶段 4 的“身份代次”是典型的并发收口：请求发起时记录 `currentIdentityEpoch()`，回调执行时再读一次，不相等就丢弃，避免旧身份的晚到响应写进新身份的缓存（`src/web/lib/identity-epoch.ts:1-40`）。
 - 契约不兼容时，写工具在发请求前就被拦截；读、状态对账、身份恢复仍然可用，保证旧页面还能完成更新（`src/web/pwa/update-write-guard.ts:1-80`、`src/web/lib/mcp-client.ts:159-166`）。
 
@@ -228,11 +228,11 @@ worktree 只隔离工作区：两个人可以在不同目录、不同分支上�
 
 ### 7.5 “一条群消息就是一个任务”
 
-**不是。** 一条群消息可以给 N 个 Agent 各生成一条 delivery；每条 delivery 独立领取、独立完成、独立失败。也有一条 delivery 都不生成的情况：没有显式 `invoke`，正文也没有唯一匹配的 `@`。消息 Task 只是“被标记的消息 + Trace”，不是派活队列或调度状态机（`docs/code-index.md:9`）。
+**不是。** 一条群消息可以给 N 个 Agent 各生成一条 delivery；每条 delivery 独立领取、独立完成、独立失败。也有一条 delivery 都不生成的情况：没有显式 `invoke`，正文也没有唯一匹配的 `@`。消息本身不是派活队列或调度状态机；任务聚合已退役，见 `docs/code-index.md`。
 
 ### 7.6 “系统会自动拆任务、自动排队”
 
-**不会。** 服务端只做投递和状态机；拆分、优先级、文件 owner、合并顺序、发布窗口都是人的判断。维护员 agent 可以用消息和 Task 标记来组织工作，但那是使用方式，不是服务端调度器。
+**不会。** 服务端只做投递和状态机；拆分、优先级、文件 owner、合并顺序、发布窗口都是人的判断。维护员 agent 可以用消息与回复串来组织工作，但那是使用方式，不是服务端调度器。
 
 ### 7.7 “部署失败会回滚数据库”
 
@@ -327,7 +327,6 @@ worktree 只隔离工作区：两个人可以在不同目录、不同分支上�
 | 头像 UI 覆盖六处显示与失败回退 | `tests/e2e/avatar-ui.spec.ts:220`、`:315`、`:356`、`:389`、`:415` |
 | 头像后端专项验收包含迁移、GC、读取面 | `scripts/verify-avatar.ts:1-10`、`:92`、`:185-186`、`:427` |
 | PWA 恢复阶段有单元 + e2e 双层验证 | `scripts/verify-pwa-recovery.ts:1-5`、`:348`、`tests/e2e/pwa-recovery.spec.ts` |
-| 消息 Task 不是独立任务实体/调度器 | `docs/code-index.md:9` |
 
 ---
 

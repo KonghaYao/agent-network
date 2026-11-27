@@ -364,13 +364,6 @@ async function main(): Promise<void> {
     'network_room_join_request_respond',
     'network_room_monitor_get',
     'network_room_monitor_set',
-    'network_task_mark',
-    'network_task_unmark',
-    'network_task_summaries',
-    'network_task_trace',
-    'network_task_search',
-    'network_task_list',
-    'network_task_complete',
     'network_room_members_update',
     'network_room_role_set',
     'network_room_owner_transfer',
@@ -428,6 +421,16 @@ async function main(): Promise<void> {
     'network_agent_memory_timeline',
     'network_agent_memory_get',
     'network_agent_memory_entities',
+    'network_focus_status',
+    'network_focus_enable',
+    'network_focus_disable',
+    'network_focus_list',
+    'network_focus_get',
+    'network_focus_archive',
+    'network_focus_job_get',
+    'network_focus_evidence_read',
+    'network_focus_items_find',
+    'network_focus_commit',
   ];
   const roomFileTools = [
     'network_room_file_bind',
@@ -505,11 +508,6 @@ async function main(): Promise<void> {
     'network_room_owner_transfer_cancel',
     'network_room_leave_preview',
     'network_room_dissolve',
-    'network_task_mark',
-    'network_task_unmark',
-    'network_task_summaries',
-    'network_task_trace',
-    'network_task_search',
     'network_inbox_list',
     'network_delivery_claim',
     'network_delivery_complete',
@@ -888,11 +886,6 @@ async function main(): Promise<void> {
     historyTool?.outputSchema,
   );
   check(
-    'history 输出 schema 包含消息式 Task 归属',
-    historySchema.includes('"task_root_id"'),
-    historyTool?.outputSchema,
-  );
-  check(
     'history 输入 schema 包含 anchor_message_id',
     JSON.stringify(historyTool?.inputSchema ?? {}).includes('"anchor_message_id"'),
     historyTool?.inputSchema,
@@ -939,89 +932,20 @@ async function main(): Promise<void> {
       idempotentHint?: boolean;
     };
   }
-  const taskMarkTool = listed?.tools?.find((tool) => tool.name === 'network_task_mark') as
-    | TaskToolView
-    | undefined;
-  const taskUnmarkTool = listed?.tools?.find((tool) => tool.name === 'network_task_unmark') as
-    | TaskToolView
-    | undefined;
-  const taskSummariesTool = listed?.tools?.find(
-    (tool) => tool.name === 'network_task_summaries',
-  ) as TaskToolView | undefined;
-  const taskTraceTool = listed?.tools?.find((tool) => tool.name === 'network_task_trace') as
-    | TaskToolView
-    | undefined;
-  const taskSearchTool = listed?.tools?.find((tool) => tool.name === 'network_task_search') as
-    | TaskToolView
-    | undefined;
-  const taskMarkInput = JSON.stringify(taskMarkTool?.inputSchema ?? {});
-  const taskMarkOutput = JSON.stringify(taskMarkTool?.outputSchema ?? {});
-  const taskUnmarkOutput = JSON.stringify(taskUnmarkTool?.outputSchema ?? {});
-  const taskSummariesInput = JSON.stringify(taskSummariesTool?.inputSchema ?? {});
-  const taskTraceInput = JSON.stringify(taskTraceTool?.inputSchema ?? {});
-  const taskTraceOutput = JSON.stringify(taskTraceTool?.outputSchema ?? {});
-  const taskSearchInput = JSON.stringify(taskSearchTool?.inputSchema ?? {});
-  const taskSearchOutput = JSON.stringify(taskSearchTool?.outputSchema ?? {});
-
+  const retiredTaskTools = (listed?.tools ?? [])
+    .map((tool) => tool.name)
+    .filter((name) => name.startsWith('network_task_'));
+  checkEqual('tools/list 不再注册 network_task_*', retiredTaskTools.join(','), '');
+  const sendSchemaText = JSON.stringify(sendTool?.inputSchema ?? {});
   check(
-    'task_mark 可写、幂等且输入输出契约完整',
-    taskMarkTool?.annotations?.readOnlyHint === false &&
-      taskMarkTool?.annotations?.idempotentHint === true &&
-      ['request_id', 'room_id', 'message_id'].every((key) =>
-        taskMarkInput.includes(`"${key}"`),
-      ) &&
-      ['task_root_id', 'marked'].every((key) => taskMarkOutput.includes(`"${key}"`)) &&
-      (taskMarkTool?.description ?? '').includes('任意') &&
-      (taskMarkTool?.description ?? '').includes('幂等') &&
-      (taskMarkTool?.description ?? '').includes('不写 inbox'),
-    taskMarkTool,
+    'message_send 输入把 task_root_id 标记为不可接受',
+    sendSchemaText.includes('"task_root_id"') && !sendSchemaText.includes('"task_root_id":{"type":"string"'),
+    sendTool?.inputSchema,
   );
   check(
-    'task_unmark 可写、幂等且保留消息',
-    taskUnmarkTool?.annotations?.readOnlyHint === false &&
-      taskUnmarkTool?.annotations?.idempotentHint === true &&
-      taskUnmarkOutput.includes('"task_root_id"') &&
-      taskUnmarkOutput.includes('"marked"') &&
-      (taskUnmarkTool?.description ?? '').includes('消息') &&
-      (taskUnmarkTool?.description ?? '').includes('幂等'),
-    taskUnmarkTool,
-  );
-  check(
-    'task_summaries 只读且最多 20 个根',
-    taskSummariesTool?.annotations?.readOnlyHint === true &&
-      taskSummariesInput.includes('"room_id"') &&
-      taskSummariesInput.includes('"root_message_ids"') &&
-      taskSummariesInput.includes('"maxItems":20') &&
-      JSON.stringify(taskSummariesTool?.outputSchema ?? {}).includes('"participant_count"'),
-    taskSummariesTool,
-  );
-  check(
-    'task_trace 只读且包含双向游标与 focus 契约',
-    taskTraceTool?.annotations?.readOnlyHint === true &&
-      ['root_message_id', 'cursor', 'focus_message_id', 'limit'].every((key) =>
-        taskTraceInput.includes(`"${key}"`),
-      ) &&
-      [
-        'next_cursor',
-        'prev_cursor',
-        'has_more_before',
-        'has_more_after',
-        'message_count',
-        'focus_message_id',
-        'authorization',
-      ].every((key) => taskTraceOutput.includes(`"${key}"`)),
-    taskTraceTool,
-  );
-  check(
-    'task_search 只读且按起点聚合、返回 truncated',
-    taskSearchTool?.annotations?.readOnlyHint === true &&
-      taskSearchInput.includes('"query"') &&
-      ['hit_count', 'matches', 'truncated', 'snapshot'].every((key) =>
-        taskSearchOutput.includes(`"${key}"`),
-      ) &&
-      (taskSearchTool?.description ?? '').includes('按起点聚合') &&
-      (taskSearchTool?.description ?? '').includes('普通 network_message_search 契约保持不变'),
-    taskSearchTool,
+    'message_send 输出不再携带 task_root_id',
+    !JSON.stringify(sendTool?.outputSchema ?? {}).includes('task_root_id'),
+    sendTool?.outputSchema,
   );
 
   const monitorGetTool = listed?.tools?.find(
@@ -1069,60 +993,6 @@ async function main(): Promise<void> {
     (monitorGetTool as { annotations?: unknown } | undefined)?.annotations,
   );
 
-  const taskTools = new Map(
-    listed?.tools
-      ?.filter((tool) => tool.name.startsWith('network_task_'))
-      .map((tool) => [tool.name, tool]) ?? [],
-  );
-  const newTaskToolNames = [
-    'network_task_mark',
-    'network_task_unmark',
-    'network_task_summaries',
-    'network_task_trace',
-    'network_task_search',
-    'network_task_list',
-    'network_task_complete',
-  ];
-  const retiredTaskToolNames = [
-    'network_task_summary',
-    'network_task_get',
-    'network_task_create',
-    'network_task_offer',
-    'network_task_accept',
-    'network_task_decline',
-    'network_task_claim',
-    'network_task_cancel',
-    'network_task_retry',
-    'network_task_execution_unknown',
-    'network_task_execution_resolve',
-    'network_task_progress',
-    'network_task_block',
-    'network_task_resume',
-    'network_task_transfer_propose',
-    'network_task_transfer_accept',
-    'network_task_transfer_reject',
-    'network_task_transfer_cancel',
-    'network_task_transfer_get',
-    'network_task_transfer_list',
-    'network_task_handoff_pack_create',
-    'network_task_handoff_pack_get',
-    'network_task_handoff_pack_authorize',
-    'network_task_handoff_pack_request_more',
-    'network_task_submit',
-    'network_task_submission_get',
-    'network_task_submission_list',
-    'network_task_submission_return',
-    'network_task_review_accept',
-    'network_task_review_return',
-    'network_task_reviewer_set',
-  ];
-  check(
-    '新旧任务工具边界：只注册 7 个消息式 Task 工具',
-    newTaskToolNames.every((name) => taskTools.has(name)) &&
-      taskTools.size === newTaskToolNames.length &&
-      retiredTaskToolNames.every((name) => !taskTools.has(name)),
-    [...taskTools.keys()],
-  );
   const loginTool = listed?.tools?.find((tool) => tool.name === 'network_login');
   const loginOutputSchema = JSON.stringify(loginTool?.outputSchema ?? {});
   const loginDescription = loginTool?.description ?? '';
@@ -2190,42 +2060,11 @@ async function main(): Promise<void> {
     skillText.slice(0, 200),
   );
   check(
-    '技能正文包含消息式 Task 的标记、摘要、Trace 与搜索语义',
-    ['## 消息式 Task 与 Trace', 'network_task_mark', 'network_task_summaries',
-      'network_task_trace', 'network_task_search', 'task_root_id',
-      '不写 inbox', '不推进 `head_seq`', '不会唤醒 Agent', 'agentnet task'].every(
-      (marker) => skillText.includes(marker),
-    ),
-    skillText.slice(0, 320),
-  );
-  check(
-    '技能正文说明 Task 集合组成与一层引用来源',
-    [
-      '集合由',
-      '一层来源',
-      '不移动原归属',
-      '不合并两个 Task',
-      '参与者',
-    ].every((marker) => skillText.includes(marker)),
-    skillText.slice(0, 320),
-  );
-  check(
-    '技能正文说明 login 不返回任务摘要且 Task 不唤醒 Agent',
-    skillText.includes('login 只负责上线与待办计数') &&
-      skillText.includes('不返回任务摘要') &&
-      skillText.includes('network_task_search') &&
-      skillText.includes('network_task_summaries') &&
-      skillText.includes('多步骤') &&
-      skillText.includes('network_task_mark'),
-    skillText.slice(0, 320),
-  );
-  check(
-    '技能正文声明 Task 摘要与 Trace 的只读字段',
-    skillText.includes('root_message_ids') &&
-      skillText.includes('focus_message_id') &&
-      skillText.includes('truncated') &&
-      skillText.includes('reference') &&
-      skillText.includes('CONFLICT'),
+    '技能正文不再包含消息式 Task 工具与段落',
+    !/network_task_[a-z_]+/u.test(skillText) &&
+      !skillText.includes('消息式 Task') &&
+      !skillText.includes('task_root_id') &&
+      !skillText.includes('task.updated'),
     skillText.slice(0, 320),
   );
   check(
@@ -2236,14 +2075,6 @@ async function main(): Promise<void> {
       skillText.includes(marker),
     ),
     skillText.slice(0, 320),
-  );
-  check(
-    '技能正文声明 Task 没有独立实体、负责人或状态机',
-    skillText.includes('没有独立任务实体') &&
-      skillText.includes('负责人') &&
-      skillText.includes('业务状态') &&
-      skillText.includes('子任务'),
-    skillText.slice(0, 260),
   );
   check(
     '技能正文说明 actor_id 显式派活与正文唯一精确兜底',
@@ -2305,14 +2136,6 @@ async function main(): Promise<void> {
       skillText.includes('Origin 不再是认证边界') &&
       skillText.includes('丢失 URL'),
     skillText.slice(0, 240),
-  );
-  check(
-    '技能正文声明 Task 搜索按起点聚合且不合并集合',
-    skillText.includes('按起点聚合') &&
-      skillText.includes('不合并集合') &&
-      skillText.includes('普通 `network_message_search` 契约不变') &&
-      skillText.includes('truncated'),
-    skillText.slice(0, 300),
   );
 
   const skillGet = await rawRpc('skills/get', { uri: skill?.uri ?? '' });
@@ -2483,12 +2306,8 @@ async function main(): Promise<void> {
     !/Bearer\s+[0-9a-f]{8}-[0-9a-f]{4}/iu.test(skillDocText),
   );
   check(
-    '静态技能声明消息式 Task 的摘要、Trace 与搜索规则',
-    skillDocText.includes('network_task_summaries') &&
-      skillDocText.includes('network_task_trace') &&
-      skillDocText.includes('network_task_search') &&
-      skillDocText.includes('task_root_id') &&
-      skillDocText.includes('不唤醒 Agent'),
+    '静态技能不再包含消息式 Task 工具',
+    !/network_task_[a-z_]+/u.test(skillDocText) && !skillDocText.includes('task_root_id'),
     skillDocText.slice(0, 300),
   );
   check(
@@ -2514,25 +2333,11 @@ async function main(): Promise<void> {
     skillDocText.slice(0, 300),
   );
   check(
-    '静态技能包含 Task 命令与不唤醒规范',
-    ['agentnet task', '### 消息式 Task 与 Trace', 'network_task_mark',
-      'network_task_summaries', 'network_task_trace', 'network_task_search',
-      '不写 inbox', '不唤醒 Agent', 'task_root_id'].every((marker) =>
-      skillDocText.includes(marker),
-    ),
-    skillDocText.slice(0, 300),
-  );
-  check(
-    '静态技能声明 Task 事件只刷新摘要且不生成待办',
-    [
-      'task.updated',
-      'message_task_marked',
-      'message_task_unmarked',
-      'informational',
-      '不写 inbox',
-      'pending_count',
-      '不唤醒 Agent',
-    ].every((marker) => skillDocText.includes(marker)),
+    '静态技能不含已退役的 Task 命令与事件',
+    !skillDocText.includes('agentnet task') &&
+      !skillDocText.includes('消息式 Task') &&
+      !skillDocText.includes('message_task_marked') &&
+      !skillDocText.includes('task.updated'),
     skillDocText.slice(0, 300),
   );
   check(
@@ -3710,182 +3515,75 @@ async function main(): Promise<void> {
     afterSecond.data,
   );
 
-  // 消息式 Task：标记幂等、读工具不写事件、取消标记保留消息。
-  const taskTargetSent = await rawToolCall<{ message: { message_id: string } }>(
-    browserToken,
-    'network_message_send',
-    {
-      request_id: `task_mark_target_${crypto.randomUUID().replaceAll('-', '')}`,
-      client_message_id: crypto.randomUUID(),
-      room_id: historyRoomId,
-      body: 'TASKTRACE 协议标记幂等',
-      invoke: [],
-    },
-  );
-  const taskTargetId = taskTargetSent.data?.message.message_id ?? '';
-  check('task mark fixture 写入成功', taskTargetId.length > 0, taskTargetSent);
-  const markRequestId = `task_mark_${crypto.randomUUID().replaceAll('-', '')}`;
-  const roomStateBeforeTask = await rawToolCall<{
+  // 已退役的消息式 Task：旧工具未知、显式旧参数契约错误，且都不留下消息/事件。
+  const roomStateBeforeRejected = await rawToolCall<{
     room: { head_seq: string; my_last_read_seq: string };
   }>(browserToken, 'network_room_get', { room_id: historyRoomId });
-  const markOnce = await rawToolCall<{
-    room_id: string;
-    message_id: string;
-    task_root_id: string;
-    marked: boolean;
-  }>(shareToken, 'network_task_mark', {
-    request_id: markRequestId,
-    room_id: historyRoomId,
-    message_id: taskTargetId,
-  });
-  const markReplay = await rawToolCall<typeof markOnce.data>(shareToken, 'network_task_mark', {
-    request_id: markRequestId,
-    room_id: historyRoomId,
-    message_id: taskTargetId,
-  });
-  check(
-    'task_mark 允许 Agent 标记人类消息且重放返回同一结果',
-    markOnce.data?.marked === true &&
-      markOnce.data?.task_root_id === taskTargetId &&
-      JSON.stringify(markOnce.data) === JSON.stringify(markReplay.data),
-    { markOnce: markOnce.data, markReplay: markReplay.data },
-  );
-  const summariesArgs = {
-    room_id: historyRoomId,
-    root_message_ids: [taskTargetId],
-  };
-  const summariesOnce = await rawToolCall<{
-    items: { root_message_id: string; message_count: number }[];
-  }>(browserToken, 'network_task_summaries', summariesArgs);
-  const summariesTwice = await rawToolCall<typeof summariesOnce.data>(
-    browserToken,
-    'network_task_summaries',
-    summariesArgs,
-  );
-  check(
-    'task_summaries 返回已标记起点且重复读取结果一致',
-    summariesOnce.data?.items.length === 1 &&
-      summariesOnce.data?.items[0]?.root_message_id === taskTargetId &&
-      JSON.stringify(summariesOnce.data) === JSON.stringify(summariesTwice.data),
-    summariesOnce.data,
-  );
-  const traceArgs = { room_id: historyRoomId, root_message_id: taskTargetId, limit: 10 };
-  const traceOnce = await rawToolCall<{
-    items: { message_id: string; role: string }[];
-    focus_message_id: string | null;
-  }>(browserToken, 'network_task_trace', traceArgs);
-  const traceTwice = await rawToolCall<typeof traceOnce.data>(
-    browserToken,
-    'network_task_trace',
-    traceArgs,
-  );
-  check(
-    'task_trace 返回起点且重复读取结果一致',
-    traceOnce.data?.items.length === 1 &&
-      traceOnce.data?.items[0]?.message_id === taskTargetId &&
-      traceOnce.data?.items[0]?.role === 'root' &&
-      JSON.stringify(traceOnce.data) === JSON.stringify(traceTwice.data),
-    traceOnce.data,
-  );
-  const searchArgs = { room_id: historyRoomId, query: 'TASKTRACE', limit: 10 };
-  const searchOnce = await rawToolCall<{
-    items: { task: { root_message_id: string }; hit_count: number }[];
-    truncated: boolean;
-  }>(browserToken, 'network_task_search', searchArgs);
-  const searchTwice = await rawToolCall<typeof searchOnce.data>(
-    browserToken,
-    'network_task_search',
-    searchArgs,
-  );
-  check(
-    'task_search 按起点聚合且重复读取结果一致',
-    searchOnce.data?.items.length === 1 &&
-      searchOnce.data?.items[0]?.task.root_message_id === taskTargetId &&
-      searchOnce.data?.items[0]?.hit_count === 1 &&
-      searchOnce.data?.truncated === false &&
-      JSON.stringify(searchOnce.data) === JSON.stringify(searchTwice.data),
-    searchOnce.data,
-  );
-  const syncAfterMark = await rawToolCall<{ items: { type: string }[] }>(
+  const syncBeforeRejected = await rawToolCall<{ items: { type: string }[] }>(
     browserToken,
     'network_sync',
     { scope: `room:${historyRoomId}`, limit: 200 },
   );
-  const markedEventCount = (syncAfterMark.data?.items ?? []).filter(
-    (item) => item.type === 'message_task_marked',
-  ).length;
-  check(
-    'sync 保留新 message_task_marked 事件',
-    markedEventCount === 1,
-    syncAfterMark.data?.items?.map((item) => item.type),
+  const historyBeforeRejected = await rawToolCall<{ items: unknown[] }>(
+    browserToken,
+    'network_history_list',
+    { room_id: historyRoomId, direction: 'before', limit: 100 },
   );
-  const syncAfterReads = await rawToolCall<{ items: { type: string }[] }>(
+  const rejectedSend = await rawToolCall(browserToken, 'network_message_send', {
+    request_id: `retired_task_root_${crypto.randomUUID().replaceAll('-', '')}`,
+    client_message_id: crypto.randomUUID(),
+    room_id: historyRoomId,
+    body: 'TASKROOT 已退役参数不得写入',
+    invoke: [],
+    task_root_id: 'msg_retired_task_root',
+  });
+  check(
+    'network_message_send 显式 task_root_id 返回契约错误',
+    isInputValidationFailure(rejectedSend.body),
+    rejectedSend.body,
+  );
+  checkEqual('契约错误不返回结构化发送结果', rejectedSend.data, undefined);
+  const syncAfterRejected = await rawToolCall<{ items: { type: string }[] }>(
     browserToken,
     'network_sync',
     { scope: `room:${historyRoomId}`, limit: 200 },
   );
-  check(
-    '读工具不写 events/outbox',
-    JSON.stringify(syncAfterMark.data?.items) === JSON.stringify(syncAfterReads.data?.items),
-    {
-      before: syncAfterMark.data?.items?.length,
-      after: syncAfterReads.data?.items?.length,
-    },
-  );
-  const roomStateAfterTask = await rawToolCall<{
-    room: { head_seq: string; my_last_read_seq: string };
-  }>(browserToken, 'network_room_get', { room_id: historyRoomId });
-  check(
-    '标记与读工具不推进 head_seq 或已读位置',
-    roomStateBeforeTask.data?.room.head_seq === roomStateAfterTask.data?.room.head_seq &&
-      roomStateBeforeTask.data?.room.my_last_read_seq ===
-        roomStateAfterTask.data?.room.my_last_read_seq,
-    { before: roomStateBeforeTask.data?.room, after: roomStateAfterTask.data?.room },
-  );
-  const unmarkRequestId = `task_unmark_${crypto.randomUUID().replaceAll('-', '')}`;
-  const unmarkOnce = await rawToolCall<{ marked: boolean; task_root_id: null }>(
-    browserToken,
-    'network_task_unmark',
-    { request_id: unmarkRequestId, room_id: historyRoomId, message_id: taskTargetId },
-  );
-  const unmarkReplay = await rawToolCall<typeof unmarkOnce.data>(
-    browserToken,
-    'network_task_unmark',
-    { request_id: unmarkRequestId, room_id: historyRoomId, message_id: taskTargetId },
-  );
-  const summariesAfterUnmark = await rawToolCall<typeof summariesOnce.data>(
-    browserToken,
-    'network_task_summaries',
-    summariesArgs,
-  );
-  check(
-    'task_unmark 幂等并只撤销聚合入口',
-    unmarkOnce.data?.marked === false &&
-      unmarkOnce.data?.task_root_id === null &&
-      JSON.stringify(unmarkOnce.data) === JSON.stringify(unmarkReplay.data) &&
-      summariesAfterUnmark.data?.items.length === 0,
-    { unmark: unmarkOnce.data, summaries: summariesAfterUnmark.data },
-  );
-  const secondTargetSent = await rawToolCall<{ message: { message_id: string } }>(
-    browserToken,
-    'network_message_send',
-    {
-      request_id: `task_mark_target_two_${crypto.randomUUID().replaceAll('-', '')}`,
-      client_message_id: crypto.randomUUID(),
-      room_id: historyRoomId,
-      body: 'TASKTRACE 第二个标记目标',
-      invoke: [],
-    },
-  );
-  const markConflict = await rawToolCall(shareToken, 'network_task_mark', {
-    request_id: markRequestId,
-    room_id: historyRoomId,
-    message_id: secondTargetSent.data?.message.message_id,
-  });
   checkEqual(
-    '同 request_id 改目标返回 IDEMPOTENCY_CONFLICT',
-    markConflict.code,
-    'IDEMPOTENCY_CONFLICT',
+    '契约错误不产生事件',
+    JSON.stringify(syncAfterRejected.data?.items ?? []),
+    JSON.stringify(syncBeforeRejected.data?.items ?? []),
+  );
+  const historyAfterRejected = await rawToolCall<{ items: unknown[] }>(
+    browserToken,
+    'network_history_list',
+    { room_id: historyRoomId, direction: 'before', limit: 100 },
+  );
+  checkEqual(
+    '契约错误不产生消息',
+    historyAfterRejected.data?.items.length,
+    historyBeforeRejected.data?.items.length,
+  );
+  const roomStateAfterRejected = await rawToolCall<{
+    room: { head_seq: string; my_last_read_seq: string };
+  }>(browserToken, 'network_room_get', { room_id: historyRoomId });
+  check(
+    '契约错误不推进 head_seq 或已读位置',
+    roomStateBeforeRejected.data?.room.head_seq === roomStateAfterRejected.data?.room.head_seq &&
+      roomStateBeforeRejected.data?.room.my_last_read_seq ===
+        roomStateAfterRejected.data?.room.my_last_read_seq,
+    { before: roomStateBeforeRejected.data?.room, after: roomStateAfterRejected.data?.room },
+  );
+  const retiredToolCall = await rawToolCall(browserToken, 'network_task_mark', {
+    request_id: `retired_task_mark_${crypto.randomUUID().replaceAll('-', '')}`,
+    room_id: historyRoomId,
+    message_id: 'msg_retired_task_root',
+  });
+  check(
+    '已退役任务工具返回未知工具',
+    retiredToolCall.code === 'INVALID_ARGUMENT' ||
+      (retiredToolCall.body.error as { code?: number } | undefined)?.code === -32602 ||
+      (retiredToolCall.body.result as { isError?: boolean } | undefined)?.isError === true,
+    retiredToolCall.body,
   );
 
   // 网页监控：human + room 私有配置、URL 校验、幂等与不改变房间状态。

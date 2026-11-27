@@ -12,8 +12,7 @@ import { LIMITS } from '../contracts/limits';
 import { newId, nowMs, randomToken } from '../storage/db';
 import { guardSql } from '../storage/guards';
 import type { Env } from '../env';
-import type { FocusBindingRow } from '../domain/focus/types';
-import type { FocusCandidateRow, FocusJobRow } from '../domain/focus/types';
+import type { FocusBindingRow, FocusCandidateRow, FocusJobRow } from '../domain/focus/types';
 import {
   createFocusSwarmClient,
   FocusSwarmError,

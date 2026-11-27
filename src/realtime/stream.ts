@@ -6,9 +6,6 @@ import {
   FOCUS_UPDATED_EVENT,
   MENTION_REMINDER_EVENT,
   MENTION_REMINDER_SOURCE,
-  MESSAGE_TASK_MARKED_EVENT,
-  MESSAGE_TASK_COMPLETED_EVENT,
-  MESSAGE_TASK_UNMARKED_EVENT,
 } from '../contracts/events';
 import type { Env } from '../env';
 import { utf8Bytes } from '../storage/db';
@@ -275,32 +272,6 @@ export function roomStreamItems(
           metadata,
         );
         item.change = change;
-        if (changedBy) item.changed_by = changedBy;
-        result.push({ actorId: member.actor_id, item });
-      }
-      return result;
-    }
-    case MESSAGE_TASK_MARKED_EVENT:
-    case MESSAGE_TASK_UNMARKED_EVENT:
-    case MESSAGE_TASK_COMPLETED_EVENT: {
-      // 消息式 Task 只通知 active human 刷新摘要行；不写 inbox、不产生 delivery。
-      const change =
-        row.event_type === MESSAGE_TASK_MARKED_EVENT
-          ? 'marked'
-          : row.event_type === MESSAGE_TASK_COMPLETED_EVENT
-            ? 'completed'
-            : 'unmarked';
-      const changedBy = stringField(metadata, 'changed_by');
-      const taskRootId = stringField(metadata, 'task_root_id') ?? row.ref_id ?? undefined;
-      for (const member of activeRecipients(members, eventSeq)) {
-        if (member.kind !== 'human') continue;
-        const item = withLocation(
-          baseItem(row, 'task.updated', 'task', 'informational'),
-          row,
-          metadata,
-        );
-        item.change = change;
-        if (taskRootId) item.ref_id = taskRootId;
         if (changedBy) item.changed_by = changedBy;
         result.push({ actorId: member.actor_id, item });
       }

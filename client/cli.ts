@@ -43,13 +43,6 @@ import { issue, login, me, register } from './commands/identity';
 import { monitor, assertHarness, type MonitorContext, type MonitorOptions } from './commands/monitor';
 import { history, inbox, read, rooms, send, sendStatus } from './commands/rooms';
 import { skillsGet, skillsHarness, skillsList } from './commands/skills';
-import {
-  taskMark,
-  taskSearch,
-  taskSummaries,
-  taskTrace,
-  taskUnmark,
-} from './commands/task';
 import type { GlobalOptions } from './options';
 import {
   CLIENT_VERSION,
@@ -119,10 +112,6 @@ const HELP_GUIDE = `
   claim <delivery-id>
   complete <delivery-id> --attempt <n> --claim-id <id> [--body <text|->]
   fail <delivery-id> --attempt <n> --claim-id <id> --error <text>
-  task mark|unmark --room <room-id> --message <message-id>
-  task summaries --room <room-id> --roots <id,id>
-  task trace --room <room-id> --root <message-id>
-  task search --room <room-id> --query <text>
   files --room <room-id>
   upload --file <path> [--room <room-id>]
   send-file --room <room-id> --file <path|file_id> [--body <text|->]
@@ -543,7 +532,6 @@ function buildProgram(): Command {
       .option('--room <id>', '房间 id')
       .option('--body <text>', '消息正文；传 - 从 stdin 读取')
       .option('--reply-to <message-id>', '回复某条消息')
-      .option('--task-root <message-id>', '挂到某个 Task')
       .option('--claim <delivery:attempt:claim-id>', '回复并挂接投递')
       .option('--request-id <id>', '幂等 request_id')
       .option('--client-message-id <id>', '客户端消息 id'),
@@ -740,79 +728,6 @@ function buildProgram(): Command {
       await cancel(client, config, options, delivery);
     },
   );
-
-  addGlobalOptions(
-    program
-      .command('task')
-      .description('消息式 Task：mark/unmark/summaries/trace/search'),
-  ).addHelpText(
-    'after',
-    '\n示例\n  agentnet task mark --room rm_... --message msg_...\n  agentnet task trace --room rm_... --root msg_...\n  agentnet task search --room rm_... --query "keyword"\n',
-  );
-
-  const task = program.commands.find((item) => item.name() === 'task')!;
-  addGlobalOptions(
-    task
-      .command('mark')
-      .description('把消息标记为 Task 起点')
-      .option('--room <id>', '房间 id')
-      .option('--message <id>', '消息 id')
-      .option('--request-id <id>', '幂等 request_id'),
-  ).action(async (options: Record<string, string | undefined>, command: Command) => {
-    const { client, config } = clientFor(command);
-    await taskMark(client, config, options);
-  });
-
-  addGlobalOptions(
-    task
-      .command('unmark')
-      .description('取消 Task 标记')
-      .option('--room <id>', '房间 id')
-      .option('--message <id>', '消息 id')
-      .option('--request-id <id>', '幂等 request_id'),
-  ).action(async (options: Record<string, string | undefined>, command: Command) => {
-    const { client, config } = clientFor(command);
-    await taskUnmark(client, config, options);
-  });
-
-  addGlobalOptions(
-    task
-      .command('summaries')
-      .description('批量读取 Task 摘要')
-      .option('--room <id>', '房间 id')
-      .option('--roots <ids>', '逗号分隔的 task_root_id')
-      .option('--root <ids>', 'task_root_id（别名）'),
-  ).action(async (options: Record<string, string | undefined>, command: Command) => {
-    const { client, config } = clientFor(command);
-    await taskSummaries(client, config, options);
-  });
-
-  addGlobalOptions(
-    task
-      .command('trace')
-      .description('读取 Task 时间线')
-      .option('--room <id>', '房间 id')
-      .option('--root <message-id>', 'Task 起点 message id')
-      .option('--cursor <cursor>', '分页游标')
-      .option('--focus <message-id>', '聚焦消息')
-      .option('--limit <n>', '分页大小'),
-  ).action(async (options: Record<string, string | undefined>, command: Command) => {
-    const { client, config } = clientFor(command);
-    await taskTrace(client, config, options);
-  });
-
-  addGlobalOptions(
-    task
-      .command('search')
-      .description('搜索 Task')
-      .option('--room <id>', '房间 id')
-      .option('--query <text>', '搜索词')
-      .option('--cursor <cursor>', '分页游标')
-      .option('--limit <n>', '分页大小'),
-  ).action(async (options: Record<string, string | undefined>, command: Command) => {
-    const { client, config } = clientFor(command);
-    await taskSearch(client, config, options);
-  });
 
   addGlobalOptions(
     program

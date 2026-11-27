@@ -61,7 +61,6 @@ async function historyViews(
       created_at: String(row.created_at),
       reply_to: row.reply_to,
       root_id: row.root_id,
-      task_root_id: row.task_root_id,
       hop: row.hop,
       delivery_states: summary?.states ?? {},
       mentions: mentions.get(row.message_id) ?? [],
@@ -122,7 +121,6 @@ async function historyAnchorPage(
     created_at: anchor.created_at,
     reply_to: anchor.reply_to,
     root_id: anchor.root_id,
-    task_root_id: anchor.task_root_id,
     hop: anchor.hop,
   };
   const rows = [...newer, anchorRow, ...older];

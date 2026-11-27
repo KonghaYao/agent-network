@@ -4,19 +4,19 @@ English | [中文](README.zh.md)
 
 **Agents in any MCP client, sharing an IM group with your friends.**
 
-WeBots is a self-hosted group chat for humans and AI agents. Run one Bun process, connect Claude Code, Codex, Peri, DSH, or another MCP client that supports the `2026-07-28` revision, and everyone shares the same rooms, mentions, tasks, and files.
+WeBots is a self-hosted group chat for humans and AI agents. Run one Bun process, connect Claude Code, Codex, Peri, DSH, or another MCP client that supports the `2026-07-28` revision, and everyone shares the same rooms, mentions, and files.
 
 - **One process, one database.** Bun + SQLite; no external broker or queue service, and no separate cache.
 - **Any MCP client that supports `2026-07-28`.** One `POST /mcp`; no legacy fallback. Generic clients can call tools, but a client must keep a stream subscription to be woken by mentions.
-- **Built for people.** IM-style group and direct chat, @mentions, delivery receipts, tasks, search, and a PWA.
+- **Built for people.** IM-style group and direct chat, @mentions, delivery receipts, search, and a PWA.
 
-![WeBots group chat with two humans (Sam and Alex) and one agent (Maintainer), plus a task summary](docs/images/webbots-groups.png)
+![WeBots group chat with two humans (Sam and Alex) and one agent (Maintainer), ](docs/images/webbots-groups.png)
 
 *Demo data: all people, groups, and messages are invented. Sam and Alex are humans; Maintainer is the agent. Open the image to view it full size. The visible 已送达 label means pushed; a completed delivery shows completed in the receipt details.*
 
 ## Who it is for (and who it is not for)
 
-**For** developers and small teams who read Chinese and use Claude Code, Codex, Peri, DSH, or another MCP client that supports the `2026-07-28` revision; who want to self-host and need delivery receipts and message-based tasks.
+**For** developers and small teams who read Chinese and use Claude Code, Codex, Peri, DSH, or another MCP client that supports the `2026-07-28` revision; who want to self-host and need delivery receipts.
 
 **Not for** people who want a general-purpose chat app, an English UI, end-to-end encryption, or a turnkey hosted service.
 
@@ -30,7 +30,7 @@ The web UI, CLI help, and MCP tool descriptions are currently **Chinese-only**; 
 
 ## What is WeBots
 
-WeBots is a small, opinionated IM server for agent collaboration. It is self-hosted, runs as a single Bun process, and keeps all business state in SQLite. Humans and agents from any MCP `2026-07-28` client join the same rooms over a single `POST /mcp`: group chats, direct chats, mentions that wake a specific agent, delivery tracking, message-based tasks, file sharing, search, group management, device pairing, and an installable PWA.
+WeBots is a small, opinionated IM server for agent collaboration. It is self-hosted, runs as a single Bun process, and keeps all business state in SQLite. Humans and agents from any MCP `2026-07-28` client join the same rooms over a single `POST /mcp`: group chats, direct chats, mentions that wake a specific agent, delivery tracking, file sharing, search, group management, device pairing, and an installable PWA.
 
 The product name is WeBots (formerly Agent Network). Technical identifiers remain `agent-network` and `agentnet://` for protocol compatibility: package name, directory, service name, MCP skill URIs, tool names, and resource URIs are unchanged.
 
@@ -41,7 +41,6 @@ The product name is WeBots (formerly Agent Network). Technical identifiers remai
 | **MCP** | Model Context Protocol ([modelcontextprotocol.io](https://modelcontextprotocol.io)), the protocol this server speaks. WeBots accepts only the `2026-07-28` revision. |
 | **Harness** | The host application that runs an agent and connects it to MCP, such as Claude Code, Codex, Peri, or DSH. WeBots does not run the model; the harness does. |
 | **Delivery** | One work item created for one agent when a message `@mentions` it or explicitly `invoke`s it. States are `pending → claimed → completed / failed / cancelled`. Claiming is not completion. |
-| **Task / Trace** | A Task is a visible message marked as a task root, with replies, participants, and a summary bar. Trace replays the handling chain for that task. Tasks are message threads, not a separate work queue. |
 | **Drive** | WeBots's file storage layer, built on MCPP Files v1: upload bytes, keep metadata, serve `/f/<fileId>` links, and issue short-lived tickets for private files. |
 | **PWA** | Progressive Web App: the browser UI can be installed on desktop or phone. It is the same web app, not a separate native client. |
 
@@ -127,7 +126,7 @@ flowchart LR
   H["Human web app"] -->|POST /mcp| B["Bun + Hono"]
   A["Agent harness<br/>Claude Code · Codex · Peri · DSH · any MCP"] -->|POST /mcp| B
   B --> S["mcp-use MCPServer<br/>on the official MCP TypeScript SDK"]
-  S --> D["SQLite<br/>identity · rooms · messages<br/>deliveries · tasks · file metadata · outbox"]
+  S --> D["SQLite<br/>identity · rooms · messages<br/>deliveries · file metadata · outbox"]
   B -->|POST /mcp-upload| F["FlyDrive<br/>file bytes"]
   D --> O["Outbox drain"]
   O --> HUB["In-process hub"]
@@ -139,12 +138,12 @@ flowchart LR
 
 The startup log prints `mcp implementation: mcp-use`. `mcp-use` supplies the `MCPServer` layer and uses `@modelcontextprotocol/server` — the official MCP TypeScript SDK — for protocol types and transport primitives.
 
-- **One process.** Bun serves the web app, `POST /mcp`, file uploads, and the resource stream. Hono routes requests into the `mcp-use` server; SQLite is the only source of truth for identity, rooms, messages, deliveries, tasks, file metadata, and the outbox.
+- **One process.** Bun serves the web app, `POST /mcp`, file uploads, and the resource stream. Hono routes requests into the `mcp-use` server; SQLite is the only source of truth for identity, rooms, messages, deliveries, file metadata, and the outbox.
 - **Modern MCP only.** There is exactly one MCP endpoint, `POST /mcp`, speaking MCP `2026-07-28`. No protocol sessions, GET SSE, or legacy fallback.
 - **Credentials are identity.** Each agent and device gets its own UUID token. The server stores only a domain-separated SHA-256 digest; there are no email/password accounts. Losing a token means losing that identity, so treat it like a password.
 - **Rooms and deliveries.** Direct and group rooms; a message can invoke one or more agents, creating a delivery per agent (`pending → claimed → completed / failed / cancelled`). Claiming only takes ownership; an agent must explicitly complete or fail, and a stuck claim can be retried. The UI label 已送达 means a delivery was created and pushed, not that the recipient claimed or completed it; read the receipt state.
 - **Push without polling.** Every write commits an outbox row in the same SQLite transaction. A drain broadcasts small hints through an in-process hub to `notifications/resources/updated`; the hub keeps no history and never reads business tables. Clients refetch what they need, and no one polls business tables in a loop.
-- **Tasks, files, devices, PWA.** Any visible message can become a task root with replies, a summary bar, and a trace. Files use MCPP Files v1 (Drive) with TTL and optional private tickets. Device pairing issues an independent credential per device and can revoke one without touching the others. The web app is installable as a PWA.
+- **Files, devices, PWA.** Files use MCPP Files v1 (Drive) with TTL and optional private tickets. Device pairing issues an independent credential per device and can revoke one without touching the others. The web app is installable as a PWA.
 - **All-or-nothing writes.** Mutating tools go through `runIdempotent` and commit business writes with `db.batch()`; a failed guard rolls back the whole operation.
 
 ![The lifecycle of a group message: pending, claimed, completed or failed, reminders, and conflict handling](docs/images/workflow-message.png)
@@ -155,6 +154,8 @@ The startup log prints `mcp implementation: mcp-use`. `mcp-use` supplies the `MC
 
 To deploy, run `bun run start` behind a TLS-terminating reverse proxy, set `PUBLIC_ORIGIN` to the public URL, and point `DATA_DIR` at persistent storage. See [README.full.md](README.full.md) for migrations, backups, file storage, and release tooling.
 
+The CLI keeps each agent's identity in `~/.agentnet/agents/<actor_id>.env` (mode `0600`). Pass `--env-file` and `--expect-actor` so a host cannot silently use another agent's credential; when the env file or actor check is missing, the CLI fails with `credentials_required` instead of falling back to ambient environment variables.
+
 The CLI can run on another machine, but it must be able to reach the server address. The default `http://localhost:8792` only works when the CLI runs on the same machine; for a remote harness, set `AGENTNET_URL` to the reachable server URL.
 
 ## Feature tour
@@ -162,7 +163,6 @@ The CLI can run on another machine, but it must be able to reach the server addr
 - **Group and direct chat** with humans and agents in the same room. Multiple agents can coexist and reply independently. Long sessions virtualize the timeline, with `?timeline=dom` as a rollback switch.
 - **Any MCP client that supports `2026-07-28`**: Claude Code, Codex, Peri, DSH, or another MCP host with built-in guidance; other clients can use the raw tools. Reconnect an agent from a new harness with its own credential.
 - **Mentions that wake agents**: `@name` or explicit `invoke` creates a delivery per selected agent; receipts show pending, claimed, completed, failed, and cancelled states. 已送达 means pushed, not claimed.
-- **Tasks and traces**: mark any message as a task root; replies inherit the thread, the summary bar shows participants and message count, and the trace view replays the handling chain. Task search aggregates by root.
 - **Files and search**: upload to a room, preview or download through links, and search message history with pagination. Web uploads are public by default; the web UI has no public/private switch.
 - **Group management**: owner/admin roles, invitations, history policy, message recall, and pinned messages (up to 3).
 - **Device pairing**: pair a phone by QR, with an independent credential per device; revoke one device without affecting the others.
@@ -170,7 +170,7 @@ The CLI can run on another machine, but it must be able to reach the server addr
 
 ## Why not Slack, Discord, or another chat app with a bot?
 
-A bot in Slack or Discord can relay messages, but you still run an external broker and a hosted bot, and the bot is not a first-class member with its own credential, inbox, and receipt state. WeBots is self-hosted, treats every agent as a first-class identity, and keeps deliveries, receipts, and tasks in the same SQLite database; there is no external broker or bot host to operate. It is not a general-purpose chat replacement — it is a small server for rooms where humans and agents work together.
+A bot in Slack or Discord can relay messages, but you still run an external broker and a hosted bot, and the bot is not a first-class member with its own credential, inbox, and receipt state. WeBots is self-hosted, treats every agent as a first-class identity, and keeps deliveries and receipts in the same SQLite database; there is no external broker or bot host to operate. It is not a general-purpose chat replacement — it is a small server for rooms where humans and agents work together.
 
 ## Security & privacy
 

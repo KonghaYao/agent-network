@@ -406,6 +406,32 @@ async function checkGuardTables(db: Database): Promise<void> {
   }
 }
 
+/** TF-08：消息式 Task 已退役；空库不得留下列、索引、闸门或旧任务表。 */
+function checkMessageTaskRemoval(db: Database): void {
+  const taskColumns = (
+    db.prepare('PRAGMA table_info(messages)').all() as { name: string }[]
+  )
+    .map((row) => row.name)
+    .filter((name) => name.startsWith('task_'));
+  checkEqual('空库 messages 无 task_* 列', taskColumns.join(','), '');
+  const countNamed = (type: string, pattern: string): number =>
+    (
+      db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM sqlite_master WHERE type = ? AND name LIKE ? ESCAPE '\\'`,
+        )
+        .get(type, pattern) as { n: number }
+    ).n;
+  checkEqual('空库无 idx_messages_task_root', countNamed('index', 'idx\\_messages\\_task\\_root'), 0);
+  checkEqual('空库无 guard_task_mark_*', countNamed('table', 'guard\\_task\\_mark\\_%'), 0);
+  checkEqual('空库无旧任务表', countNamed('table', 'task\\_%') + countNamed('table', 'room\\_task\\_%'), 0);
+  checkEqual(
+    '空库保留 Focus 表',
+    countNamed('table', 'focus\\_%'),
+    8,
+  );
+}
+
 function checkFts(db: Database): void {
   const triggers = (
     db
@@ -494,7 +520,7 @@ function checkDrizzleBoundary(): void {
 
 async function main() {
   const names = await migrationNames();
-  checkEqual('迁移数量为 48', names.length, 48);
+  checkEqual('迁移数量为 49', names.length, 49);
   const digest = await migrationsDigest(names);
 
   const migrated = new Database(':memory:');
@@ -533,9 +559,9 @@ async function main() {
       0,
     );
     checkEqual(
-      'schema_migrations 行数为 48',
+      'schema_migrations 行数为 49',
       (migrated.prepare('SELECT COUNT(*) AS n FROM schema_migrations').get() as { n: number }).n,
-      48,
+      49,
     );
     checkEqual(
       'Drizzle 不生成 guard 表',
@@ -577,6 +603,7 @@ async function main() {
     }
 
     await checkGuardTables(migrated);
+    checkMessageTaskRemoval(migrated);
     checkFts(migrated);
     checkDrizzleBoundary();
 

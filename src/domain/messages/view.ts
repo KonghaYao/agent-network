@@ -20,8 +20,6 @@ export interface MessageView extends MessagePreviewView {
   room_id: string;
   reply_to: string | null;
   root_id: string | null;
-  /** 消息式 Task 归属；普通消息为 null，起点为自身 message_id。 */
-  task_root_id: string | null;
   hop: number;
   delivery_states: Record<string, number>;
   /** 该消息的提及集合；human 只产生个人提醒，agent 才可能有 delivery。 */
@@ -95,8 +93,6 @@ export interface MessageCore {
   bodyBytes: number;
   replyTo: string | null;
   rootId: string | null;
-  /** 消息式 Task 归属；省略时按普通消息写入 NULL。 */
-  taskRootId?: string | null;
   /** 用于 root 预算统计的根消息 ID。 */
   rootKey: string;
   hop: number;
@@ -128,7 +124,6 @@ export async function messageView(
     created_at: String(row.created_at),
     reply_to: row.reply_to,
     root_id: row.root_id,
-    task_root_id: row.task_root_id,
     hop: row.hop,
     delivery_states: summary.states,
     mentions: mentions.get(row.message_id) ?? [],
@@ -278,7 +273,6 @@ export function messageCoreStatements(
           sender_name: core.senderName ?? null,
           sender_kind: core.senderKind ?? null,
           deliveries: core.deliveries.length,
-          task_root_id: core.taskRootId ?? null,
         },
       },
       core.at,
@@ -287,8 +281,8 @@ export function messageCoreStatements(
       .prepare(
         `INSERT INTO messages
            (message_id, room_id, sender_id, client_message_id, created_seq, body, body_bytes, preview,
-            reply_to, root_id, task_root_id, hop, root_invocations_used, created_at)
-         VALUES (?, ?, ?, ?, (SELECT event_seq FROM events WHERE event_key = ?), ?, ?, ?, ?, ?, ?, ?,
+            reply_to, root_id, hop, root_invocations_used, created_at)
+         VALUES (?, ?, ?, ?, (SELECT event_seq FROM events WHERE event_key = ?), ?, ?, ?, ?, ?, ?,
            COALESCE((SELECT COUNT(*)
                        FROM deliveries d JOIN messages m ON m.message_id = d.message_id
                       WHERE COALESCE(m.root_id, m.message_id) = ?), 0) + ?,
@@ -305,7 +299,6 @@ export function messageCoreStatements(
         core.preview,
         core.replyTo,
         core.rootId,
-        core.taskRootId ?? null,
         core.hop,
         core.rootKey,
         core.invoke.length,
@@ -401,42 +394,9 @@ export function messageCoreStatements(
 export interface RootLink {
   replyTo: string | null;
   rootId: string | null;
-  taskRootId: string | null;
   rootKey: string;
   hop: number;
   parent: MessageRow | null;
-}
-
-/** 读取当前可见、仍在标记中的任务起点；不可见与未标记按同一结果处理。 */
-export async function visibleMarkedTaskRoot(
-  db: D1Database,
-  roomId: string,
-  rootId: string,
-  boundary: HistoryBoundary,
-): Promise<MessageRow | null> {
-  const root = await getMessage(db, rootId);
-  if (
-    !root ||
-    root.room_id !== roomId ||
-    root.task_root_id !== root.message_id ||
-    !visibleMessage(root, boundary)
-  ) {
-    return null;
-  }
-  return root;
-}
-
-/** 父消息归属的继承：显式归属优先，其次沿用父消息的 Task，最后由线程根回退。 */
-export async function inheritedTaskRoot(
-  db: D1Database,
-  roomId: string,
-  parent: MessageRow,
-  boundary: HistoryBoundary,
-): Promise<string | null> {
-  if (parent.task_root_id) return parent.task_root_id;
-  if (!parent.root_id) return null;
-  const root = await visibleMarkedTaskRoot(db, roomId, parent.root_id, boundary);
-  return root?.message_id ?? null;
 }
 
 export async function resolveRootLink(
@@ -491,26 +451,12 @@ export async function resolveRootLink(
   }
   if (parent && parent.body === '') throw new BusinessError('INVALID_ARGUMENT', '不能回复已撤回的消息');
 
-  let taskRootId: string | null = null;
-  if (input.task_root_id !== undefined) {
-    // 显式归属必须指向同房间、当前可见、未撤回且仍在标记中的起点；
-    // 不区分“未标记”和“不存在”，避免按 ID 探测历史。
-    const root = await visibleMarkedTaskRoot(db, roomId, input.task_root_id, boundary);
-    if (!root || root.body_bytes === 0) {
-      throw new BusinessError('NOT_FOUND', '任务起点不存在、未标记或当前不可见');
-    }
-    taskRootId = root.message_id;
-  } else if (parent) {
-    taskRootId = await inheritedTaskRoot(db, roomId, parent, boundary);
-  }
-
   if (!parent) {
-    return { replyTo, rootId: null, taskRootId, rootKey: '', hop: 0, parent: null };
+    return { replyTo, rootId: null, rootKey: '', hop: 0, parent: null };
   }
   return {
     replyTo,
     rootId: parent.root_id ?? parent.message_id,
-    taskRootId,
     rootKey: parent.root_id ?? parent.message_id,
     hop: parent.hop + 1,
     parent,

@@ -29,7 +29,7 @@ import { remindStaleDeliveries } from '../domain/delivery-reminders';
 import { resolveFocusConfig } from '../focus/config';
 import { recoverFocusJobs } from '../focus/jobs';
 import { ensureFocusServiceActor } from '../focus/service';
-import { scanFocusEvents, wakeFocusWatch } from '../focus/watch';
+import { wakeFocusWatch } from '../focus/watch';
 import { NotificationHub } from '../realtime/hub';
 import { scheduleOutboxDrain } from '../realtime/outbox';
 import { AgentPresenceTimeline } from '../realtime/presence-timeline';
@@ -506,9 +506,7 @@ wakeFocusWatch(env, [{ event_type: 'startup' }]);
 
 const schedule = setInterval(() => {
   void runScheduled(env);
-  void scanFocusEvents(env).catch(() => {
-    console.error('agent-network focus watch failed: maintenance');
-  });
+  wakeFocusWatch(env, [{ event_type: 'maintenance' }]);
   void recoverFocusJobs(env).catch(() => {
     console.error('agent-network focus recovery failed: maintenance');
   });

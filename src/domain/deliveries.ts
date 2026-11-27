@@ -463,7 +463,14 @@ export async function deliveryClaim(
                 attempt, event_seq, claimed_at)
              SELECT ?, ?, ?, ?, ?, ?, event_seq, ?
                FROM events WHERE event_key = ?
-             ON CONFLICT(delivery_id) DO NOTHING`,
+             ON CONFLICT(delivery_id) DO UPDATE SET
+               room_id = excluded.room_id,
+               message_id = excluded.message_id,
+               recipient_actor_id = excluded.recipient_actor_id,
+               claimed_by = excluded.claimed_by,
+               attempt = excluded.attempt,
+               event_seq = excluded.event_seq,
+               claimed_at = excluded.claimed_at`,
           )
           .bind(
             delivery.delivery_id,
@@ -615,7 +622,6 @@ export async function deliveryComplete(
           archiveHeadSeq: room.archive_head_seq,
         },
         deliveries: [],
-        taskRootId: plan.taskRootId ?? null,
         now: at,
       });
     }

@@ -606,8 +606,11 @@ export const messageSendSchema = z.object({
   /** 显式提及的人类成员；数量上限在领域层校验，超过时返回 INVALID_ARGUMENT。 */
   mentions: z.array(id()).optional(),
   reply_to: id().optional(),
-  /** 显式归属的消息式 Task 起点；省略时按父消息继承。 */
-  task_root_id: id().optional(),
+  /**
+   * 已退役的消息式 Task 参数。保留 never 校验只为了让旧客户端显式传入时
+   * 在执行前得到契约错误，而不是被静默忽略。
+   */
+  task_root_id: z.never().optional(),
   claim: z
     .object({ delivery_id: id(), attempt: z.number().int().nonnegative(), claim_id: id() })
     .optional(),
@@ -624,58 +627,6 @@ export const messageSendStatusSchema = z.object({
     .array(id(128))
     .min(1)
     .max(LIMITS.messageSendStatusMax),
-});
-
-/** 消息式 Task：把任意可见消息标记为聚合起点。 */
-export const messageTaskMarkSchema = z.object({
-  request_id: requestId,
-  room_id: id(),
-  message_id: id(),
-});
-
-/** 消息式 Task：取消起点标记，只撤销聚合入口，不删除消息。 */
-export const messageTaskUnmarkSchema = z.object({
-  request_id: requestId,
-  room_id: id(),
-  message_id: id(),
-});
-
-/** 批量摘要；未标记或当前不可见的根由服务端省略。 */
-export const messageTaskSummariesSchema = z.object({
-  room_id: id(),
-  root_message_ids: z.array(id()).min(1).max(LIMITS.taskSummaryRootsMax),
-});
-
-/** Trace 分页；cursor 优先于 focus_message_id，二者可同时传。 */
-export const messageTaskTraceSchema = z.object({
-  room_id: id(),
-  root_message_id: id(),
-  cursor,
-  focus_message_id: id().optional(),
-  limit: z.number().int().min(1).max(LIMITS.taskTracePageMax).optional(),
-});
-
-/** 按起点聚合的 Task 搜索；普通 network_message_search 契约不变。 */
-export const messageTaskSearchSchema = z.object({
-  room_id: id(),
-  query: z.string().trim().min(1).max(LIMITS.messageSearchQueryMax),
-  limit: z.number().int().min(1).max(LIMITS.taskSearchPageMax).optional(),
-  cursor: z.string().min(1).max(LIMITS.messageSearchCursorMax).optional(),
-});
-
-/** 标记 Task 起点完成；完成与 delivery 完成无关。 */
-export const messageTaskCompleteSchema = z.object({
-  request_id: requestId,
-  room_id: id(),
-  root_message_id: id(),
-});
-
-/** 房间常驻 Task 列表；默认只返回 open，keyset 分页。 */
-export const messageTaskListSchema = z.object({
-  room_id: id(),
-  limit: z.number().int().min(1).max(LIMITS.taskListPageMax).optional(),
-  cursor: z.string().min(1).max(2048).optional(),
-  status: z.enum(['open', 'completed', 'all']).optional(),
 });
 
 export const historyListSchema = z.object({

@@ -4,7 +4,7 @@
  * 三条硬边界：
  * 1. 这里只生成纯 SQL 语句，调用方把语句追加到原业务 `db.batch()`；Memory
  *    本地写入失败时业务与来源一起回滚，外部引擎调用永远不在事务内。
- * 2. 消息、任务 offer、文件使用稳定业务 key；同一业务写入重放不会重复登记。
+ * 2. 消息、文件使用稳定业务 key；同一业务写入重放不会重复登记。
  * 3. 业务路径只创建 `warmup_only=1` 的 RecallRequest，不写经历、不写 retain
  *    资格；个人经历只能由合格 ExposureReceipt 路径接纳。
  *
@@ -63,15 +63,11 @@ export function memoryMessageSourceKey(messageId: string): string {
   return `message:${messageId}`;
 }
 
-export function memoryTaskOfferSourceKey(messageId: string): string {
-  return `task_offer:${messageId}`;
-}
-
 export function memoryFileSourceKey(fileId: string): string {
   return `file:${fileId}`;
 }
 
-/** 消息/任务/文件共用的来源插入；调用方保证 revision 由业务身份决定。 */
+/** 消息/文件共用的来源插入；调用方保证 revision 由业务身份决定。 */
 function sourceStatements(
   db: D1Like,
   options: { instanceId: string; now: number },
@@ -228,8 +224,7 @@ export function memoryWarmupStatements(
     roomId: string;
     eventKey: string;
     requestKey: string;
-    mode: 'related' | 'task';
-    taskRootId: string | null;
+    mode: 'related';
     deliveries: readonly MemoryWarmupDelivery[];
     now: number;
   },
@@ -251,8 +246,7 @@ export function memoryWarmupStatements(
                     'created_seq', (SELECT event_seq FROM events WHERE event_key = ?),
                     'delivery_id', ?,
                     'recipient_id', ?
-                  ),
-                  'task_root_id', ?
+                  )
                 ),
                 1, ?, ?, ?
            FROM memory_spaces s
@@ -276,7 +270,6 @@ export function memoryWarmupStatements(
         input.eventKey,
         delivery.deliveryId,
         delivery.recipientId,
-        input.taskRootId,
         input.now,
         input.now,
         expiresAt,
@@ -294,7 +287,6 @@ export function memoryMessageChangeStatements(
   input: MemoryMessageSourceInput & {
     roomId: string;
     deliveries: readonly MemoryWarmupDelivery[];
-    taskRootId: string | null;
     now: number;
   },
 ): D1PreparedStatement[] {
@@ -307,95 +299,10 @@ export function memoryMessageChangeStatements(
       eventKey: input.eventKey,
       requestKey: `auto:message:${input.messageId}`,
       mode: 'related',
-      taskRootId: input.taskRootId,
       deliveries: input.deliveries,
       now: input.now,
     }),
   ];
-}
-
-/**
- * 消息式 Task 起点：消息来源（缺失时补齐）+ task_offer 角色来源 + 任务预热。
- *
- * task_offer 与 message 共用正文与 digest，但使用独立 source_kind/business_ref，
- * 便于后续按任务角色取证；同一消息不会因此产生第二份经历或 retain。
- */
-export function memoryTaskOfferChangeStatements(
-  db: D1Like,
-  options: MemoryIntakeOptions,
-  input: MemoryMessageSourceInput & {
-    roomId: string;
-    deliveries: readonly MemoryWarmupDelivery[];
-    now: number;
-    taskRevision: number;
-  },
-): D1PreparedStatement[] {
-  if (!options.capture) return [];
-  const taskKey = memoryTaskOfferSourceKey(input.messageId);
-  const origin = input.origin;
-  const createdSeq = input.createdSeq ?? null;
-  const statements = [
-    ...messageSourceStatements(db, { ...options, now: input.createdAt }, input),
-    ...sourceStatements(db, { instanceId: options.instanceId, now: input.createdAt }, {
-      sourceKey: taskKey,
-      sourceKind: 'task_offer',
-      businessRefKind: 'task',
-      businessRefJson: JSON.stringify({
-        task_id: input.messageId,
-        revision: input.taskRevision,
-        message_id: input.messageId,
-        created_seq: createdSeq,
-      }),
-      origin,
-      authorActorId: input.senderId,
-      revision: input.taskRevision,
-      originSeq: createdSeq,
-      // task_offer 是同一消息的角色来源，不复制正文；下游通过 message 来源
-      // 与这里的 digest/created_seq 核对，避免同一段内容被重复提炼。
-      contentText: null,
-      contentSha256: input.digest,
-      contentBytes: input.bodyBytes,
-    }),
-  ];
-  if (createdSeq === null) {
-    statements.push(
-      ...eventSeqUpdateStatements(db, {
-        instanceId: options.instanceId,
-        sourceKey: taskKey,
-        revision: input.taskRevision,
-        eventKey: input.eventKey,
-        now: input.createdAt,
-        businessRefHasCreatedSeq: true,
-      }),
-    );
-  }
-  statements.push(
-    ...memoryWarmupStatements(db, options, {
-      messageId: input.messageId,
-      roomId: input.roomId,
-      eventKey: input.eventKey,
-      requestKey: `auto:task_offer:${input.messageId}`,
-      mode: 'task',
-      taskRootId: input.messageId,
-      deliveries: input.deliveries,
-      now: input.now,
-    }),
-  );
-  return statements;
-}
-
-/** 任务取消/重派：只让旧 task_offer 角色不可读，不写永久 tombstone。 */
-export function memoryTaskOfferRetractionStatements(
-  db: D1Like,
-  options: MemoryIntakeOptions,
-  input: { messageId: string; now: number },
-): D1PreparedStatement[] {
-  return memorySourceRetractionStatements(db, options, {
-    sourceKey: memoryTaskOfferSourceKey(input.messageId),
-    reason: 'policy',
-    permanent: false,
-    now: input.now,
-  });
 }
 
 export interface MemoryFileSourceInput {
@@ -494,26 +401,18 @@ export function memorySourceRetractionStatements(
   return statements;
 }
 
-/** 消息撤回：message 与 task_offer 两个角色来源同时建立永久排除。 */
+/** 消息撤回：消息来源建立永久排除。 */
 export function memoryMessageRetractionStatements(
   db: D1Like,
   options: MemoryIntakeOptions,
   input: { messageId: string; now: number },
 ): D1PreparedStatement[] {
-  return [
-    ...memorySourceRetractionStatements(db, options, {
-      sourceKey: memoryMessageSourceKey(input.messageId),
-      reason: 'recall',
-      permanent: true,
-      now: input.now,
-    }),
-    ...memorySourceRetractionStatements(db, options, {
-      sourceKey: memoryTaskOfferSourceKey(input.messageId),
-      reason: 'recall',
-      permanent: true,
-      now: input.now,
-    }),
-  ];
+  return memorySourceRetractionStatements(db, options, {
+    sourceKey: memoryMessageSourceKey(input.messageId),
+    reason: 'recall',
+    permanent: true,
+    now: input.now,
+  });
 }
 
 export function memoryFileRetractionStatements(
@@ -527,28 +426,4 @@ export function memoryFileRetractionStatements(
     permanent: true,
     now: input.now,
   });
-}
-
-/**
- * task_offer revision：
- * - 已有 active 来源时复用原 revision，重复标记不会制造新版本；
- * - 只有取消后重新标记才取 max+1，避免旧 revision 被覆盖读取。
- */
-export async function nextTaskOfferRevision(
-  db: D1Like,
-  options: MemoryIntakeOptions,
-  messageId: string,
-): Promise<number> {
-  const row = await db
-    .prepare(
-      `SELECT revision, state
-         FROM memory_sources
-        WHERE instance_id = ? AND source_key = ?
-        ORDER BY revision DESC
-        LIMIT 1`,
-    )
-    .bind(options.instanceId, memoryTaskOfferSourceKey(messageId))
-    .first<{ revision: number; state: string }>();
-  if (!row) return 1;
-  return row.state === 'active' ? row.revision : row.revision + 1;
 }

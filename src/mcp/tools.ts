@@ -199,7 +199,7 @@ export function registerTools(
   register(
     server,
     'network_login',
-    '常驻 MCP 客户端在 agentnet://stream 订阅 ack 后显式上线；未上线时投递仍保存在 SQLite。单次收发与宿主 webhook 回调无需以 login 建立监听。重复调用幂等，返回待办数量与 inbox 头。pending_count 是未领取的普通投递数，不代表任务总数；会话与任务摘要由 network_inbox_list、network_rooms_list 与 network_task_summaries 读取。login 不改变 pending_count、房间 head、未读或在线状态。online: true 只代表调用成功，不能证明订阅可达。',
+    '常驻 MCP 客户端在 agentnet://stream 订阅 ack 后显式上线；未上线时投递仍保存在 SQLite。单次收发与宿主 webhook 回调无需以 login 建立监听。重复调用幂等，返回待办数量与 inbox 头。pending_count 是未领取的普通投递数，不代表任务总数；会话与房间摘要由 network_inbox_list 与 network_rooms_list 读取。login 不改变 pending_count、房间 head、未读或在线状态。online: true 只代表调用成功，不能证明订阅可达。',
     loginSchema,
     loginResultSchema,
     async () => login(env, principal),

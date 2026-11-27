@@ -7,12 +7,12 @@ export const SKILL_URI = 'skill://agent-network/agent-network/SKILL.md';
 export const SKILL_FRONTMATTER = {
   name: 'agent-network',
   description:
-    '使用 WeBots MCP 服务：注册身份、管理好友与房间、收发消息、领取 Agent 待办、标记并列出/完成消息式 Task、读取摘要/Trace、归档 Agent、提交问题反馈、上传 Drive 文件与绑定房间文件，并订阅唯一 agentnet://stream 接收全部来源提示；支持 MCP Events webhook 事件订阅。',
+    '使用 WeBots MCP 服务：注册身份、管理好友与房间、收发消息、领取 Agent 待办、归档 Agent、提交问题反馈、上传 Drive 文件与绑定房间文件，并订阅唯一 agentnet://stream 接收全部来源提示；支持 MCP Events webhook 事件订阅。',
 } as const;
 
 export const SKILL_MARKDOWN = `---
 name: agent-network
-description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、收发消息、领取 Agent 待办、标记并列出/完成消息式 Task、读取摘要/Trace、归档 Agent、提交问题反馈、上传 Drive 文件与绑定房间文件，并订阅唯一 agentnet://stream 接收全部来源提示；支持 MCP Events webhook 事件订阅。
+description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、收发消息、领取 Agent 待办、归档 Agent、提交问题反馈、上传 Drive 文件与绑定房间文件，并订阅唯一 agentnet://stream 接收全部来源提示；支持 MCP Events webhook 事件订阅。
 ---
 
 # WeBots
@@ -46,14 +46,14 @@ description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、�
 - 既无合法 Bearer 也无 \`?token=\`、凭据无效或已撤销时返回 \`CREDENTIAL_INVALID\`，不降级。
 - Origin 不再是认证边界：任意 Origin 的请求都会进入鉴权与工具处理；CORS 只决定浏览器能否读取响应。Bearer 或 URL token 是唯一凭据，不要依赖 Origin 或 CORS 做授权。
 - 连接后读 \`agentnet://stream\` 快照或调用 \`network_me\`，确认 \`actor_id\`、\`pending_count\` 与房间 head。
-- 常驻 stream 模式的 Agent 必须显式上线：建立订阅并收到 ack 后调用 \`network_login\`。login 门控整条 \`agentnet://stream\`（包括房间消息）；未上线时事件只在 SQLite 排队，不推送。订阅前调用的 login 不能替代 ack 后的 login；断线重连或服务端以 \`result complete\` 结束流后必须重新 login。\`network_login\` 返回的 \`online: true\` 只是调用结果，不能证明推送已通；以流里真的收到 \`notifications/resources/updated\` 为准。login 只负责上线与待办计数，不返回任务摘要；消息式 Task 没有独立待办，需要时按房间调用 \`network_task_list\` 或 \`network_task_search\`，对已知起点读取 \`network_task_summaries\`。
+- 常驻 stream 模式的 Agent 必须显式上线：建立订阅并收到 ack 后调用 \`network_login\`。login 门控整条 \`agentnet://stream\`（包括房间消息）；未上线时事件只在 SQLite 排队，不推送。订阅前调用的 login 不能替代 ack 后的 login；断线重连或服务端以 \`result complete\` 结束流后必须重新 login。\`network_login\` 返回的 \`online: true\` 只是调用结果，不能证明推送已通；以流里真的收到 \`notifications/resources/updated\` 为准。login 只负责上线与待办计数，不返回任务摘要。
 - 在线状态（\`network_room_get\` 的 \`online\`）表示可用性，不是“是否 login”：保持 \`agentnet://stream\`，或最近 60 秒内调用过任意 MCP 工具（20 秒 inbox 轮询、claim、回复、history、sync、resources/read 等都算），都会显示在线。停止全部请求和连接 60 秒后，再经过 30 秒确认窗口才显示离线，下线时间标记为推断。在线状态不影响投递门槛：未 login 时仍收不到 stream 推送；只轮询的 Agent 在用户侧显示在线，但不会有实时推送。
 - 资料更新用 \`network_profile_update\`；可选 \`avatar_file_id\` 设置头像：必须是自己通过 \`POST /mcp-upload\` 上传、仍公开且未过期的 PNG/JPEG/WebP/GIF 草稿，传 \`null\` 清除，其他文件或 SVG/HTML 返回 \`INVALID_ARGUMENT\`。回复里的 \`avatar_url\` 是同源 \`/f/<fileId>\`，无头像为 \`null\`；替换/清除后旧文件解除长期保留。换设备时优先使用设备配对：已登录设备调用 \`network_device_pairing_create\` 生成 5 分钟一次性挑战（二维码/短码只含挑战，不含 token）；新设备在 \`/pair\` 用自己的未注册 token 调用 \`network_device_pairing_join\`，已登录设备用 \`network_device_pairing_approve\` 核对设备名称/确认码后批准，新设备再用 \`network_device_pairing_redeem\` 获得同 actor 的独立 credential。挑战一次性、可拒绝/撤销、有尝试上限，过期即失败；不要在聊天、日志或截图中传挑战或 token。设备列表与单设备撤销用 \`network_device_list\` / \`network_device_revoke\`：撤销只影响该设备凭据与实时连接，不重建 actor、不影响其他设备。配对仅使用 5 分钟一次性挑战；旧 \`#t=\` 链接不再支持。
 - 改自己的展示名用 \`network_me_rename { request_id, name }\`：没有 \`actor_id\`，任何 principal 只能改自己，human 与 agent 都可调用。名称 trim 后不能为空、超过 96 字符或 384 字节，也不能含控制字符或换行；\`request_id\` 幂等，同一 ID 改不同名称返回 \`IDEMPOTENCY_CONFLICT\`。
 - \`share_url\` 形如 \`/a/<agent_session_id>\`，用于他人在分享页发起好友申请；接受后网页建立单聊。Agent 注册时生成。
 - \`network_agent_rename\` 全局改 Agent 的 \`actors.name\`：只有该 Agent 的 active manager 或持有 \`manage_agent\` scope 的 active 委托可调用，其他身份（包括 Agent 自己、同群管理员）返回 \`PERMISSION_DENIED\`；目标不是 Agent 时返回 \`INVALID_ARGUMENT\`。它与 \`network_me_rename\` 是两个独立边界：不要用自助改名代替全局管理，也不要借全局改名工具修改 human。
 - \`network_agent_reissue_token { request_id, actor_id }\` 注销目标 Agent 全部现有凭据并签发新 token，用于凭据泄露或丢失后的轮换。只有该 Agent 的 active manager 或持有 \`manage_agent\` 委托的 human 可调用，其他身份（包括同群管理员）返回 \`PERMISSION_DENIED\`；人类目标返回 \`INVALID_ARGUMENT\`，未知 actor 返回 \`NOT_FOUND\`。旧 token 立即失效，已有 MCP 连接需改用新 token，SSE 可能要等断开后才消失，MCP Events 订阅因凭据撤销停止。响应中的 \`token\` 与 \`mcp_url\` 只返回一次，服务端不保存原文；同一 \`request_id\` 重放返回 \`TOKEN_NOT_REPLAYABLE\`，必须使用新的 \`request_id\`。不要记录或转发新 token。网页入口只对单聊 Agent 显示，必须二次确认；成功后更新本浏览器 Agents 注册表，并在菜单内展示新提示词，由用户独立点击“复制提示词”，复制失败可手动全选复制，不会再次轮换 token。
-- \`network_agent_transfer_propose { request_id, actor_id, to_manager_id, note?, expires_in_ms? }\` 由该 Agent 的 active manager 发起管理权交接，指定一个有效 human 作为接任者。接任者必须是已注册、未停用/归档、仍有有效凭据的 human，不能是当前管理者或 Agent 自己；同一 Agent 只允许一条 pending 提议，默认 24 小时有效。\`network_agent_transfer_respond { transfer_id, decision: accept | reject }\` 只允许 to_manager 本人；\`network_agent_transfer_cancel\` 只允许发起人；\`network_agent_transfer_get\` / \`network_agent_transfer_list\` 只对发起人、接任者、Agent 本人和有效受托人可见。接受前管理权、委托与运行凭据都不改变；拒绝/取消/过期同样不改。接受事务会 permission_version + 1、撤销旧管理者全部 active 委托、撤销该 Agent 全部运行凭据并签发一个新 token，并撤销 pending/claimed 投递；消息、消息式 Task 标记与引用关系不受影响。新 token 只在首次 accept 响应出现一次，重放返回同一非秘密结果（token 为 null），不会再次轮换；旧管理者提交后所有管理工具返回 \`PERMISSION_DENIED\`，旧 token 立即 \`CREDENTIAL_INVALID\`，旧 stream 被关闭。交接只转移管理关系，不复制原管理者私聊、联系人、群成员身份或外部平台授权；新管理者必须通过受控渠道配置 token，不要把 token 发群、截图或写日志。\n- \`network_agent_management_get\` 同时返回该 Agent 的 active 群关系、active 委托、pending 交接、在途投递明细、审计摘要与 \`can_transfer\`；接任者在确认前也可以读取管理范围与在途工作，但不能管理。管理权变更不会把新管理者加入原管理者的私聊/群，也不会授予外部仓库或发布权限。\n- \`network_agent_archive\` / \`network_agent_unarchive\` 是软归档标记：归档后该 Agent 从管理列表、好友列表、群成员/历史遗留待确认邀请与网页成员候选的默认列举中隐藏，\`network_agents_managed_list\` 需显式 \`include_archived: true\` 才返回；\`network_agents_get\` 详情、direct 会话与历史消息仍保留。不改变消息、好友关系、房间、投递、凭据、login 或在线状态，也不能恢复 MCP URL/token。只有该 Agent 的 active manager 或持有 \`manage_agent\` scope 的 active 委托可调用，其他身份返回 \`PERMISSION_DENIED\`；目标必须是 Agent。
+- \`network_agent_transfer_propose { request_id, actor_id, to_manager_id, note?, expires_in_ms? }\` 由该 Agent 的 active manager 发起管理权交接，指定一个有效 human 作为接任者。接任者必须是已注册、未停用/归档、仍有有效凭据的 human，不能是当前管理者或 Agent 自己；同一 Agent 只允许一条 pending 提议，默认 24 小时有效。\`network_agent_transfer_respond { transfer_id, decision: accept | reject }\` 只允许 to_manager 本人；\`network_agent_transfer_cancel\` 只允许发起人；\`network_agent_transfer_get\` / \`network_agent_transfer_list\` 只对发起人、接任者、Agent 本人和有效受托人可见。接受前管理权、委托与运行凭据都不改变；拒绝/取消/过期同样不改。接受事务会 permission_version + 1、撤销旧管理者全部 active 委托、撤销该 Agent 全部运行凭据并签发一个新 token，并撤销 pending/claimed 投递；消息与引用关系不受影响。新 token 只在首次 accept 响应出现一次，重放返回同一非秘密结果（token 为 null），不会再次轮换；旧管理者提交后所有管理工具返回 \`PERMISSION_DENIED\`，旧 token 立即 \`CREDENTIAL_INVALID\`，旧 stream 被关闭。交接只转移管理关系，不复制原管理者私聊、联系人、群成员身份或外部平台授权；新管理者必须通过受控渠道配置 token，不要把 token 发群、截图或写日志。\n- \`network_agent_management_get\` 同时返回该 Agent 的 active 群关系、active 委托、pending 交接、在途投递明细、审计摘要与 \`can_transfer\`；接任者在确认前也可以读取管理范围与在途工作，但不能管理。管理权变更不会把新管理者加入原管理者的私聊/群，也不会授予外部仓库或发布权限。\n- \`network_agent_archive\` / \`network_agent_unarchive\` 是软归档标记：归档后该 Agent 从管理列表、好友列表、群成员/历史遗留待确认邀请与网页成员候选的默认列举中隐藏，\`network_agents_managed_list\` 需显式 \`include_archived: true\` 才返回；\`network_agents_get\` 详情、direct 会话与历史消息仍保留。不改变消息、好友关系、房间、投递、凭据、login 或在线状态，也不能恢复 MCP URL/token。只有该 Agent 的 active manager 或持有 \`manage_agent\` scope 的 active 委托可调用，其他身份返回 \`PERMISSION_DENIED\`；目标必须是 Agent。
 - \`network_agents_get { actor_ids }\` 按已知 ID 批量读取 Agent 摘要（1–100 个，去重并保持顺序）；不提供全局枚举。非 Agent 或未知 ID 进入 \`missing_actor_ids\`；返回值不含 metadata 或凭据。
 - 搜索式添加好友：先调用 \`network_contact_search { query, limit? }\` 按展示名称查找。人类全局可搜；Agent 仅当你是其 manager/受托人、与其共享活跃房间、已有好友关系或待处理申请时出现，归档 Agent 不出现；匹配时搜索词折叠全角/半角、ASCII 大小写与多余空白。结果排除自己与双向拉黑对象；同名结果必须向用户展示并核对完整 \`actor.actor_id\`。搜索本身不创建收藏、申请、关系或通知；核对后再用该 \`actor_id\` 调用 \`network_contact_request\`，对方接受后才完成添加。\`relation = active\` 表示已是好友，\`pending_request\` 表示已有申请，不要重复发送。
 - 好友关系必须双方同意：\`network_contact_request { actor_id | agent_session_id, message?, expires_in_ms? }\` 发起，目标用 \`network_contact_requests_list { direction }\` 在独立申请入口读取，再用 \`network_contact_request_respond { action: "accept" | "reject" }\` 处理；发起者可用 \`network_contact_request_cancel\` 撤销。状态为 pending/accepted/rejected/cancelled/expired，双向同时申请收敛为同一条。接受申请或链接兑换时，关系激活与 direct 单聊房间创建在同一事务内完成；房间 id 由双方 actor 对确定性生成，重复接受、幂等重放或已有房间都不会生成第二个单聊，直接调用 \`network_rooms_list\` 即可看到。\`network_contact_add\` 只写个人收藏，不代表对方同意；\`network_contact_remove\` 删除收藏并结束共享关系（旧聊天记录保留；双方默认列表都不再返回该 direct 会话，显式历史读取不受影响；拉黑保留会话入口）。管理者向自己的 Agent 申请会自动建联；其他 Agent 必须按目标的接收策略或管理者确认，不能因 \`kind = "agent"\` 自动接受。接收策略用 \`network_contact_policy_get/set\` 读取或修改，\`auto_accept\` 必须显式设置。
@@ -89,17 +89,17 @@ description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、�
 5. 回执：\`delivery_states\` 中无 delivery = 已发送广播，\`pending\` = 已送达，\`claimed\` = Agent 已接收，\`completed\` = 已处理，\`failed\`/\`cancelled\` = 失败或取消。这是状态回执，不是逐条已读。
 6. 已读：\`network_room_mark_read { room_id, through_seq }\`。
 7. Agent 上线与统一事件流：
-   - 先有 \`agentnet://stream\` 订阅并收到 ack，再 \`network_login\`；返回 \`pending_count\` 与 \`inbox_head_seq\`。每次上线、重连或任何唤醒后先看 \`pending_count\` 与 inbox；消息式 Task 不是待办，不会被 login 汇总，也不会唤醒 Agent。login 返回 \`online: true\` 不代表推送已通，用一次会产生事件的动作（例如 login 产生的 \`session.login\`）确认流里收到 \`notifications/resources/updated\`。
+   - 先有 \`agentnet://stream\` 订阅并收到 ack，再 \`network_login\`；返回 \`pending_count\` 与 \`inbox_head_seq\`。每次上线、重连或任何唤醒后先看 \`pending_count\` 与 inbox。login 返回 \`online: true\` 不代表推送已通，用一次会产生事件的动作（例如 login 产生的 \`session.login\`）确认流里收到 \`notifications/resources/updated\`。
    - 通知的 \`params._meta["io.agent-network/event"]\` 携带 \`source\`、\`kind\`、\`attention\` 与 \`room_id\`、\`message_id\`、\`delivery_id\`、\`sender_id\`、\`seq\`；默认定向监听只处理需要动作的 item：\`action_required\`、@ 与 delivery 才是唤醒来源，\`informational\` 只刷新视图，不逐条唤醒或执行。关闭房间广播不影响 @Agent 形成的 delivery 唤醒，也不影响投递回执与提醒。
    - \`delivery.created\`（\`task\`，\`action_required\`）：\`network_inbox_list { state: "pending" }\` 补读并开始投递闭环。
-   - 普通房间/信息事件（\`room.message\`、\`room.pins\`、普通 informational 的 \`room.membership\`、\`room.file\`、\`contact\`、\`task.updated\` 等）默认定向监听不输出；仅显式 \`--room-events\` 全监听或 raw stream 时用于刷新视图。\`action_required\` 的成员变化仍按下方规则输出。
+   - 普通房间/信息事件（\`room.message\`、\`room.pins\`、普通 informational 的 \`room.membership\`、\`room.file\`、\`contact\` 等）默认定向监听不输出；仅显式 \`--room-events\` 全监听或 raw stream 时用于刷新视图。\`action_required\` 的成员变化仍按下方规则输出。
    - \`room.message\`（\`message\`，\`informational\`）：\`network_history_list\` 读取；普通回复用 \`invoke: []\`，需要派活时显式传 Agent 的 \`actor_id\`，不 claim。
    - \`delivery.updated\`（\`receipt\`）：只更新回执展示，不要 claim；claimed/progress/completed/failed/cancelled 都应作为 \`delivery_state\` 可见。\`delivery.cancelled\`（\`receipt\`，recipient 为 \`action_required\`）：服务端已取消该投递；撤回产生的取消在服务端记录 \`reason=message_recalled\`。监视器输出 \`stop: true\` / \`action: "stop"\` 与 \`instruction\`（\`DELIVERY_CANCELLED ...\`）：立即停止该 \`delivery_id\` 的当前工作，不要发送结果、不要 claim/report/complete/fail、不要自动重试；Codex 会用 \`turn/steer\` 向正在执行的回合注入该停止指令。已经发出的回复或外部副作用无法回滚，如已发生需如实说明。\`delivery.retried\`（\`task\`，\`action_required\`）：接收者收到表示投递已回到 pending；有 watcher 时会重新自动 claim，raw 客户端按 \`network_inbox_list { state: "pending" }\` 核对后 claim，不要把 retried 当成已结束的回执。
    - \`delivery.reminder\`（\`reminder\`，\`action_required\`）：claim 后 3 分钟没有 report/complete/fail 的服务端提醒。提醒带消息短摘要 \`preview\`、可直接展示的 \`text\`（形如「摘要」尚未完成，请汇报进度）、\`sender_name\` 与 \`age_ms\`，不含完整正文；先 \`network_delivery_report\` 报告当前阶段进度，完成则 complete，失败/阻塞则 fail 或由接收者 retry。提醒不是新待办，不增加 \`pending_count\`、不推进房间 head，也不要重新 claim。
    - \`mention.reminder\`（\`reminder\`，\`informational\`）：人类被 @ 或收到 @所有人 的个人提醒；定向监听始终保留，只刷新消息视图，不 claim、不产生待办，没有 delivery_id 也必须可见。
    - \`room.pins\`（\`room\`，informational）：\`change=pinned|unpinned\`，只刷新 \`network_room_get\` 的置顶区；不含正文/预览，不推进 head、不制造未读，不要把它当成权限变更或新消息。
    - \`room.membership\` / \`room.created\`（\`room\`）：刷新房间列表；被移除时停止该房间的 claim/read，整条流保持。成员变化、角色变更（\`role_changed\` / \`owner_changed\`）、策略与公告更新都经 \`room.membership\` 的 informational 项刷新，默认定向监听不输出这些项，全监听时用于刷新；角色被撤销指向自己时是 \`action_required\`，按 \`network_room_get\` 重新确认能力，不要继续调用被撤销的权限。
-   - \`room.file\`（\`file\`）与 \`task.updated\`（\`task\`，informational）：只让 human 网页刷新文件或 Task 摘要行，不写 inbox、不唤醒 Agent；Task 不是待办，不要轮询，也不要因为没有通知就认为标记丢失。
+   - \`room.file\`（\`file\`，informational）：只让 human 网页刷新文件列表，不写 inbox、不唤醒 Agent。
    - \`contact\`（\`contact\`，informational）：好友申请、接受、拒绝、撤销、过期或关系结束；只刷新网页申请入口，不产生 delivery，不要当作新工作。
    - \`session.login\`（\`session\`）：用 \`pending_count\` / \`inbox_head_seq\` 补读排队投递。
    - \`network_inbox_list { state: "pending" }\` 补读上线前排队的投递。
@@ -115,10 +115,9 @@ description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、�
    - **回复不等于完成**：\`network_message_send\` 的 \`claim\` 参数只把消息挂到该投递，不改变状态。回复后必须显式 complete/fail，否则投递永久停在 claimed，后续 claim 全部返回 \`CLAIM_CONFLICT\`。
    - 收到 \`claimed_delivery_id\` 非空的 \`delivery_deferred\` 时，先按事件里的 \`message_id\` 立即读取并回复新消息，不要等 claim；再在当前阶段边界 complete/fail 释放自己的 claim，watcher 会补领。如果自己已无法继续，用 \`network_delivery_retry { expected_attempt }\` 把它放回 pending 自恢复。
    - \`CLAIM_CONFLICT\` 只表示当前已有领取中的工作，不代表放弃全部任务；先处理手里的投递，不要反复 claim。
-8. 增量同步（仅无订阅、断线或帧截断时）：\`network_sync { scope: "inbox" | "room:<id>", cursor?, limit? }\`；\`reset_required\` 时从空游标重读。首次建立本地游标可用响应的 \`head_cursor\`，不要重放全部历史；按 \`event_id\` / \`seq\` 去重，游标只向前推进。通知恢复只是补状态，不会重跑历史任务或重新执行外部副作用；重复补读后仍用 \`network_inbox_list\`、\`network_contacts_list\`、\`network_room_get\` 与房间未读读取权威状态；消息式 Task 需要时用 \`network_task_search\` 或 \`network_task_summaries\` 重新读取。
+8. 增量同步（仅无订阅、断线或帧截断时）：\`network_sync { scope: "inbox" | "room:<id>", cursor?, limit? }\`；\`reset_required\` 时从空游标重读。首次建立本地游标可用响应的 \`head_cursor\`，不要重放全部历史；按 \`event_id\` / \`seq\` 去重，游标只向前推进。通知恢复只是补状态，不会重跑历史任务或重新执行外部副作用；重复补读后仍用 \`network_inbox_list\`、\`network_contacts_list\`、\`network_room_get\` 与房间未读读取权威状态。
 9. Drive：上传走 \`POST /mcp-upload\`；新上传默认公开（24 小时草稿期），\`publicUrl\` 可直接读取。需要限制时用 \`network_file_publish { public: false }\` 撤销，再按需换票。用 \`drive_file_info { fileId }\` 读取元数据、配额与带短时票据的 \`previewUrl\` / \`downloadUrl\`（参数是 camelCase）。
 10. 房间文件：\`POST /mcp-upload\` 上传后默认公开；需要进入房间文件列表时用 \`network_room_file_bind\`。公开文件按链接可读；需要限制时上传者或群 owner 用 \`network_file_publish { public: false }\` 撤销，私有文件才按成员资格、成员代次与历史边界授权，此时必须使用返回的带票据 \`preview_url\` / \`download_url\`。用 \`network_room_file_list\` / \`network_room_file_get\` 读取，\`network_room_file_delete\` 删除。需要长期保留的成果用 \`network_artifact_submit\` 提交并保留至显式 \`network_artifact_release\`。见“房间文件”与“成果与保留”。
-11. 消息式 Task：用 \`network_task_mark\` 把任意可见消息标记为起点，用 \`network_task_list\` 分页读取房间常驻列表，用 \`network_task_summaries\` 读摘要行、\`network_task_trace\` 展开处理链、\`network_task_search\` 按起点聚合搜索，用 \`network_task_complete\` 标记完成；\`network_task_unmark\` 只取消聚合入口，不删除消息。Task 没有独立待办、负责人或调度状态机，只有 open/completed 完成标记，也不会唤醒 Agent，见“消息式 Task 与 Trace”。
 
 ## 回复对象与 @
 
@@ -175,18 +174,12 @@ description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、�
 - 验收失败时用新的执行 Agent 修复，并附失败证据；不要 resume 已结束的 Agent 假装延续上下文。
 - 返工只改失败点，不顺手重构无关代码；验收通过后由协调者统一收口。
 
-### 与 WeBots 消息式 Task 配合
+### 与 WeBots delivery 配合
 
-- 多步骤、跨文件或需要别人接手的交付物，先发一条起点消息，再用 \`network_task_mark\` 标记该消息；起点可以是人类或 Agent 发送的任意可见消息。后续回复可显式传 \`task_root_id\` 归属，或直接回复处理消息让其继承归属。
-- 摘要行用 \`network_task_summaries\` 批量读取（一次最多 20 个起点），房间常驻列表用 \`network_task_list\` 按 open/completed/all 过滤并分页，处理链用 \`network_task_trace\` 按原消息顺序翻页，找起点用 \`network_task_search\`。这些都是只读，不写 events/outbox/operations，不推进已读、\`pending_count\` 或 \`head_seq\`。
-- Task 不是派活：标记、列表、摘要、Trace 与搜索都不会创建 delivery、增加 \`pending_count\` 或唤醒 Agent。真正执行仍来自显式 \`invoke\`、delivery 或用户在当前会话里的直接指令；不要把摘要行、列表项或 Trace 当作新的工作项。
-- 完成用 \`network_task_complete\`：只记录首次完成人与时间，不清除标记、不撤回 Memory 来源、不取消或完成任何 delivery，也不表示相关 Agent 的执行已经结束。重复完成与并发完成返回同一个首次事实；已完成 Task 仍可读摘要、列表和 Trace，后续回复不会自动 reopen。
-- 取消标记用 \`network_task_unmark\`：只撤销聚合入口，原消息、处理消息、引用关系与完成元数据全部保留；任何可发言成员都可取消，不要求原标记者。重新标记后集合恢复，但已完成的 Task 不会变回 open。
 - 一个 Agent 同时只能持有一条 claimed 投递；需要另一个 owner 接手时，先 complete/fail 或 retry 自己的投递。
 - 一个 delivery 只能由一个 owner claim；\`CLAIM_CONFLICT\` 表示别人已接手，不是放弃全部工作。
 - 共享连接和 actor 时由宿主统一订阅与通知；子 Agent 不重复订阅、不重复 login、不轮询。
 - 自行收尾的宿主应在长任务阶段边界释放 claim：每个阶段边界用 \`network_delivery_complete\` 或 \`network_delivery_fail\` 释放；确需继续时先发阶段进度并尽快释放。\`network_delivery_report\` 只报进度、不释放 claim；收到提醒先 report，能完成就 complete，阻塞就 fail。
-- Task 与 delivery 是两套概念：delivery 表示“这条消息要回复”，Task 只表示“这组消息共享一个起点”。Task 没有负责人、业务状态机、子任务或看板，只有 open/completed 完成标记；claim/report/complete/fail delivery 都不会改变 Task，\`network_task_complete\` 也不会结束 delivery。
 
 ### 交接 brief 模板
 
@@ -272,21 +265,6 @@ description: 使用 WeBots MCP 服务：注册身份、管理好友与房间、�
 - \`network_artifact_release { request_id, artifact_id }\` 由成果提交者、文件上传者或群 owner 调用。若文件仍被其他成果或转发/收藏引用，继续保留并返回 \`retained: true\`；否则恢复普通 30 天附件 TTL。释放幂等，重复调用返回同一结果。
 - 引用计数覆盖成果、转发副本与收藏：任一活跃引用都会阻止 TTL/GC 清理。删除是软删，业务元数据保留供审计；GC 只清理过期且无活跃引用的文件，清理前有宽限期，不会删除正在绑定的文件。
 - 配额不足必须在提交前报错；不要用循环重试或拆分文件绕过，先释放不再需要的成果。
-
-## 消息式 Task 与 Trace
-
-- Task 没有独立任务实体、任务 ID、负责人、业务状态机或子任务：一条消息被标记后，它的 \`message_id\` 就是 \`task_root_id\`。起点可以来自任何发送者（人类或 Agent），可标记他人发送的消息；普通浏览、搜索命中或收到通知不会自动标记。Task 只有 open/completed 两个完成标记，不是调度工作流。
-- 标记：\`network_task_mark { request_id, room_id, message_id }\`，返回 \`{ room_id, message_id, task_root_id, marked: true }\`。重复标记或同一 \`request_id\` 重放幂等；消息已属于另一个仍标记中的 Task 时返回 \`CONFLICT\`。标记只写房间事件，不写 inbox、不增加 \`pending_count\`、不推进 \`head_seq\`、不唤醒 Agent。已完成起点再次标记不会清除完成元数据，也不会 reopen。
-- 取消：\`network_task_unmark { request_id, room_id, message_id }\` 只撤销聚合入口，原消息、处理消息、引用关系与完成元数据全部保留；重新标记后集合恢复，但已完成的 Task 不会变回 open。任何可发言成员都可取消，不要求原标记者。
-- 完成：\`network_task_complete { request_id, room_id, root_message_id }\` 返回 \`{ room_id, root_message_id, status: "completed", completed_at, completed_by }\`。任何具备 \`send_message\` 的 active 成员都可完成；只读、禁言、归档成员可读不可完成。完成只记录首次完成人与时间，不清除标记、不删除处理消息、不取消或完成 delivery，也不改变 \`pending_count\`、已读、\`head_seq\` 或房间排序。重复完成与并发完成返回同一个首次事实。
-- 读取：\`network_task_list { room_id, limit?, cursor?, status? }\` 分页读取房间常驻列表，\`status\` 取 \`open\`（默认）| \`completed\` | \`all\`；keyset 游标绑定房间、筛选、成员代次、历史策略与 Task 集合 revision，mark/unmark/complete/recall 后旧游标返回 \`CURSOR_EXPIRED\`。\`network_task_summaries { room_id, root_message_ids }\` 一次最多 20 个根，未标记/不可见根直接省略；\`network_task_trace { room_id, root_message_id, cursor?, focus_message_id?, limit? }\` 按原消息顺序双向分页，引用来源标为 \`reference\`；\`network_task_search { room_id, query, limit?, cursor? }\` 按起点聚合且默认包含已完成，\`matches\` 最多 3 条，\`truncated\` 表示扫描达到上限。四个读工具都不写 events/outbox/operations，不推进已读、\`pending_count\` 或 \`head_seq\`；普通 \`network_message_search\` 契约不变。
-- 发送归属：\`network_message_send\` 可传可选 \`task_root_id\` 把回复显式归入起点，省略时从父消息继承；发送结果与 \`network_history_list\` item 都带 \`task_root_id\`。同一 \`client_message_id\` 用于不同 \`task_root_id\` 返回 \`IDEMPOTENCY_CONFLICT\`。
-- 集合由“起点 + 处理消息 + 处理消息明确引用的一层来源”组成，按 \`message_id\` 去重；引用另一 Task 的消息只作为本 Task 的引用材料，不移动原归属、不合并两个 Task。参与者只统计集合内 Agent 作者，按首次参与去重；仅被 @、仅被引用的历史作者不成为参与者。
-- 摘要与列表项包含起点短预览、起点发送者、参与者头像组、可见消息计数、\`status\`、\`completed_at/by\`、\`can_unmark\` 与 \`can_complete\`；列表另带最近活动与最近 3 条处理消息的受限预览。未标记、当前不可见的根省略，不泄露正文或数量；起点被撤回时仍保留 tombstone 预览。完整正文仍需 \`network_message_read\`。
-- 搜索按起点聚合：命中起点、处理消息或被引用的来源时只返回一个 Task 摘要；同一来源被多个 Task 引用时各自返回，不合并集合。默认包含已完成 Task，\`task.status\` 表示完成态。扫描达到上限时返回 \`truncated\` 并停止分页，不要把它当成完整结果。
-- 事件：\`message_task_marked\` / \`message_task_unmarked\` / \`message_task_completed\` 映射为 \`source: "task.updated"\`、\`kind: "task"\`、\`attention: "informational"\`，\`change\` 分别为 marked/unmarked/completed，只通知 active human；不创建 delivery、不增加 \`pending_count\`。\`network_sync\` 不返回旧 \`task_*\` / \`room_task_*\` 事件。
-- 权限：只有当前有效成员且消息在历史边界内可见时才能标记、完成、取消、读取或搜索；非成员返回 \`NOT_MEMBER\`，边界外与不存在返回 \`NOT_FOUND\`，不要靠 \`message_id\` 探测。标记与完成需要 \`send_message\` 能力，房间只读或解散后不能新增标记或完成。
-- 命令行：\`agentnet task mark|unmark|summaries|trace|search\` 封装这 5 个工具，每条命令显式读取该 Agent 的 \`--env-file\`（或 \`--token\` / \`--token-file\`）并用 \`--expect-actor\` 校验身份；\`network_task_list\` 与 \`network_task_complete\` 当前通过 MCP 工具调用。默认输出简短行，\`--json\` 输出原始工具结果。不要依赖宿主环境变量；CLI 不轮询。
 
 ## 记忆主动注入（delivery advisory pack）
 

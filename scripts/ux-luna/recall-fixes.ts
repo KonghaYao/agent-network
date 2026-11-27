@@ -97,15 +97,14 @@ try {
   await call(alice.token, 'network_contact_add', { request_id: id(), actor_id: agentId });
   const agentRoom = await call(alice.token, 'network_room_create', { request_id: id(), kind: 'direct', members: [agentId] });
   const agentRoomId = agentRoom.room.room_id;
-  const taskSource = await call(alice.token, 'network_message_send', { request_id: id(), client_message_id: id(), room_id: roomId, body: '来源任务消息', invoke: [] });
-  await call(alice.token, 'network_task_mark', { request_id: id(), room_id: roomId, message_id: taskSource.message.message_id });
-  const recalledMarked = await call(alice.token, 'network_message_recall', { request_id: id(), message_id: taskSource.message.message_id });
-  ok(recalledMarked.recalled, '已标记消息可以撤回');
+  const plainSource = await call(alice.token, 'network_message_send', { request_id: id(), client_message_id: id(), room_id: roomId, body: '来源任务消息', invoke: [] });
+  const recalledPlain = await call(alice.token, 'network_message_recall', { request_id: id(), message_id: plainSource.message.message_id });
+  ok(recalledPlain.recalled, '普通消息可以撤回');
   const delivered = await call(alice.token, 'network_message_send', { request_id: id(), client_message_id: id(), room_id: agentRoomId, body: '投递消息', invoke: [agentId] });
   await fails(call(alice.token, 'network_message_recall', { request_id: id(), message_id: delivered.message.message_id }), 'CONFLICT', '含 delivery 消息拒绝撤回');
   const agentMessage = await call(agentToken, 'network_message_send', { request_id: id(), client_message_id: id(), room_id: agentRoomId, body: 'Agent 普通消息', invoke: [] });
   await fails(call(agentToken, 'network_message_recall', { request_id: id(), message_id: agentMessage.message.message_id }), 'PERMISSION_DENIED', '非 human principal 不能撤回');
   await call(alice.token, 'network_room_dissolve', { request_id: id(), room_id: roomId });
-  await fails(call(alice.token, 'network_message_recall', { request_id: id(), message_id: taskSource.message.message_id }), 'CONFLICT', '解散房间不可撤回');
+  await fails(call(alice.token, 'network_message_recall', { request_id: id(), message_id: plainSource.message.message_id }), 'CONFLICT', '解散房间不可撤回');
   console.log('撤回回归通过');
 } finally { await server.stop(); }

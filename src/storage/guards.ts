@@ -276,16 +276,6 @@ export const GUARDS = {
       max: LIMITS.contactLinkPendingMax,
     },
   },
-  taskMarkUnavailable: {
-    table: 'guard_task_mark_unavailable',
-    code: 'NOT_FOUND',
-    message: '消息不存在、当前不可见或已撤回',
-  },
-  taskMarkConflict: {
-    table: 'guard_task_mark_conflict',
-    code: 'CONFLICT',
-    message: '消息已属于另一个 Task；请另选起点或先取消原标记',
-  },
   roomMessagePinLimit: {
     table: 'guard_room_message_pin_limit',
     code: 'CONFLICT',

@@ -129,7 +129,6 @@ export async function messageSend(
     bodyBytes,
     replyTo: link.replyTo,
     rootId: link.rootId,
-    taskRootId: link.taskRootId,
     rootKey: link.rootKey || messageId,
     hop: link.hop,
     invoke,
@@ -163,7 +162,6 @@ export async function messageSend(
           archiveHeadSeq: room.archive_head_seq,
         },
         deliveries,
-        taskRootId: core.taskRootId ?? null,
         now: at,
       })
     : [];
@@ -224,12 +222,6 @@ export async function messageSend(
       }
       if (existing.room_id !== room.room_id || !bodyMatches) {
         throw new BusinessError('IDEMPOTENCY_CONFLICT', 'client_message_id 已用于不同的消息内容', {
-          message_id: existing.message_id,
-        });
-      }
-      // 重放不得静默改变 Task 归属；继承结果允许与显式值相同。
-      if (input.task_root_id !== undefined && existing.task_root_id !== input.task_root_id) {
-        throw new BusinessError('IDEMPOTENCY_CONFLICT', 'client_message_id 已用于不同的 Task 归属', {
           message_id: existing.message_id,
         });
       }
@@ -378,14 +370,6 @@ export async function finalMessagePlan(
 ): Promise<MessageCore> {
   const parent = await getMessage(db, delivery.message_id);
   if (!parent) throw new BusinessError('NOT_FOUND', '任务消息不存在');
-  // 完成回执也是该线程的回复：沿用父消息归属，或在顶层起点已标记时继承。
-  let taskRootId = parent.task_root_id;
-  if (!taskRootId && parent.root_id) {
-    const root = await getMessage(db, parent.root_id);
-    if (root && root.room_id === parent.room_id && root.task_root_id === root.message_id) {
-      taskRootId = root.message_id;
-    }
-  }
   const bodyBytes = utf8Bytes(body);
   if (bodyBytes > LIMITS.messageBodyBytes) {
     throw new BusinessError('PAYLOAD_TOO_LARGE', '消息正文超过 256 KiB，请拆分为关联消息');
@@ -401,7 +385,6 @@ export async function finalMessagePlan(
     bodyBytes,
     replyTo: parent.message_id,
     rootId: parent.root_id ?? parent.message_id,
-    taskRootId,
     rootKey: parent.root_id ?? parent.message_id,
     hop: parent.hop + 1,
     invoke: [],

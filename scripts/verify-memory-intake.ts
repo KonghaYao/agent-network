@@ -2,7 +2,7 @@
  * MF05 验收：业务写入同批登记 Memory 来源、撤回屏障与预热资格。
  *
  * 覆盖：
- * - 消息/任务 offer/文件来源与业务写入同批提交，字段（digest、作者、origin
+ * - 消息/文件来源与业务写入同批提交，字段（digest、作者、origin
  *   scope、成员代次、策略版本、历史边界、来源序号）正确；
  * - Memory SQL 失败时消息事务整体回滚；
  * - 同一业务请求重放不重复写来源或预热；
@@ -20,7 +20,6 @@ import { migrate } from '../src/bun/migrate';
 import type { MessageSendInput } from '../src/contracts/schemas';
 import { messageRecall } from '../src/domain/message-recall';
 import { messageSend } from '../src/domain/messages';
-import { messageTaskMark, messageTaskUnmark } from '../src/domain/message-tasks';
 import type { Principal } from '../src/domain/principal';
 import {
   roomFileBind,
@@ -253,7 +252,6 @@ async function messageCases(): Promise<void> {
       delivery_id: string;
       recipient_id: string;
     };
-    task_root_id: string | null;
   };
   checkEqual('[MF05-02] 预热 dispatch=auto', messageWarmup.dispatch, 'auto');
   checkEqual('[MF05-02] 预热仅准备不注入', messageWarmup.warmup_only, 1);
@@ -507,116 +505,6 @@ async function recallCases(): Promise<void> {
   env.db.close();
 }
 
-async function taskCases(): Promise<void> {
-  const env = await openWorld();
-  const sent = await messageSend(
-    env.d1,
-    env.human,
-    {
-      request_id: 'req_intake_task_send',
-      client_message_id: 'cmid_intake_task_send',
-      room_id: ROOM,
-      body: 'task root body',
-      invoke: [AGENT],
-    },
-    env.memory,
-  );
-  const messageId = sent.message.message_id;
-  const taskKey = `task_offer:${messageId}`;
-  await messageTaskMark(
-    env.d1,
-    env.human,
-    { request_id: 'req_intake_mark', room_id: ROOM, message_id: messageId },
-    env.memory,
-  );
-  const taskSource = first(sources(env, taskKey), '[MF05-07] task_offer 来源');
-  check('[MF05-07] 任务标记写 task_offer 来源', taskSource !== undefined);
-  checkEqual('[MF05-07] task_offer source_kind', taskSource.source_kind, 'task_offer');
-  checkEqual('[MF05-07] task_offer 作者', taskSource.author_actor_id, HUMAN);
-  checkEqual(
-    '[MF05-07] task_offer 序号等于消息 created_seq',
-    taskSource.origin_seq,
-    getMessageRow(env, messageId).created_seq,
-  );
-  checkEqual(
-    '[MF05-07] task_offer digest 等于正文',
-    taskSource.content_sha256,
-    await sha256Hex('task root body'),
-  );
-  checkEqual('[MF05-07] task_offer 不复制正文', taskSource.content_text, null);
-  const taskRef = JSON.parse(taskSource.business_ref_json) as {
-    task_id: string;
-    revision: number;
-    created_seq: number;
-  };
-  checkEqual('[MF05-07] task business_ref task_id', taskRef.task_id, messageId);
-  checkEqual(
-    '[MF05-07] task business_ref created_seq',
-    taskRef.created_seq,
-    getMessageRow(env, messageId).created_seq,
-  );
-  checkEqual(
-    '[MF05-07] 正文由 message 来源持有',
-    first(sources(env, `message:${messageId}`), '[MF05-07] 任务消息来源').content_text,
-    'task root body',
-  );
-  const taskWarmups = warmups(env, `auto:task_offer:${messageId}`);
-  checkEqual('[MF05-07] task_offer 预热覆盖真实 delivery', taskWarmups.length, 1);
-  const taskWarmup = first(taskWarmups, '[MF05-07] 任务预热');
-  checkEqual('[MF05-07] task_offer 预热 mode=task', taskWarmup.mode, 'task');
-  const taskTarget = JSON.parse(taskWarmup.target_json) as {
-    task_root_id: string;
-    message: { message_id: string };
-  };
-  checkEqual('[MF05-07] 任务预热 target task_root_id', taskTarget.task_root_id, messageId);
-
-  // 已是起点时重复标记：不制造新 revision 或新预热。
-  await messageTaskMark(
-    env.d1,
-    env.human,
-    { request_id: 'req_intake_mark_replay', room_id: ROOM, message_id: messageId },
-    env.memory,
-  );
-  checkEqual('[MF05-07] 重复标记不新增 revision', sources(env, taskKey).length, 1);
-  checkEqual(
-    '[MF05-07] 重复标记不新增任务预热',
-    warmups(env, `auto:task_offer:${messageId}`).length,
-    1,
-  );
-
-  await messageTaskUnmark(
-    env.d1,
-    env.human,
-    { request_id: 'req_intake_unmark', room_id: ROOM, message_id: messageId },
-    env.memory,
-  );
-  checkEqual(
-    '[MF05-08] 取消标记使 task_offer 不可读',
-    first(sources(env, taskKey), '[MF05-08] 取消后的 task_offer').state,
-    'retracted',
-  );
-  checkEqual(
-    '[MF05-08] 取消标记不写永久 tombstone',
-    count(env, "SELECT COUNT(*) AS n FROM memory_tombstones WHERE source_key = ?", taskKey),
-    0,
-  );
-  await messageTaskMark(
-    env.d1,
-    env.human,
-    { request_id: 'req_intake_remark', room_id: ROOM, message_id: messageId },
-    env.memory,
-  );
-  const taskVersions = sources(env, taskKey);
-  checkEqual('[MF05-08] 重新标记生成新 revision', taskVersions.length, 2);
-  const remark = first(
-    taskVersions.filter((row) => row.state === 'active'),
-    '[MF05-08] 重新标记后的 active task_offer',
-  );
-  checkEqual('[MF05-08] 新 revision active', remark.state, 'active');
-  checkEqual('[MF05-08] 新 revision 编号为 2', remark.revision, 2);
-  env.db.close();
-}
-
 async function fileCases(): Promise<void> {
   const env = await openWorld();
   const fileId = 'f_intake_bind';
@@ -721,7 +609,6 @@ async function main(): Promise<void> {
   await rollbackCases();
   await disabledCases();
   await recallCases();
-  await taskCases();
   await fileCases();
 }
 

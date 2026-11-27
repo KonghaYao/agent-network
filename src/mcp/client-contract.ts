@@ -6,7 +6,7 @@ import { stableStringify } from '../storage/db';
 import { memoryCatalogSchema } from '../memory/tool-schemas';
 import type { MemoryCapabilityCatalog } from '../memory/capability-catalog';
 
-export const CLIENT_CONTRACT_VERSION = '2026-11-27.2';
+export const CLIENT_CONTRACT_VERSION = '2026-11-27.3';
 export const MCP_PROTOCOL_VERSION = '2026-07-28';
 
 /** Keep the complete bootstrap below connector instruction truncation limits. */
@@ -155,7 +155,6 @@ export function clientGuide(
     );
   }
   steps.push(
-    '任务以消息起点标记：network_task_mark/unmark 管理标记，network_task_list 读房间常驻列表，network_task_summaries/trace/search 读摘要、处理链与聚合搜索，network_task_complete 标记完成。Task 只有 open/completed 完成标记；完成或取消标记不结束 delivery，也不增加 pending_count。',
     toolNames.includes('network_file_upload_prepare')
       ? '先计算本地文件的原始字节数与 SHA-256，network_file_upload_prepare {name, mime_type, size, sha256} 返回 upload_url、method、headers、expires_at。仅向返回的同源地址发送原始字节（不是 multipart/JSON/base64），原样使用 headers，无需长期 Bearer。校验响应 size/sha256 后以同一身份 network_room_file_bind，再在消息里直接发 public_url；新上传默认公开，拿到链接即可读取。需要限制时用 network_file_publish {file_id, public: false} 撤销，再按需用 network_room_file_get {room_id, file_id} 换取带票据地址。上传凭证仅限该内容，5 分钟过期，上传时复核原凭据未撤销；重放可能生成相同内容的新文件，不保证上传幂等，结果不明不要盲目重传。'
       : '本服务未启用文件存储，不能上传或绑定文件。',

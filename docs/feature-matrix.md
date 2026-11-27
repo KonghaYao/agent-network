@@ -1,6 +1,6 @@
 # WeBots 功能矩阵（P0）
 
-状态基线：`89572d4`（Q02/G06/A06 已 `VERIFIED`；消息式 Task 阶段 1–3 已实现，阶段 4b-1 清理 Web/文档）。本表只描述**当前仓库已实现且有测试证据**的 P0 范围；P1 项目在文末单列，不能按本表宣传为完成。
+状态基线：`8859677`（Q02/G06/A06 已 `VERIFIED`；消息式 Task 已退役，迁移 `0053_drop_message_tasks.sql` 清库，Task Focus 是下一里程碑）。本表只描述**当前仓库已实现且有测试证据**的 P0 范围；P1 项目在文末单列，不能按本表宣传为完成。
 
 图例：
 
@@ -53,25 +53,16 @@
 | `src/web/features/chat/Composer.tsx`、`src/web/features/panels/FilesPane.tsx`、`src/web/features/chat/ChatMessage.tsx` | `network_room_file_bind/list/get/delete`、`network_file_publish`、`drive_file_info` | `src/domain/room-files.ts`、`file-access.ts`、`file-ticket.ts`；默认公开，草稿 24h、附件 30 天、配额 200 个/1 GiB；显式 `public: false` 后票据绑定房间成员代次与 `policy_revision` | `room_file_added/deleted/published/unpublished`；informational，不增加 `pending_count` | `agentnet upload/send-file/file-bind/files/file/file-delete/download/file-info`；技能“文件协作” | M07-T01..T04、`verify-room-files.ts` 193、`test:drive` 55 |
 | `src/web/features/panels/FilesPane.tsx`、`src/web/features/chat/ChatMessage.tsx` 消息文件入口 | `network_artifact_submit/list/release` | `src/domain/artifacts.ts`；成果绑定房间并 `retained`；`file_references` 统计 artifact/forward/favorite；显式释放且无活跃引用恢复 30 天 TTL | `artifact_submitted/released`；informational | 技能“成果与保留” | M07-T01..T04、`scripts/lib/m07-acceptance.ts` |
 
-## 6. 消息式 Task / Trace
-
-| Web | MCP | domain/权限 | 事件/outbox | CLI/技能 | 验收 |
-|---|---|---|---|---|---|
-| 消息菜单“标记为 Task / 取消 Task” | `network_task_mark`、`network_task_unmark` | `src/domain/message-tasks.ts`；任意可见、未撤回消息可作起点，可标记他人消息；标记需 `send_message`，任何可发言成员可取消；重复标记幂等，已属于另一个仍标记中的 Task 返回 `CONFLICT`；取消保留完成元数据 | `message_task_marked` / `message_task_unmarked` / `message_task_completed`；room scope + `room:<id>` outbox → `task.updated` informational，只通知 active human；不写 inbox、不增加 `pending_count`、不推进 `head_seq` | `agentnet task mark/unmark`；技能“消息式 Task 与 Trace” | 阶段 1–3 协议/验收、`scripts/lib/message-task-acceptance.ts` |
-| 起点摘要行、参与者头像组、Trace 抽屉、Task 搜索 | `network_task_summaries`、`network_task_trace`、`network_task_search` | `src/domain/message-tasks.ts`、`src/domain/message-task-read.ts`、`src/domain/message-task-search.ts`；按当前成员代次与 `historyBoundary` 重新过滤；非成员 `NOT_MEMBER`，边界外/不存在 `NOT_FOUND`；摘要一次最多 20 个根，Trace 双向 cursor，搜索默认包含已完成且 `truncated` 表示扫描上限；三个工具都返回完成态 | 三个读工具不写 events/outbox/operations，不推进已读、`pending_count` 或 `head_seq` | `agentnet task summaries/trace/search` | `tests/e2e/entries.spec.ts`、`scripts/verify-message-tasks.ts`、`test:web` |
-| 房间 Task 浮动列表与完成 | `network_task_list`、`network_task_complete` | `src/domain/message-task-list.ts`、`src/domain/message-task-completion.ts`；`status=open|completed|all`，默认 open；keyset 分页绑定成员代次/历史策略/Task revision；任何 `send_message` 成员可完成，只读/禁言/归档不可完成；完成不清标记、不改 delivery/未读/head。Web 在 `src/web/features/tasks/RoomTaskDock.tsx`、`TaskListItem.tsx`、`TaskPreviewPopover.tsx`、`TaskCompleteDialog.tsx` 与 `src/web/hooks/useRoomTasks.ts`：输入框上方浮动 dock，默认收起为 `Task N` 入口，点击展开/收起；绝对定位不占文档流、不推移消息或输入框；未完成数为 0 且收起时入口不渲染，展开时完成最后一条保留空态直到用户收起；桌面悬浮预览、点按/Enter 固定，移动端点按；完成经确认后从本地列表移除并重建首页；翻页 `CURSOR_EXPIRED` 自动回首页一次并提示，其他失败保留列表并提供重试 | `message_task_completed`（room scope + outbox，`change=completed`）；不写 inbox、不改 `pending_count` | 暂未封装 CLI；技能“消息式 Task 与 Trace” | `scripts/verify-message-task-dock.ts`、`scripts/verify-message-tasks.ts`、`tests/e2e/task-dock.spec.ts` |
-| `src/web/features/tasks/TaskSummaryBar.tsx`、`TaskTraceDialog.tsx`、`src/web/hooks/useTaskTrace.ts`、`src/web/lib/task-cache.ts`、`src/web/chat-task-trace-styles.ts` | 同上 | 客户端只按 `task_root_id === message_id` 识别起点；摘要只在当前消息页按根请求，并随 head 失效；Trace 查询键绑定 room/root/focus，切房/关闭取消在途请求，事件失效后原位重读；浮动 dock 的缓存键带 actor、授权快照（成员代次/历史策略/只读）与筛选，切房、切身份或权限收紧即换键并丢弃旧私有预览；重连 ack 与 live membership 一样清空列表/Trace 后重新鉴权补拉 | 不新增事件；旧任务面板、旧 32 个任务工具与旧 domain 已删除 | 技能“消息式 Task 与 Trace” | `tests/e2e/task-dock.spec.ts`；阶段 3 浏览器场景 1/2/10–14；`test:ux` |
-
-## 7. Agent 认领、管理与交接
+## 6. Agent 认领、管理与交接
 
 | Web | MCP | domain/权限 | 事件/outbox | CLI/技能 | 验收 |
 |---|---|---|---|---|---|
 | `src/web/features/overlays/NewAgentDialog.tsx` | `network_agent_create`、`network_agent_management_get`、`network_agents_managed_list` | `src/domain/agents.ts`、`agent-management.ts`；当前 human 原子创建 Agent、`agent_managements` 与凭据；raw token 只返回一次 | `agent_management_bound`、`credential_reissued`；只通知管理者 | 技能“身份与权限管理” | A01-T01..T04、`agent-identity-acceptance.ts` |
 | 无独立 Web 入口（Agent 侧发起，human 侧确认） | `network_agent_claim_start/confirm/cancel`、`network_agent_delegate_grant/revoke` | `src/domain/agent-access.ts`、`agent-management.ts`；旧 Agent 保持未认领，错误 code 限次；委托只授予 human 且默认 `manage_agent` | `agent_claim_requested/confirmed/rejected`、`agent_delegation_granted/revoked` | 技能“身份与权限管理” | A01、`agent-identity-acceptance.ts` |
-| direct Agent 右键停用/归档、已归档浮层 | `network_agent_disable/enable`、`network_agent_archive/unarchive`、`network_agents_get`、`network_agent_rename`、`network_agent_reissue_token` | `src/domain/agent-lifecycle.ts`、`agents.ts`、`identity.ts`；全部要求 active manager 或 `manage_agent` 委托；停用会取消 pending/claimed 投递，消息与 Task 标记不变 | `agent_disabled/enabled`、`credential_reissued`、归档从默认列举隐藏但保留详情 | 技能“身份与权限管理” | A01、`agent-archive-acceptance.ts` |
-| `src/web/features/overlays/TransferDialog.tsx` | `network_agent_transfer_propose/respond/cancel/get/list` | `src/domain/agent-transfers.ts`；接受事务切换管理者、`permission_version + 1`、撤销旧委托/凭据与 pending/claimed 投递；消息与 Task 标记不变 | `management_transfer_proposed/accepted/rejected/cancelled/expired`、`agent_transfer_*`；双方 human inbox，不创建 delivery | 技能“身份与权限管理” | A06-T01..T04（139）、`agent-transfer-acceptance.ts` |
+| direct Agent 右键停用/归档、已归档浮层 | `network_agent_disable/enable`、`network_agent_archive/unarchive`、`network_agents_get`、`network_agent_rename`、`network_agent_reissue_token` | `src/domain/agent-lifecycle.ts`、`agents.ts`、`identity.ts`；全部要求 active manager 或 `manage_agent` 委托；停用会取消 pending/claimed 投递，消息与引用关系不变 | `agent_disabled/enabled`、`credential_reissued`、归档从默认列举隐藏但保留详情 | 技能“身份与权限管理” | A01、`agent-archive-acceptance.ts` |
+| `src/web/features/overlays/TransferDialog.tsx` | `network_agent_transfer_propose/respond/cancel/get/list` | `src/domain/agent-transfers.ts`；接受事务切换管理者、`permission_version + 1`、撤销旧委托/凭据与 pending/claimed 投递；消息与引用关系不变 | `management_transfer_proposed/accepted/rejected/cancelled/expired`、`agent_transfer_*`；双方 human inbox，不创建 delivery | 技能“身份与权限管理” | A06-T01..T04（139）、`agent-transfer-acceptance.ts` |
 
-## 8. P1 未实现（不得按 P0 验收）
+## 7. P1 未实现（不得按 P0 验收）
 
 | 项目 | 未实现范围 |
 |---|---|
@@ -89,7 +80,7 @@
 
 本表不声称 A02/A04/G04/M01/M04/M05/M06/M08/M09/Q03/Q06 已完成。Q01（本表与文档一致性）、Q04（发布/运维检查）、Q05（最终交付）只能按 P0 范围验收。跨设备消息原文交接、搜索、收藏、通话与外部业务回写不在本波次；群主软撤回、消息置顶与撤回后本地重新编辑已按 v1 实现（重新编辑仅网页端、仅本机 sessionStorage，不新增服务端字段/工具/迁移）。
 
-## 9. Q01-T01 敏感操作一致性抽查
+## 8. Q01-T01 敏感操作一致性抽查
 
 以下抽查基于现有 `scripts/acceptance.ts` / `scripts/verify-web.ts` 与专项脚本，不新增 143 个工具的逐项测试。结论为“Web 入口与 MCP 工具调用同一 domain 与同一事务”，具体断言详见对应文件；未覆盖的组合列在“缺口”。
 
@@ -102,14 +93,11 @@
 | 拉黑/解除 | 联系人/安全面板 | `network_contact_block/unblock` | 双向关系终止、邀请被 `BLOCKED`；不自动移群 | `contact_blocked/unblocked` | A05-T01..T04 |
 | 群邀请/角色/退群/解散 | 群成员与群菜单 | `network_room_invite_*`、`network_room_role_set`、`network_room_leave*`、`network_room_dissolve` | owner 不能无主退群；非 owner 解散 `PERMISSION_DENIED`；在途工作需确认 | `room_invited`、`room_role_changed`、`room_left`、`room_dissolved` | G01/G03/G06-T01..T05 |
 | 文件绑定/下载 | 文件栏、消息文件卡片 | `network_room_file_bind/get`、`drive_file_info` | 成员/上传者/群 owner；默认公开；显式 `public: false` 后票据绑定成员代次与 `policy_revision`，撤权后私有读取失败 | `room_file_added/deleted` | M07、`verify-room-files` |
-| 标记/取消 Task | 消息菜单 | `network_task_mark/unmark` | 可标记任意可见消息；重复标记幂等；已属于另一个仍标记中的 Task `CONFLICT`；任何可发言成员可取消；取消保留完成元数据 | `message_task_marked/unmarked` → `task.updated` informational | 阶段 1–2 专项、`test:web` |
-| Task 摘要/Trace/搜索 | 摘要行、Trace 抽屉、搜索“只看任务” | `network_task_summaries`、`network_task_trace`、`network_task_search` | 当前成员代次与历史边界；非成员 `NOT_MEMBER`，边界外 `NOT_FOUND`；只读，不写 events/outbox/operations；摘要/Trace/搜索均返回完成态，搜索默认包含已完成 | 无 | 阶段 3 浏览器场景、`test:web` |
-| Task 列表/完成 | 聊天区浮动 dock（输入框上方，默认收起）；行内与预览浮层可「询问进度」 | `network_task_list`、`network_task_complete` | keyset 分页；任何 `send_message` 成员可完成；并发完成只保留首次事实；只读/禁言/归档不可完成；完成不清标记、不改 delivery/未读/head；询问进度只引用根消息并预填草稿，不自动发送、不改 Task 状态；根消息按正文中 `@` 出现的顺序复原（预览截断时读取一次根正文；正文不可用则按服务端顺序兜底），否则回退最近参与 Agent，无 Agent 或只读时隐藏 | `message_task_completed` → `task.updated` informational，只通知 active human | `scripts/verify-message-task-dock.ts`、`tests/e2e/task-dock.spec.ts` |
 | Agent 交接/停用 | direct Agent 菜单 | `network_agent_transfer_*`、`network_agent_disable` | 仅 active manager/委托；旧管理者 `PERMISSION_DENIED`，旧 token `CREDENTIAL_INVALID` | `management_transfer_*`、`agent_disabled` | A06、A01 |
 
-**缺口（如实列出）**：网页没有独立的“设备列表/撤销”管理页，只在配对流内展示；`agentnet` 未封装设备配对、联系人拉黑与群邀请审批，这些工具需用 `agentnet call` 调用；消息式 Task 已由 `agentnet task` 封装 5 个工具，`network_task_list` / `network_task_complete` 暂未封装 CLI。消息式 Task 的摘要行、Trace 与浮动 dock 已有浏览器验收（`tests/e2e/task-dock.spec.ts` 覆盖默认收起/展开、展开前后布局不位移、N=0 入口隐藏与完成最后一条后的空态、悬浮与点按预览、完成、分页、游标过期重建、切房迟到响应与重连清缓存）。旧任务入口已删除，不应再作为验收对象。以上均为入口/浏览器覆盖缺口，不是服务端权限或状态语义缺口。
+**缺口（如实列出）**：网页没有独立的“设备列表/撤销”管理页，只在配对流内展示；`agentnet` 未封装设备配对、联系人拉黑与群邀请审批，这些工具需用 `agentnet call` 调用；消息式 Task 入口与工具已退役，不应再作为验收对象；其数据面由迁移 `0053_drop_message_tasks.sql` 清空。以上均为入口/浏览器覆盖缺口，不是服务端权限或状态语义缺口。
 
-## 10. 全量门禁（Q01-T04）
+## 9. 全量门禁（Q01-T04）
 
 | 命令 | 当前计数 |
 |---|---|
@@ -127,6 +115,6 @@
 | G06 / A06 专项 | 119 / 139 |
 | A07 好友邀请链接专项 | 54 |
 | Q04 浏览器验收 | 176 |
-| 迁移 | 43 个（0001–0012、0017–0047） |
+| 迁移 | 49 个（0001–0012、0017–0053） |
 
 聊天/群组热点专项：26 组真实服务浏览器回归覆盖稳定消息节点、切换隔离、公告冲突、群名 CAS、成员候选、创建重试、迟到列表、跨设备退群/移除、归档切换与移动端按钮可达性。详见 [重构报告](../reports/2026-11-09-web-hotpaths.md)。

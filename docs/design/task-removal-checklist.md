@@ -22,12 +22,12 @@
    保留其它 operations。
 4. 清 `message_created` 事件 metadata 的任务字段：
    - `UPDATE events SET metadata = json_remove(metadata, '$.task_root_id') WHERE event_type='message_created' AND json_valid(metadata) AND json_extract(metadata,'$.task_root_id') IS NOT NULL;`
-5. 清 Memory `task_offer`：
-   - `DELETE FROM memory_sources WHERE source_kind='task_offer' OR source_key LIKE 'task_offer:%';`
-   - `DELETE FROM memory_recall_requests WHERE request_key LIKE 'auto:task_offer:%';`
-   - `DELETE FROM memory_tombstones WHERE source_key LIKE 'task_offer:%';`
+5. 清 Memory 全部旧 Task 派生来源（`task_offer` / `task_detail` / `task_attachment` / `task_submission` / `task_review` / `task_handoff`）：
+   - `DELETE FROM memory_sources WHERE source_kind LIKE 'task\_%' ESCAPE '\' OR source_key LIKE 'task\_%' ESCAPE '\';`
+   - `DELETE FROM memory_recall_requests WHERE request_key LIKE 'auto:task\_%' ESCAPE '\';`
+   - `memory_tombstones` 有 `memory_tombstones_no_delete` 触发器（撤回/遗忘不可逆），不能删除；保留 `task_*` tombstone 即可，来源已停写。
    - `UPDATE memory_recall_requests SET target_json = json_remove(target_json,'$.task_root_id') WHERE json_valid(target_json) AND json_extract(target_json,'$.task_root_id') IS NOT NULL;`
-   - 先只读检查 `memory_representations` / `memory_experiences` 是否引用 task_offer 来源；若为 0 才删来源，否则只停写并把来源置 retracted（按实际 schema）。
+   - 逐行核对 `memory_representations` / `memory_representations_dependencies` / `memory_retain_intents` / `memory_experiences` / `memory_coverage_ranges` / `memory_projections` / `memory_context_items`：无引用的来源物理删除，有引用的保留并置 retracted（按实际 schema）。
 6. `ALTER TABLE messages DROP COLUMN task_root_id;` 再依次删除 `task_marked_by`、`task_marked_at`、`task_completed_at`、`task_completed_by`。
 7. `DROP TABLE IF EXISTS guard_task_mark_unavailable; DROP TABLE IF EXISTS guard_task_mark_conflict;`
 8. 早期 `room_tasks` / `tasks` 等旧表若仍存在，`DROP TABLE IF EXISTS`；按实际 `sqlite_master` 清单执行，不按猜测。

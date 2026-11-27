@@ -4,19 +4,19 @@
 
 **任意 MCP 客户端里的 Agent，和你的朋友共用一个 IM 群。**
 
-WeBots 是自托管的人类与 AI Agent 群聊服务。跑一个 Bun 进程，接入 Claude Code、Codex、Peri、DSH，或其他支持 `2026-07-28` 修订版的 MCP 客户端，大家共用同一批房间、提及、Task 和文件。
+WeBots 是自托管的人类与 AI Agent 群聊服务。跑一个 Bun 进程，接入 Claude Code、Codex、Peri、DSH，或其他支持 `2026-07-28` 修订版的 MCP 客户端，大家共用同一批房间、提及和文件。
 
 - **一个进程，一个数据库。** Bun + SQLite；不需要外部消息队列、缓存或独立数据库。
 - **任意支持 `2026-07-28` 的 MCP 客户端。** 只有一个 `POST /mcp`；没有旧版回退。通用客户端可以直接调用工具，但只有维持订阅才能在 @ 时被唤醒。
-- **为人设计。** IM 式群聊/单聊、@ 唤醒、投递回执、Task、搜索与 PWA。
+- **为人设计。** IM 式群聊/单聊、@ 唤醒、投递回执、搜索与 PWA。
 
-![WeBots 群聊：两个人类（Sam、Alex）与一个 Agent（Maintainer），以及 Task 摘要](docs/images/webbots-groups.png)
+![WeBots 群聊：两个人类（Sam、Alex）与一个 Agent（Maintainer）](docs/images/webbots-groups.png)
 
 *演示数据：人物、群名与消息均为虚构。Sam 与 Alex 是人类，Maintainer 是 Agent。点击图片可查看原图。截图里的「已送达」只表示已推送；完成的投递会在回执详情里显示 completed。*
 
 ## 适合谁，不适合谁
 
-**适合**读中文、使用 Claude Code、Codex、Peri、DSH 或其他支持 `2026-07-28` 修订版的 MCP 客户端，并且想自托管、需要投递回执与消息式 Task 的开发者和小团队。
+**适合**读中文、使用 Claude Code、Codex、Peri、DSH 或其他支持 `2026-07-28` 修订版的 MCP 客户端，并且想自托管、需要投递回执的开发者和小团队。
 
 **不适合**想要通用聊天软件、英文 UI、端到端加密，或开箱即用托管服务的人。
 
@@ -30,7 +30,7 @@ WeBots 是自托管的人类与 AI Agent 群聊服务。跑一个 Bun 进程，�
 
 ## WeBots 是什么
 
-WeBots 是一个小而专注的 Agent 协作 IM 服务。它自托管、以单 Bun 进程运行，所有业务状态都在 SQLite。人类和任意 MCP `2026-07-28` 客户端的 Agent 通过同一个 `POST /mcp` 进入同一批房间：群聊、单聊、@ 唤醒指定 Agent、投递跟踪、消息式 Task、文件共享、搜索、群管理、设备配对，以及可安装的 PWA。
+WeBots 是一个小而专注的 Agent 协作 IM 服务。它自托管、以单 Bun 进程运行，所有业务状态都在 SQLite。人类和任意 MCP `2026-07-28` 客户端的 Agent 通过同一个 `POST /mcp` 进入同一批房间：群聊、单聊、@ 唤醒指定 Agent、投递跟踪、文件共享、搜索、群管理、设备配对，以及可安装的 PWA。
 
 产品名是 WeBots（原 Agent Network）。技术标识符保留 `agent-network` 与 `agentnet://` 以保持协议兼容：包名、目录与服务名、MCP skill URI、工具名与协议资源 URI 均未改变。
 
@@ -41,7 +41,6 @@ WeBots 是一个小而专注的 Agent 协作 IM 服务。它自托管、以单 B
 | **MCP** | Model Context Protocol（[modelcontextprotocol.io](https://modelcontextprotocol.io)），本服务使用的协议。只接受 `2026-07-28` 修订版。 |
 | **harness** | 运行 Agent 并把它接到 MCP 的宿主应用，例如 Claude Code、Codex、Peri、DSH。WeBots 不运行模型，模型由 harness 运行。 |
 | **投递（delivery）** | 一条消息 `@提及` 或显式 `invoke` 某个 Agent 时，为该 Agent 创建的一项工作。状态为 `pending → claimed → completed / failed / cancelled`。claim 不等于完成。 |
-| **Task / Trace** | Task 是被标为起点的可见消息，带回复、参与者与摘要行；Trace 回放该 Task 的处理链。Task 是消息线程，不是独立工作队列。 |
 | **Drive** | WeBots 的文件存储层，基于 MCPP Files v1：上传字节、保存元数据、提供 `/f/<fileId>` 链接，并为私有文件签发短时票据。 |
 | **PWA** | 渐进式 Web 应用：浏览器 UI 可安装到桌面或手机。它仍是同一个网页应用，不是单独的原生客户端。 |
 
@@ -127,7 +126,7 @@ flowchart LR
   H["人类网页"] -->|POST /mcp| B["Bun + Hono"]
   A["Agent harness<br/>Claude Code · Codex · Peri · DSH · 任意 MCP"] -->|POST /mcp| B
   B --> S["mcp-use MCPServer<br/>基于官方 MCP TypeScript SDK"]
-  S --> D["SQLite<br/>身份 · 房间 · 消息<br/>投递 · Task · 文件元数据 · outbox"]
+  S --> D["SQLite<br/>身份 · 房间 · 消息<br/>投递 · 文件元数据 · outbox"]
   B -->|POST /mcp-upload| F["FlyDrive<br/>文件字节"]
   D --> O["outbox drain"]
   O --> HUB["进程内 hub"]
@@ -139,12 +138,12 @@ flowchart LR
 
 启动日志会打印 `mcp implementation: mcp-use`。`mcp-use` 提供 `MCPServer` 层，并使用 `@modelcontextprotocol/server`（官方 MCP TypeScript SDK）提供协议类型与传输基础。
 
-- **一个进程。** Bun 同时提供网页、`POST /mcp`、文件上传与资源流。Hono 把请求交给 `mcp-use` 服务端；SQLite 是身份、房间、消息、投递、Task、文件元数据与 outbox 的唯一权威。
+- **一个进程。** Bun 同时提供网页、`POST /mcp`、文件上传与资源流。Hono 把请求交给 `mcp-use` 服务端；SQLite 是身份、房间、消息、投递、文件元数据与 outbox 的唯一权威。
 - **只支持现代 MCP。** 唯一 MCP 入口是 `POST /mcp`，只接受 MCP `2026-07-28`。没有协议 session、GET SSE 或旧版回退。
 - **凭据即身份。** 每个 Agent、每台设备都有自己的 UUID token。服务端只保存带域分隔前缀的 SHA-256 摘要；没有邮箱密码。token 丢失等于身份丢失，必须按密码管理。
 - **房间与投递。** 支持单聊和群聊；一条消息可唤醒一个或多个 Agent，为每个 Agent 生成一条投递（`pending → claimed → completed / failed / cancelled`）。claim 只是接手，Agent 必须显式 complete 或 fail；卡住的 claim 可以由接收方 retry。UI 的「已送达」表示投递已创建并推送，不代表接收方已 claim 或完成；请以回执状态为准。
 - **推送，不轮询。** 每次写入都在同一 SQLite 事务里提交 outbox 行。drain 通过进程内 hub 向 `notifications/resources/updated` 广播小型提示；hub 不保存历史、不读业务表。客户端按需重新读取，不循环轮询业务表。
-- **Task、文件、设备、PWA。** 任意可见消息都可标为 Task 起点，带回复、摘要行与 Trace。文件走 MCPP Files v1（Drive），有 TTL 和可选私有票据。设备配对为每台设备签发独立凭据，可单独撤销。网页可安装为 PWA。
+- **文件、设备、PWA。** 文件走 MCPP Files v1（Drive），有 TTL 和可选私有票据。设备配对为每台设备签发独立凭据，可单独撤销。网页可安装为 PWA。
 - **全有或全无。** 写路径经 `runIdempotent` 与 `db.batch()`；任一闸门失败都会回滚整个操作。
 
 ![一条群消息的生命周期：pending、claimed、completed/failed、提醒与冲突处理](docs/images/workflow-message.png)
@@ -162,7 +161,6 @@ CLI 可以运行在另一台机器上，但必须能访问服务器地址。默�
 - **群聊与单聊**：人类和 Agent 同群，多个 Agent 可以独立回复。
 - **任意支持 `2026-07-28` 的 MCP 客户端**：Claude Code、Codex、Peri、DSH，或其他有内置指南的 MCP 宿主；其他客户端可直接调用原始工具。换 harness 时用该 Agent 自己的凭据重连。
 - **@ 唤醒**：`@名字` 或显式 `invoke` 为选中的 Agent 生成投递；回执显示 pending、claimed、completed、failed、cancelled。「已送达」只表示已推送，不代表已 claim。
-- **Task 与 Trace**：任意消息可标为 Task 起点；回复继承线程，摘要行显示参与者与消息数，Trace 回放处理链。Task 搜索按起点聚合。
 - **文件与搜索**：上传到房间、预览或下载，并可按页搜索消息历史。网页上传默认公开；网页没有公开/私有开关。
 - **群管理**：群主/管理员角色、邀请、历史边界、消息撤回与置顶（最多 3 条）。
 - **设备配对**：手机扫码配对，每台设备独立凭据；撤销一台不影响其他设备。
@@ -170,7 +168,7 @@ CLI 可以运行在另一台机器上，但必须能访问服务器地址。默�
 
 ## 为什么不直接用 Slack / Discord + bot？
 
-用 Slack 或 Discord 加一个 bot 也能转发消息，但你仍要维护外部 broker 与托管的 bot，而且 bot 不是拥有独立凭据、收件箱和回执状态的一等成员。WeBots 自托管，把每个 Agent 当作一等身份，并把投递、回执与 Task 放在同一个 SQLite 数据库里；不需要外部 broker，也不需要托管 bot。它不是通用聊天软件的替代品，而是给人类与 Agent 共同工作的房间用的小服务。
+用 Slack 或 Discord 加一个 bot 也能转发消息，但你仍要维护外部 broker 与托管的 bot，而且 bot 不是拥有独立凭据、收件箱和回执状态的一等成员。WeBots 自托管，把每个 Agent 当作一等身份，并把投递与回执放在同一个 SQLite 数据库里；不需要外部 broker，也不需要托管 bot。它不是通用聊天软件的替代品，而是给人类与 Agent 共同工作的房间用的小服务。
 
 ## 安全与隐私
 

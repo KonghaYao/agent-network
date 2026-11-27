@@ -417,7 +417,6 @@ function startMock(): {
                   room_id: 'rm_mock',
                   reply_to: null,
                   root_id: null,
-                  task_root_id: null,
                   hop: 0,
                   delivery_states: {},
                   mentions: [],
@@ -451,7 +450,6 @@ function startMock(): {
                   room_id: 'rm_mock',
                   reply_to: null,
                   root_id: null,
-                  task_root_id: null,
                   hop: 0,
                   delivery_states: {},
                   mentions: [],
@@ -465,64 +463,6 @@ function startMock(): {
               head_seq: '9',
             };
           }
-        } else if (params.name === 'network_task_trace') {
-          result = {
-            root_message_id: 'msg_root',
-            items: [
-              {
-                message_id: 'msg_root',
-                sender_id: 'actor_mock',
-                sender_name: 'Mock Sender',
-                sender_kind: 'agent',
-                created_seq: '7',
-                created_at: '2026-11-04T00:00:00.000Z',
-                preview: 'root task',
-                body_bytes: 9,
-                recalled: false,
-                role: 'root',
-                reply_to: null,
-                referenced_by: null,
-                has_unavailable_reference: false,
-              },
-            ],
-            next_cursor: 'trace_next',
-            prev_cursor: 'trace_prev',
-            has_more_before: true,
-            has_more_after: false,
-            message_count: 1,
-            focus_message_id: null,
-            authorization: {},
-          };
-        } else if (params.name === 'network_task_search') {
-          result = {
-            items: [
-              {
-                task: {
-                  root_message_id: 'msg_root',
-                  room_id: 'rm_mock',
-                  preview: 'root task',
-                  root_sender_id: 'actor_mock',
-                  root_sender_name: 'Mock Sender',
-                  root_sender_kind: 'agent',
-                  root_created_at: '2026-11-04T00:00:00.000Z',
-                  root_created_seq: '7',
-                  participants: [],
-                  participant_count: 0,
-                  message_count: 1,
-                  can_unmark: true,
-                },
-                hit_count: 1,
-                matches: [
-                  { message_id: 'msg_mock', snippet: 'hello', created_seq: '42' },
-                ],
-              },
-            ],
-            next_cursor: 'search_next',
-            has_more: true,
-            snapshot: 'snap',
-            authorization: {},
-            truncated: false,
-          };
         } else if (params.name === 'network_message_read') {
           const cursor = params.arguments?.chunk_cursor;
           const quoted =
@@ -887,7 +827,7 @@ async function main(): Promise<void> {
       help.stdout,
     );
 
-    for (const command of ['send', 'inbox', 'reply', 'task', 'monitor', 'up', 'skills']) {
+    for (const command of ['send', 'inbox', 'reply', 'monitor', 'up', 'skills']) {
       const subHelp = await runCli(mock.baseUrl, [command, '--help']);
       checkEqual(`${command} --help 退出 0`, subHelp.code, 0);
       check(`${command} --help 含示例`, subHelp.stdout.includes('示例'), subHelp.stdout);
@@ -1694,36 +1634,6 @@ async function main(): Promise<void> {
       timelineHuman.stdout.includes('next_cursor=tl_cursor') &&
         timelineHuman.stdout.includes('has_more=true'),
       timelineHuman.stdout,
-    );
-
-    const traceHuman = await runCli(mock.baseUrl, [
-      'task',
-      'trace',
-      '--room',
-      'rm_mock',
-      '--root',
-      'msg_root',
-    ]);
-    check(
-      'task trace 输出 next/prev 游标',
-      traceHuman.stdout.includes('next_cursor=trace_next') &&
-        traceHuman.stdout.includes('prev_cursor=trace_prev') &&
-        traceHuman.stdout.includes('has_more_before=true'),
-      traceHuman.stdout,
-    );
-    const searchHuman = await runCli(mock.baseUrl, [
-      'task',
-      'search',
-      '--room',
-      'rm_mock',
-      '--query',
-      'hello',
-    ]);
-    check(
-      'task search 输出分页游标',
-      searchHuman.stdout.includes('next_cursor=search_next') &&
-        searchHuman.stdout.includes('has_more=true'),
-      searchHuman.stdout,
     );
 
     // ---- 结构化错误、details 与 Drive 兜底 ----
