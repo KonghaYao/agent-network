@@ -665,9 +665,16 @@ async function main() {
     await page.keyboard.press('Escape');
     await page.locator('#focus-quick-input').waitFor({ state: 'detached' });
 
-    // 详情 → 原消息 → 返回同一条事项。
+    // 详情 → 原消息 → 返回同一条事项与列滚动位置。
     await page.locator('[data-focus-item="fit_wait"] .focus-card-body').click();
     await page.locator('.focus-detail').waitFor({ state: 'visible' });
+    await page
+      .locator('.focus-lane[data-lane="tracking"] .focus-lane-cards')
+      .evaluate((node) => {
+        node.scrollTop = 180;
+        node.dispatchEvent(new Event('scroll', { bubbles: true }));
+      });
+    await page.waitForTimeout(100);
     await page.locator('.focus-evidence-item .focus-card-action').first().click();
     await page.waitForURL(`**/c/${otherRoom}`, { timeout: 10_000 });
     await page.locator('.msg.search-active').first().waitFor({ timeout: 10_000 });
@@ -675,6 +682,20 @@ async function main() {
     await page.locator('#focus-board').waitFor({ state: 'visible' });
     await page.locator('.focus-detail-title').filter({ hasText: '等周敏交付 RC2 安装包' }).waitFor();
     check('返回看板恢复选中事项', (await page.locator('.focus-detail-title').innerText()).includes('等周敏交付 RC2 安装包'));
+    await page.waitForFunction(
+      () =>
+        (document.querySelector<HTMLElement>(
+          '.focus-lane[data-lane="tracking"] .focus-lane-cards',
+        )?.scrollTop ?? 0) >= 150,
+      undefined,
+      { timeout: 5_000 },
+    );
+    check(
+      '返回看板恢复列滚动断点',
+      (await page
+        .locator('.focus-lane[data-lane="tracking"] .focus-lane-cards')
+        .evaluate((node) => node.scrollTop)) >= 150,
+    );
     await page.keyboard.press('Escape');
     await page.locator('.focus-detail').waitFor({ state: 'detached' });
     await page.keyboard.press('Escape');

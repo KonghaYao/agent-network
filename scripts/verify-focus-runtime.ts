@@ -629,7 +629,7 @@ async function run(): Promise<void> {
         title: '跟进 RC2 交付结果',
         column_key: 'tracking',
         next_step: '等待林舟确认',
-        evidence: [{ candidate_id: h2G1Candidate.candidate_id }],
+        evidence: [{ candidate_id: h2DeliveryCandidate.candidate_id }],
       },
     ],
   });
@@ -700,9 +700,10 @@ async function run(): Promise<void> {
           evidence: [{ candidate_id: h2DMCandidate.candidate_id }],
         },
         {
-          type: 'ignore',
-          candidate_ids: [h2DeliveryCandidate.candidate_id],
-          reason: '同一批中的其它决定也不能提交',
+          type: 'update',
+          item_id: h2KeptItemId,
+          expected_version: 1,
+          changes: { next_step: '同一批中的其它决定也不能提交' },
         },
       ],
     }),
@@ -711,6 +712,10 @@ async function run(): Promise<void> {
   checkEqual('归档拒绝不写证据', count('SELECT COUNT(*) AS n FROM focus_evidence'), evidenceBefore);
   checkEqual('归档拒绝不写修订', count('SELECT COUNT(*) AS n FROM focus_revisions'), revisionsBefore);
   checkEqual('归档拒绝不改作业', jobOf(H2).status, 'running');
+  checkEqual('归档拒绝整批回滚另一张卡版本', scalar<{ version: number }>(
+    'SELECT version FROM focus_items WHERE item_id = ?',
+    h2KeptItemId,
+  ).version, 1);
 
   await expectCode(
     '版本不符拒绝',
@@ -780,18 +785,13 @@ async function run(): Promise<void> {
     complete: true,
     decisions: [
       {
-        type: 'ignore',
-        candidate_ids: [h2DeliveryCandidate.candidate_id],
-        reason: '领取状态不构成新的个人事项',
-      },
-      {
         type: 'pending',
         candidate_ids: [h2DMCandidate.candidate_id],
         reason: '来源已撤回，等待新消息澄清',
       },
     ],
   });
-  checkEqual('完成作业只要求覆盖剩余 assigned 候选', h2Finish.covered, 2);
+  checkEqual('完成作业只要求覆盖剩余 assigned 候选', h2Finish.covered, 1);
   checkEqual('complete=true 置 completed', h2Finish.job_status, 'completed');
   checkEqual('pending 候选保留为 skipped', count(
     "SELECT COUNT(*) AS n FROM focus_candidates WHERE candidate_id = ? AND state = 'skipped' AND decision = 'pending'",

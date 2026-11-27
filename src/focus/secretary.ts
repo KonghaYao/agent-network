@@ -601,14 +601,23 @@ export async function focusCommit(
   const updates: FocusUpdateDecision[] = [];
   const creates: FocusCreateDecision[] = [];
   const touchedItems = new Set<string>();
+  // 一个候选只能归属一个决定；候选同时被忽略或分给两张卡会整批拒绝。
+  const evidenceOwners = new Map<string, string>();
+  const dispositionOwners = new Map<string, string>();
 
-  for (const decision of input.decisions) {
+  for (const [index, decision] of input.decisions.entries()) {
+    const decisionKey = `${index}:${decision.type}`;
     if (decision.type === 'create') {
       creates.push(decision);
       for (const ref of decision.evidence) {
         if (!assignedIds.has(ref.candidate_id)) {
           throw new BusinessError('PERMISSION_DENIED', '证据来源不属于当前作业的候选范围');
         }
+        const ownerKey = evidenceOwners.get(ref.candidate_id);
+        if (ownerKey !== undefined && ownerKey !== decisionKey) {
+          throw new BusinessError('INVALID_ARGUMENT', '同一候选不能用于多个决定');
+        }
+        evidenceOwners.set(ref.candidate_id, decisionKey);
         evidenceRefs.push(ref);
       }
     } else if (decision.type === 'update') {
@@ -621,6 +630,11 @@ export async function focusCommit(
         if (!assignedIds.has(ref.candidate_id)) {
           throw new BusinessError('PERMISSION_DENIED', '证据来源不属于当前作业的候选范围');
         }
+        const ownerKey = evidenceOwners.get(ref.candidate_id);
+        if (ownerKey !== undefined && ownerKey !== decisionKey) {
+          throw new BusinessError('INVALID_ARGUMENT', '同一候选不能用于多个决定');
+        }
+        evidenceOwners.set(ref.candidate_id, decisionKey);
         evidenceRefs.push(ref);
       }
     } else {
@@ -628,14 +642,20 @@ export async function focusCommit(
         if (!assignedIds.has(candidateId)) {
           throw new BusinessError('PERMISSION_DENIED', '候选不属于当前作业');
         }
+        if (evidenceOwners.has(candidateId)) {
+          throw new BusinessError('INVALID_ARGUMENT', '同一候选不能同时作为证据与忽略项');
+        }
+        const ownerKey = dispositionOwners.get(candidateId);
+        if (ownerKey !== undefined && ownerKey !== decisionKey) {
+          throw new BusinessError('INVALID_ARGUMENT', '同一候选不能用于多个决定');
+        }
+        dispositionOwners.set(candidateId, decisionKey);
       }
       disposition.push(decision);
     }
   }
 
-  const evidence = await resolveEvidenceRefs(db, job, evidenceRefs);
-
-  // 版本与归档屏障在任何写入前整批校验。
+  // 版本与归档屏障在任何写入与取证前整批校验：归档优先于证据失权。
   const itemRows = new Map<string, FocusItemRow>();
   if (updates.length > 0) {
     const ids = updates.map((update) => update.item_id);
@@ -665,6 +685,8 @@ export async function focusCommit(
       }
     }
   }
+
+  const evidence = await resolveEvidenceRefs(db, job, evidenceRefs);
 
   const coveredIds = new Set<string>();
   for (const ref of evidenceRefs) coveredIds.add(ref.candidate_id);
@@ -812,6 +834,15 @@ export async function focusCommit(
           ),
         )
         .bind(decision.item_id, owner, version),
+      // 归档与提交并发时整批拒绝（错误码保持 CONFLICT）。
+      db
+        .prepare(
+          guardSql(
+            'focusArchiveConflict',
+            'EXISTS (SELECT 1 FROM focus_items WHERE item_id = ? AND owner_actor_id = ? AND archived_at IS NOT NULL)',
+          ),
+        )
+        .bind(decision.item_id, owner),
     );
     for (const ref of decision.evidence ?? []) {
       const entry = evidence.get(ref.candidate_id);
@@ -876,6 +907,19 @@ export async function focusCommit(
   }
 
   const nextJobStatus = input.complete ? 'completed' : 'running';
+  if (input.complete) {
+    // 覆盖检查在批次内重做一次，防止并发提交后仍有 assigned 候选。
+    statements.push(
+      db
+        .prepare(
+          guardSql(
+            'focusStaleAttempt',
+            `EXISTS (SELECT 1 FROM focus_candidates WHERE job_id = ? AND state = 'assigned')`,
+          ),
+        )
+        .bind(job.job_id),
+    );
+  }
   statements.push(
     db
       .prepare(

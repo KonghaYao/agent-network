@@ -76,7 +76,6 @@ export function FocusBoard() {
   const [archivingId, setArchivingId] = useState<string | null>(null);
   const [preparingTimedOut, setPreparingTimedOut] = useState(false);
   const laneRefs = useRef<Partial<Record<FocusColumnKey, HTMLDivElement | null>>>({});
-  const restoredKey = useRef('');
 
   const binding = status.data;
   const active = binding?.status === 'active';
@@ -128,11 +127,8 @@ export function FocusBoard() {
 
   // 打开、切 tab 或切列时恢复该列断点；SSE 刷新不打断用户当前滚动。
   useEffect(() => {
-    if (!view.open || view.tab !== 'current') return;
-    if (view.selectedItemId && !desktop) return;
-    const key = `${view.open}:${view.tab}:${view.column}:${desktop}:${currentList.isSuccess}`;
-    if (restoredKey.current === key) return;
-    restoredKey.current = key;
+    if (!view.open || view.tab !== 'current') return undefined;
+    if (view.selectedItemId && !desktop) return undefined;
     const frame = requestAnimationFrame(() => {
       for (const column of FOCUS_COLUMNS) {
         const node = laneRefs.current[column.key];
