@@ -35,7 +35,6 @@ interface ScanEventRow {
   event_type: string;
   ref_id: string | null;
   metadata: string;
-  created_at: number;
 }
 
 interface ScanMessageRow {
@@ -140,7 +139,7 @@ async function runScan(env: Env): Promise<FocusScanResult> {
   for (let round = 0; round < LIMITS.focusScanBatchesMax; round += 1) {
     const events = await db
       .prepare(
-        `SELECT event_seq, scope_id, event_type, ref_id, metadata, created_at
+        `SELECT event_seq, scope_id, event_type, ref_id, metadata
            FROM events
           WHERE scope_kind = 'room' AND event_type IN (${WATCH_EVENT_SQL})
             AND event_seq > ?
@@ -280,11 +279,4 @@ async function runScan(env: Env): Promise<FocusScanResult> {
 
   if (bindings.results.length > 0) await ensureJobs(env);
   return { cursor, candidates: candidateCount, more };
-}
-
-/** 供测试与恢复任务复用：读取当前游标。 */
-export async function readFocusScanCursor(db: D1Database): Promise<number> {
-  const row = await db.prepare('SELECT event_seq FROM focus_scan_state WHERE id = 1')
-    .first<{ event_seq: number }>();
-  return row?.event_seq ?? 0;
 }
