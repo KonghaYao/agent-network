@@ -2665,6 +2665,38 @@ async function main(): Promise<void> {
     sectionDigest(staticContactLinkSection),
     sectionDigest(mainContactLinkSection),
   );
+  const memoryQaSection = (text: string): string => {
+    const heading = '### 记忆问答纪律';
+    const start = text.indexOf(heading);
+    if (start < 0) return '';
+    const rest = text.slice(start + heading.length);
+    const next = rest.search(/\n#{2,3} /u);
+    return (next < 0 ? rest : rest.slice(0, next)).trim();
+  };
+  const mainMemoryQaSection = memoryQaSection(skillText);
+  const staticMemoryQaSection = memoryQaSection(skillDocText);
+  check(
+    '静态/主 skill 记忆问答纪律语义完整',
+    [
+      'actor_id 是身份',
+      'no_space',
+      'item_count',
+      'occurrence',
+      'gateway_observed_room_history',
+      '一手',
+      '转述',
+      '不是消息数',
+    ].every(
+      (marker) =>
+        mainMemoryQaSection.includes(marker) && staticMemoryQaSection.includes(marker),
+    ),
+    mainMemoryQaSection.slice(0, 400),
+  );
+  checkEqual(
+    '静态/主 skill 记忆问答纪律 digest 一致',
+    sectionDigest(staticMemoryQaSection),
+    sectionDigest(mainMemoryQaSection),
+  );
   const fileShareRules = (text: string): string[] => {
     const markers = [
       '上传默认公开',

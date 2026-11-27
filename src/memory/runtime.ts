@@ -28,11 +28,13 @@ import { representationFromRow } from './representation-from-row';
 import {
   MEMORY_POLICY_VERSION,
   type MemoryOriginKind,
+  type MemoryProvenance,
   type MemoryRecallEvidenceKind,
   type MemoryRepresentation,
   type MemorySpaceRef,
 } from './contracts';
 import { ensureMemoryInstance } from './access';
+import { provenanceFromSourceRow } from './provenance';
 import {
   claimDueMemoryJobs,
   completeMemoryJob,
@@ -633,6 +635,7 @@ export class MemoryRuntime {
       })),
     } as MemoryRepresentation;
     let source: { source_id: string; source_revision: number } | null = null;
+    let provenance: MemoryProvenance | null = null;
     if (intent.source_id && intent.source_revision !== null) {
       const sourceRow = await getMemorySourceRevision(
         this.#db,
@@ -641,6 +644,8 @@ export class MemoryRuntime {
       );
       if (!sourceRow) throw new Error('retain source missing');
       source = { source_id: sourceRow.source_id, source_revision: sourceRow.revision };
+      // 只用已加载的 source row 构造快照；不按 source_id 回抓正文。
+      provenance = await provenanceFromSourceRow(this.#db, sourceRow);
     }
     let eligibility: RetainRequest['items'][number]['eligibility'];
     if (intent.origin_kind === 'experienced') {
@@ -676,6 +681,7 @@ export class MemoryRuntime {
           origin_kind: intent.origin_kind as MemoryOriginKind,
           representation: { representation: representationWithDependencies, text: representationRow.text },
           source,
+          provenance,
           eligibility,
         },
       ],

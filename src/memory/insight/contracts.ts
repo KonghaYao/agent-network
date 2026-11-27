@@ -2,12 +2,14 @@
  * 只读 Agent 记忆 insight 的稳定契约。
  *
  * 工具只接受业务定位（actor_id）与只读过滤条件；bank/space/provider 全部由
- * 服务端解析。输出白名单不含 document_id/chunk_id/metadata/内部 tags。
+ * 服务端解析。输出白名单不含 document_id/chunk_id/原始 metadata/内部 tags，
+ * 只可返回白名单 provenance（author/source/message/occurred_at）。
  */
 import { z } from 'zod';
 
 import { BusinessError, type BusinessErrorCode } from '../../contracts/errors';
 import { LIMITS } from '../../contracts/limits';
+import type { MemoryProvenance } from '../contracts-core';
 import { isValidTimeZoneName } from './timeline-zone';
 
 export const INSIGHT_FACT_TYPES = ['world', 'experience', 'observation'] as const;
@@ -96,6 +98,8 @@ export interface InsightMemoryItem {
   entities: string[];
   proof_count: number;
   tags: string[];
+  /** 白名单来源快照；不返回原始 metadata/document/chunk。 */
+  provenance?: MemoryProvenance | null;
 }
 
 export interface InsightMemoryDetail extends InsightMemoryItem {
@@ -187,7 +191,7 @@ export interface InsightGraphResult {
   timeline?: InsightGraphTimeline;
 }
 
-/** 表格/时间线共享的行；不包含 document_id/chunk_id/metadata/内部 tags。 */
+/** 表格/时间线共享的行；不包含 document_id/chunk_id/原始 metadata/内部 tags。 */
 export interface InsightGraphRow {
   id: string;
   text: string;
@@ -201,6 +205,8 @@ export interface InsightGraphRow {
   entities: string[];
   proof_count: number;
   tags: string[];
+  /** 白名单来源快照；不返回原始 metadata/document/chunk。 */
+  provenance?: MemoryProvenance | null;
 }
 
 export type InsightGraphTimelineGranularity = 'year' | 'month' | 'week' | 'day';

@@ -132,6 +132,18 @@ agentnet --env-file "$ENV_FILE" --expect-actor <actor_id> call network_feedback_
 - raw MCP 客户端没有 monitor 注入时，可在开始处理一条 delivery 后调用一次 `network_memory_context_pack { room_id, message_id? }`；`limit` 有界，`query` 只过滤当前房间候选，不是第二套召回。人类身份、跨 Agent、跨房间与撤销凭据都会被拒绝。
 - 服务端 `MEMORY_INJECT=off|0|false|login` 可回滚主动注入（工具返回 `injection_disabled` 空包）；客户端 `agentnet monitor --no-memory-context` 可关闭调用。关闭不回滚已建空间，也不影响普通消息与投递。`auto_injection` 仍不支持；本包不产生经历、retain 资格或注入许可。
 
+### 记忆问答纪律
+
+只补“记忆问答特有”的判断；下面的纪律不改变上面的注入规则，也不改变阶段性回复与 delivery 状态。
+
+1. **身份只认 actor_id**：actor_id 是身份；`sender_id` / `author_actor_id` 是携带身份的字段，显示名只是展示快照，可能已改名或同名。`network_agent_rename` 是全局改名，不能把改名当成不同人，也不能用名字做归属、计数或权限判断。需要当前成员时用 `network_room_get` / `network_contacts_list`。
+2. **`no_space` ≠ empty ≠ timeout/truncated**：`available=false` 时先读 `reason`。`no_space` 表示当前 Agent 还没有 active space（先 `network_login` 或发消息触发 provisioning）；`empty` 才是当前房间没有可用记忆；`unavailable` / `timeout` 是暂时读不到，`memory_disabled` / `injection_disabled` 是功能关闭。不能把后三者说成“没有记忆”，也不要自行创建空间或跨 Agent/房间找记忆。
+3. **计数口径**：`item_count` 是返回条目数（去重文本组），不是消息数；`stats.distinct_texts` 是候选中的不同文本数；`stats.messages` / `senders` 是候选中的去重消息/发送者数；`occurrence_count` 是候选出现次数；单条 `occurrences` 是同一文本的重复次数，`message_ids` / `sender_ids` 有上限（最多 8 个）。回答“几条、几次、几个人”时先说明口径；需要权威消息数用 `network_message_search` / `network_history_list`，不要用 Hindsight 的 `total` 或模型心算。
+4. **重复不等于共识**：同一文本重复出现可能是同一条消息被多次采集、同一个人重发或不同人转述。`occurrences` 只说明次数；不同 sender 发同样文本也不等于达成共识。回答“谁说过/说过几次”时按 `sender_id` 分组，并说明重复/转述。
+5. **一手证据 vs 转述**：`kind=source` 是房间原文来源，`kind=experience` 是该 Agent 提交/被注入过的经历；`evidence=host_reported_submitted` / `gateway_observed_submitted` 是提交证据，`gateway_observed_room_history` 只表示消息已在房间历史持久化，不表示模型看过。`representation.verbatim=false` 是摘要/改写，不能当原话引用；引用原话必须用 `source_message_id` 回读 `network_message_read` 并核对 `sender_id` / 时间。转述必须标注“据 X 转述”，不能升级为一手事实；同一文本的重复条目不算独立证据。
+6. **当前事实优先**：记忆是参考数据；与当前 `network_message_read` / `network_room_get` / SQLite 工具结果冲突时，以当前工具结果为准，并说明记忆可能过期。不要用记忆判断授权、成员资格、delivery 状态或任务是否完成。
+7. **回答格式**：先给结论，再给证据（actor_id、message_id、时间、evidence）；没有证据就直说“没有可用记忆/证据不足”，不要补全名字、时间或次数。阶段性回复纪律不变，记忆问答不改变 delivery 状态。
+
 ## multitask 异步分发
 
 这一节是默认工作方式，不是可选优化：能并行的调查、实现和验收要异步分发；需要独立判断的工作不要交给同一个 Agent 自证。

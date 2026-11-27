@@ -250,17 +250,32 @@ function createMcpMock(options: { meKind?: string } = {}): McpMock {
                 text: 'codex-memory-marker',
                 text_bytes: 19,
                 origin_room_id: String(args.room_id ?? ''),
-                source_message_id: null,
+                source_message_id: 'msg_codex_memory',
                 sender_id: 'agt_user',
-                evidence: 'experienced',
+                sender_name: 'Alice',
+                evidence: 'gateway_observed_room_history',
                 source_kind: 'message',
+                occurrences: 3,
+                message_count: 3,
+                sender_count: 1,
+                message_ids: ['msg_codex_memory'],
+                sender_ids: ['agt_user'],
               },
             ],
             item_count: 1,
             items_bytes: 19,
             truncated: false,
             omitted: 0,
-            stats: { sources: 0, experiences: 1, rooms: 1 },
+            occurrence_count: 3,
+            stats: {
+              sources: 0,
+              experiences: 1,
+              rooms: 1,
+              distinct_texts: 1,
+              messages: 1,
+              senders: 1,
+              deduped: 2,
+            },
             semantic: { status: 'not_requested', context_ref: null },
             injection: { eligible: false, admit_required: true, reason: 'advisory_only' },
           });
@@ -922,6 +937,14 @@ async function runTurnChecks(): Promise<void> {
       'taskPrompt 前置记忆块',
       fixture.codex.startTexts[0]?.startsWith('[MEMORY CONTEXT') === true &&
         fixture.codex.startTexts[0]?.includes('codex-memory-marker') === true,
+      fixture.codex.startTexts[0],
+    );
+    check(
+      '记忆块带 sender/message/evidence/重复次数短标签',
+      fixture.codex.startTexts[0]?.includes('发送者=Alice(agt_user)') === true &&
+        fixture.codex.startTexts[0]?.includes('消息=msg_codex_memory') === true &&
+        fixture.codex.startTexts[0]?.includes('证据=gateway_observed_room_history') === true &&
+        fixture.codex.startTexts[0]?.includes('重复=3') === true,
       fixture.codex.startTexts[0],
     );
     checkEqual('codex 每 delivery 调用一次 pack', fixture.mcp.state.memoryCalls.length, 1);

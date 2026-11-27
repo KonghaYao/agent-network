@@ -5,10 +5,12 @@
  * - 记忆图不超过节点/边/字节预算；
  * - 自环、悬空边、重复边被过滤；
  * - 正文按字符/字节截断；
- * - 输出中不出现 document_id、chunk_id、metadata 或 agentnet 内部 tags。
+ * - 输出中不出现 document_id、chunk_id、原始 metadata 或 agentnet 内部 tags。
  */
 import { LIMITS } from '../../contracts/limits';
 import { truncateUtf8, utf8Bytes } from '../../storage/db';
+import type { MemoryProvenance } from '../contracts-core';
+import { PROVENANCE_METADATA_KEY, parseProvenanceMetadata } from '../provenance';
 import type {
   InsightEntityDetail,
   InsightEntityGraph,
@@ -28,6 +30,19 @@ const INTERNAL_TAG_PREFIX = 'agentnet:';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * 只从上游 metadata/document_metadata 解析白名单 provenance；原始 metadata
+ * 对象本身绝不进入输出。
+ */
+function provenanceOf(entry: Record<string, unknown>): MemoryProvenance | null {
+  const metadata = isRecord(entry.metadata)
+    ? entry.metadata
+    : isRecord(entry.document_metadata)
+      ? entry.document_metadata
+      : null;
+  return metadata ? parseProvenanceMetadata(metadata[PROVENANCE_METADATA_KEY]) : null;
 }
 
 function stringValue(value: unknown): string | null {
@@ -424,6 +439,7 @@ function normalizeMemoryItem(entry: unknown, textChars: number): InsightMemoryIt
   const stateValue = stringValue(entry.state);
   const invalidated =
     stateValue === 'invalidated' || stateValue === 'invalid' || entry.invalidated_at != null;
+  const provenance = provenanceOf(entry);
   return {
     id,
     text: truncateChars(rawText, textChars),
@@ -435,6 +451,7 @@ function normalizeMemoryItem(entry: unknown, textChars: number): InsightMemoryIt
     entities: entityArray(entry.entities),
     proof_count: nonNegativeInt(entry.proof_count),
     tags: publicTags(entry.tags),
+    ...(provenance ? { provenance } : {}),
   };
 }
 
@@ -480,6 +497,7 @@ export function normalizeGraphRow(entry: unknown, textChars: number): InsightGra
   if (!id) return null;
   const occurredStart = timestampValue(entry.occurred_start);
   const mentionedAt = timestampValue(entry.mentioned_at ?? entry.date);
+  const provenance = provenanceOf(entry);
   const row: InsightGraphRow = {
     id,
     text: truncateChars(stringValue(entry.text) ?? '', textChars),
@@ -491,6 +509,7 @@ export function normalizeGraphRow(entry: unknown, textChars: number): InsightGra
     entities: entityArray(entry.entities),
     proof_count: nonNegativeInt(entry.proof_count),
     tags: publicTags(entry.tags),
+    ...(provenance ? { provenance } : {}),
   };
   const state = graphRowState(entry);
   if (state) row.state = state;
@@ -570,6 +589,7 @@ export function normalizeMemoryDetail(
     }
   }
   const stateValue = stringValue(body.state);
+  const provenance = provenanceOf(body);
   return {
     id,
     text,
@@ -584,6 +604,7 @@ export function normalizeMemoryDetail(
     entities: entityArray(body.entities),
     proof_count: nonNegativeInt(body.proof_count),
     tags: publicTags(body.tags),
+    ...(provenance ? { provenance } : {}),
     context: normalizeContext(body.context),
     source_memories: sourceMemories,
     history_count: history,

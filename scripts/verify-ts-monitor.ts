@@ -35,7 +35,7 @@ import { dirname, join, resolve } from 'node:path';
 
 import { check, checkEqual, checksPassed } from './lib/harness';
 import { listInboxPages, type MonitorRpc } from '../client/monitor/rpc';
-import { fetchMemoryPack } from '../client/monitor/memory';
+import { fetchMemoryPack, memoryPromptBlock, parseMemoryPack } from '../client/monitor/memory';
 import { BODY_PREVIEW_CHARS } from '../client/monitor/events';
 import {
   attachmentOrigins,
@@ -1389,6 +1389,87 @@ async function runMemoryContextChecks(): Promise<void> {
       .disabled,
     true,
   );
+
+  // 旧服务端 pack 缺新字段时，客户端默认值仍可解析且不破坏 pointer/event。
+  const legacyPack = parseMemoryPack({
+    pack_id: 'mpk_legacy',
+    trigger: 'message',
+    available: true,
+    reason: 'ready',
+    authority: 'reference_data',
+    as_of: 1,
+    expires_at: 2,
+    room_id: 'rm_legacy',
+    message_id: null,
+    items: [
+      {
+        item_id: 'exp:legacy',
+        kind: 'experience',
+        text: 'legacy-memory-marker',
+        text_bytes: 19,
+        origin_room_id: 'rm_legacy',
+        source_message_id: 'msg_legacy',
+        sender_id: 'agt_legacy',
+        evidence: 'gateway_observed_room_history',
+        source_kind: 'message',
+      },
+    ],
+    item_count: 1,
+    items_bytes: 19,
+    truncated: false,
+    omitted: 0,
+    stats: { sources: 0, experiences: 1, rooms: 1 },
+  });
+  checkEqual('旧 pack occurrence_count 回退 item_count', legacyPack?.occurrence_count, 1);
+  checkEqual('旧 pack item occurrences 默认 1', legacyPack?.items[0]?.occurrences, 1);
+  checkEqual('旧 pack message_ids 默认空数组', JSON.stringify(legacyPack?.items[0]?.message_ids), '[]');
+  checkEqual('旧 pack sender_ids 默认空数组', JSON.stringify(legacyPack?.items[0]?.sender_ids), '[]');
+  checkEqual('旧 pack sender_name 缺省 null', legacyPack?.items[0]?.sender_name, null);
+  const legacyPrompt = memoryPromptBlock({ pack: legacyPack, reason: 'ready', disabled: false });
+  check('旧 pack prompt 仍以 [MEMORY CONTEXT 开头', legacyPrompt.startsWith('[MEMORY CONTEXT'));
+  check(
+    '旧 pack prompt 不伪造重复次数',
+    !legacyPrompt.includes('重复='),
+    legacyPrompt,
+  );
+
+  const enrichedPack = parseMemoryPack({
+    ...JSON.parse(JSON.stringify(legacyPack)),
+    occurrence_count: 3,
+    items: [
+      {
+        item_id: 'exp:enriched',
+        kind: 'experience',
+        text: 'enriched-memory-marker',
+        text_bytes: 21,
+        origin_room_id: 'rm_legacy',
+        source_message_id: 'msg_enriched',
+        sender_id: 'agt_legacy',
+        sender_name: 'Alice',
+        evidence: 'gateway_observed_room_history',
+        source_kind: 'message',
+        occurrences: 3,
+        message_count: 3,
+        sender_count: 2,
+        message_ids: ['msg_enriched'],
+        sender_ids: ['agt_legacy', 'agt_other'],
+      },
+    ],
+  });
+  const enrichedPrompt = memoryPromptBlock({
+    pack: enrichedPack,
+    reason: 'ready',
+    disabled: false,
+  });
+  check(
+    '新 pack prompt 带 sender/message/evidence/重复次数',
+    enrichedPrompt.includes('发送者=Alice(agt_legacy)') &&
+      enrichedPrompt.includes('消息=msg_enriched') &&
+      enrichedPrompt.includes('证据=gateway_observed_room_history') &&
+      enrichedPrompt.includes('重复=3'),
+    enrichedPrompt,
+  );
+  check('新 pack prompt 仍以 [MEMORY CONTEXT 开头', enrichedPrompt.startsWith('[MEMORY CONTEXT'));
 
   // claude：full 包进入 stdout delivery 与 event_file；每投递一次。
   const mock = createMock();

@@ -24,9 +24,17 @@ import type {
 } from '../src/memory/adapters/types';
 import type {
   MemoryRawRepresentation,
+  MemoryProvenance,
   MemorySpaceRef,
   MemorySummaryRepresentation,
 } from '../src/memory/contracts';
+import { mapFact } from '../src/memory/adapters/hindsight-facts';
+import {
+  PROVENANCE_METADATA_KEY,
+  mergeProvenance,
+  parseProvenanceMetadata,
+  serializeProvenance,
+} from '../src/memory/provenance';
 import { sha256Hex, utf8Bytes } from '../src/storage/db';
 import { check, checkEqual, checksPassed } from './lib/harness';
 import { computeWriteCoverage } from './lib/hindsight-write-audit';
@@ -91,11 +99,13 @@ function item(
   source: { source_id: string; source_revision: number } | null,
   originKind: 'experienced' | 'authored' | 'curated',
   eligibility: MemoryAdapterRetainItem['eligibility'],
+  provenance: MemoryProvenance | null = null,
 ): MemoryAdapterRetainItem {
   return {
     origin_kind: originKind,
     representation: { representation, text },
     source,
+    provenance,
     eligibility,
   };
 }
@@ -201,7 +211,23 @@ async function main(): Promise<void> {
     const sourceOne = { source_id: 'src_mf04_msg_1', source_revision: 1 };
     const textOne = 'Alice said the release moved to Friday.';
     const rawOne = await rawRepresentation(sourceOne.source_id, 1, textOne, 'rep_mf04_1');
-    const itemOne = item(rawOne, textOne, sourceOne, 'experienced', experiencedEligibility());
+    const provenanceOne: MemoryProvenance = {
+      author_actor_id: 'agt_mf04_alice',
+      author_name: 'Alice',
+      author_name_source: 'retain_snapshot',
+      source_kind: 'message',
+      origin_room_id: 'rm_mf04',
+      source_message_id: 'msg_mf04_1',
+      occurred_at: AT,
+    };
+    const itemOne = item(
+      rawOne,
+      textOne,
+      sourceOne,
+      'experienced',
+      experiencedEligibility(),
+      provenanceOne,
+    );
     const retained = await adapter.retain(
       retainRequest(primarySpace, [itemOne], 'op-mf04-retain-1'),
     );
@@ -220,10 +246,177 @@ async function main(): Promise<void> {
     };
     const firstItem = firstBody.items[0]!;
     checkEqual('retain 发送准确文本', firstItem.content, textOne);
+    const retainMetadata = firstItem.metadata as Record<string, string>;
     checkEqual(
       'retain metadata 保存准确 hash',
-      (firstItem.metadata as Record<string, string>).agentnet_text_sha256,
+      retainMetadata.agentnet_text_sha256,
       rawOne.text_sha256,
+    );
+    const retainedProvenance = parseProvenanceMetadata(
+      retainMetadata[PROVENANCE_METADATA_KEY],
+    );
+    checkEqual(
+      'retain metadata 写入 provenance author',
+      retainedProvenance?.author_actor_id,
+      provenanceOne.author_actor_id,
+    );
+    checkEqual(
+      'retain metadata 写入 provenance 显示名快照',
+      retainedProvenance?.author_name,
+      'Alice',
+    );
+    checkEqual(
+      'retain metadata 写入 provenance message',
+      retainedProvenance?.source_message_id,
+      provenanceOne.source_message_id,
+    );
+    checkEqual(
+      'retain metadata 写入 provenance room/kind/time',
+      JSON.stringify([
+        retainedProvenance?.origin_room_id,
+        retainedProvenance?.source_kind,
+        retainedProvenance?.occurred_at,
+      ]),
+      JSON.stringify(['rm_mf04', 'message', AT]),
+    );
+    check(
+      'retain provenance 不写 document/chunk/raw tags 键',
+      !Object.keys(retainMetadata).some(
+        (key) => key.includes('document') || key.includes('chunk') || key.includes('tag'),
+      ),
+      Object.keys(retainMetadata),
+    );
+    check(
+      'retain provenance 不写正文或 token',
+      !String(retainMetadata[PROVENANCE_METADATA_KEY]).includes(textOne) &&
+        !String(retainMetadata[PROVENANCE_METADATA_KEY]).includes(token),
+      retainMetadata[PROVENANCE_METADATA_KEY],
+    );
+    checkEqual(
+      'provenance 显示名掩码',
+      parseProvenanceMetadata({
+        v: 1,
+        author_name: 'api_key=supersecret123456',
+      })?.author_name,
+      'api_key=[已隐藏]',
+    );
+    checkEqual(
+      'provenance 未知版本返回 null',
+      parseProvenanceMetadata('{"v":2,"author_name":"Alice"}'),
+      null,
+    );
+    checkEqual('provenance 坏 JSON 返回 null', parseProvenanceMetadata('{bad'), null);
+
+    // source_message_id 只对 message 来源有意义；坏 metadata 不能把消息 id
+    // 挂到 task/file 来源上。
+    const taskProvenance = parseProvenanceMetadata({
+      v: 1,
+      author_actor_id: 'agt_mf04_alice',
+      author_name: 'Alice',
+      source_kind: 'task_detail',
+      origin_room_id: 'rm_mf04',
+      source_message_id: 'msg_mf04_foreign',
+      occurred_at: AT,
+    });
+    checkEqual(
+      'provenance task 来源丢弃 message id',
+      taskProvenance?.source_message_id,
+      null,
+    );
+    checkEqual(
+      'provenance task 来源保留其他字段',
+      JSON.stringify([
+        taskProvenance?.source_kind,
+        taskProvenance?.author_actor_id,
+        taskProvenance?.origin_room_id,
+        taskProvenance?.occurred_at,
+      ]),
+      JSON.stringify(['task_detail', 'agt_mf04_alice', 'rm_mf04', AT]),
+    );
+    checkEqual(
+      'provenance file 来源丢弃 message id',
+      parseProvenanceMetadata({ v: 1, source_kind: 'file', source_message_id: 'msg_mf04_foreign' })
+        ?.source_message_id,
+      null,
+    );
+    checkEqual(
+      'provenance 缺 source_kind 不保留 message id',
+      parseProvenanceMetadata({ v: 1, source_message_id: 'msg_mf04_foreign' }),
+      null,
+    );
+    checkEqual(
+      'provenance message 来源保留 message id',
+      parseProvenanceMetadata({ v: 1, source_kind: 'message', source_message_id: 'msg_mf04_1' })
+        ?.source_message_id,
+      'msg_mf04_1',
+    );
+    checkEqual(
+      'provenance 序列化丢弃非 message 的 message id',
+      serializeProvenance({
+        author_actor_id: 'agt_mf04_alice',
+        author_name: null,
+        author_name_source: null,
+        source_kind: 'task_detail',
+        origin_room_id: null,
+        source_message_id: 'msg_mf04_foreign',
+        occurred_at: null,
+      })?.includes('msg_mf04_foreign'),
+      false,
+    );
+
+    const mergeBase: MemoryProvenance = {
+      author_actor_id: 'agt_mf04_alice',
+      author_name: 'Alice',
+      author_name_source: 'read_current',
+      source_kind: 'task_detail',
+      origin_room_id: 'rm_mf04',
+      source_message_id: 'msg_mf04_foreign',
+      occurred_at: AT,
+    };
+    const mergedTask = mergeProvenance(mergeBase, provenanceOne);
+    checkEqual(
+      'mergeProvenance 本地 task 来源不继承 message id',
+      JSON.stringify([mergedTask?.source_kind, mergedTask?.source_message_id]),
+      JSON.stringify(['task_detail', null]),
+    );
+    const mergedMessage = mergeProvenance(provenanceOne, {
+      ...mergeBase,
+      source_kind: 'task_detail',
+    });
+    checkEqual(
+      'mergeProvenance 本地 message 来源保留自己的 message id',
+      mergedMessage?.source_message_id,
+      'msg_mf04_1',
+    );
+    const mergedMessageNoId = mergeProvenance(
+      { ...provenanceOne, source_message_id: null },
+      { ...mergeBase, source_kind: 'task_detail' },
+    );
+    checkEqual(
+      'mergeProvenance message 来源不借用 task 的 message id',
+      mergedMessageNoId?.source_message_id,
+      null,
+    );
+    const mergedTaskOnly = mergeProvenance(
+      { ...mergeBase, source_message_id: null },
+      mergeBase,
+    );
+    checkEqual(
+      'mergeProvenance 双方非 message 不产生 message id',
+      JSON.stringify([mergedTaskOnly?.source_kind, mergedTaskOnly?.source_message_id]),
+      JSON.stringify(['task_detail', null]),
+    );
+    const mergedRemoteOnly = mergeProvenance(null, mergeBase);
+    checkEqual(
+      'mergeProvenance 单侧远端 task 来源丢弃 message id',
+      JSON.stringify([mergedRemoteOnly?.source_kind, mergedRemoteOnly?.source_message_id]),
+      JSON.stringify(['task_detail', null]),
+    );
+    const mergedLocalOnly = mergeProvenance(mergeBase, null);
+    checkEqual(
+      'mergeProvenance 单侧本地 task 来源丢弃 message id',
+      JSON.stringify([mergedLocalOnly?.source_kind, mergedLocalOnly?.source_message_id]),
+      JSON.stringify(['task_detail', null]),
     );
     check(
       'retain observation scope 限制在来源修订',
@@ -389,6 +582,40 @@ async function main(): Promise<void> {
     );
     checkEqual('search evidence_complete', searchOne.evidence_complete, true);
     check('search 结果不含凭据', !JSON.stringify(searchOne).includes(token));
+    const hitOne = searchOne.hits[0]!;
+    checkEqual(
+      'search 映射 provenance author',
+      hitOne.provenance?.author_actor_id,
+      provenanceOne.author_actor_id,
+    );
+    checkEqual(
+      'search 映射 provenance 显示名来源',
+      hitOne.provenance?.author_name_source,
+      'retain_snapshot',
+    );
+    checkEqual(
+      'search 映射 provenance message/room/time',
+      JSON.stringify([
+        hitOne.provenance?.source_message_id,
+        hitOne.provenance?.origin_room_id,
+        hitOne.provenance?.occurred_at,
+      ]),
+      JSON.stringify(['msg_mf04_1', 'rm_mf04', AT]),
+    );
+    check(
+      'search provenance 不含 document/chunk/metadata/raw tags',
+      !/document_id|chunk_id|"metadata"|"tags"/u.test(JSON.stringify(hitOne.provenance)),
+      hitOne.provenance,
+    );
+    const legacyFact = await mapFact(
+      { id: 'fact_mf04_legacy', text: 'legacy fact text', tags: ['agentnet:o:experienced'] },
+      primarySpace,
+    );
+    check(
+      '旧数据缺 provenance 时 hit.provenance=null',
+      'hit' in legacyFact && legacyFact.hit.provenance === null,
+      legacyFact,
+    );
 
     const sourceTwo = { source_id: 'src_mf04_msg_2', source_revision: 1 };
     const textTwo = 'Bob authored a note about the release checklist.';

@@ -14,6 +14,10 @@ import type {
 } from '../contracts';
 import type { MemoryAdapterSearchHit } from './types';
 import {
+  PROVENANCE_METADATA_KEY,
+  parseProvenanceMetadata,
+} from '../provenance';
+import {
   RAW_KINDS,
   isOriginKind,
   isRecallEvidenceKind,
@@ -53,6 +57,9 @@ export async function mapFact(fact: unknown, space: MemorySpaceRef): Promise<Map
       : dependencies[0] ?? null;
   const evidenceValue = metadataValue(metadata, 'agentnet_evidence_kind');
   const evidence = isRecallEvidenceKind(evidenceValue) ? evidenceValue : null;
+  // 旧数据没有 agentnet_provenance 时为 null；由 recall 侧回退本地 source row，
+  // 不重新 retain，也不伪造来源。
+  const provenance = parseProvenanceMetadata(metadata?.[PROVENANCE_METADATA_KEY]);
   // retain 把本地 representation id 写在 metadata；provider 的 fact.id 是后端身份，
   // 不能互相冒充。metadata 缺失时保留 fact.id，recall 侧再按
   // (source_id, revision, text_sha256) 兜底。
@@ -114,6 +121,7 @@ export async function mapFact(fact: unknown, space: MemorySpaceRef): Promise<Map
       source,
       origin_kind: originValue,
       evidence,
+      provenance,
       score: scoreOf(fact.scores),
     },
   };

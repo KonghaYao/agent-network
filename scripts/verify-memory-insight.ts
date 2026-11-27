@@ -29,6 +29,15 @@ const DOCUMENT_SECRET = 'document-secret-id';
 const CHUNK_SECRET = 'chunk-secret-id';
 const METADATA_SECRET = 'metadata-secret-value';
 const UPSTREAM_SECRET = 'upstream-secret-body';
+const PROVENANCE_METADATA = JSON.stringify({
+  v: 1,
+  author_actor_id: 'agt_insight_author',
+  author_name: 'Alice Insight',
+  source_kind: 'message',
+  origin_room_id: 'rm_insight_source',
+  source_message_id: 'msg_insight_source',
+  occurred_at: AT,
+});
 
 function viewer(kind: 'human' | 'agent', actorId: string): InsightViewer {
   return { kind, actor_id: actorId };
@@ -248,7 +257,13 @@ function graphFixture(): Record<string, unknown> {
     nodes,
     edges,
     table_rows: [
-      { id: 'n0', fact_type: 'world', proof_count: 2, document_id: DOCUMENT_SECRET },
+      {
+        id: 'n0',
+        fact_type: 'world',
+        proof_count: 2,
+        document_id: DOCUMENT_SECRET,
+        metadata: { secret: METADATA_SECRET, agentnet_provenance: PROVENANCE_METADATA },
+      },
       { id: 'n1', fact_type: 'observation', proof_count: 1, tags: [INTERNAL_TAG] },
       {
         id: 'n2',
@@ -927,7 +942,7 @@ async function main(): Promise<void> {
       tags: [INTERNAL_TAG, 'public'],
       document_id: DOCUMENT_SECRET,
       chunk_id: CHUNK_SECRET,
-      metadata: { secret: METADATA_SECRET },
+      metadata: { secret: METADATA_SECRET, agentnet_provenance: PROVENANCE_METADATA },
     },
     {
       id: 'm2',
@@ -966,7 +981,7 @@ async function main(): Promise<void> {
       tags: [INTERNAL_TAG, 'public'],
       document_id: DOCUMENT_SECRET,
       chunk_id: CHUNK_SECRET,
-      metadata: { secret: METADATA_SECRET },
+      metadata: { secret: METADATA_SECRET, agentnet_provenance: PROVENANCE_METADATA },
       history: [{ revision: 1 }, { revision: 2 }],
       source_memories: Array.from({ length: 12 }, (_, index) => ({
         id: `sm${index}`,
@@ -1179,6 +1194,31 @@ async function main(): Promise<void> {
   checkEqual('graph merge fact_type', graph.nodes.find((node) => node.id === 'n0')?.fact_type, 'world');
   checkEqual('graph request limit', fake.requests.find((item) => item.path.endsWith('/graph'))?.query.get('limit'), '120');
   assertNoSensitive('graph 输出', graph, targetBank);
+  const graphWithProvenance = await service.graph(viewer('human', friend), {
+    actor_id: target,
+    include_rows: true,
+    refresh: true,
+  });
+  const provenanceRow = graphWithProvenance.table_rows?.find((row) => row.id === 'n0');
+  checkEqual(
+    'graph row 返回白名单 provenance',
+    provenanceRow?.provenance?.author_actor_id,
+    'agt_insight_author',
+  );
+  checkEqual(
+    'graph row provenance 保留 message',
+    provenanceRow?.provenance?.source_message_id,
+    'msg_insight_source',
+  );
+  check(
+    'graph row 不含原始 metadata/document/chunk 键',
+    provenanceRow !== undefined &&
+      !Object.hasOwn(provenanceRow, 'metadata') &&
+      !Object.hasOwn(provenanceRow, 'document_id') &&
+      !Object.hasOwn(provenanceRow, 'chunk_id'),
+    provenanceRow,
+  );
+  assertNoSensitive('graph provenance 输出', graphWithProvenance, targetBank);
 
   console.log('--- graph 中文长文本裁剪顺序 ---');
   const chineseGraph = normalizeMemoryGraph(chineseLongTextGraphFixture(), {
@@ -1951,6 +1991,27 @@ async function main(): Promise<void> {
   checkEqual('list 状态归一化', listed.items[1]?.state, 'invalidated');
   checkEqual('list entities 逗号拆分去重', JSON.stringify(listed.items[0]?.entities), '["Alice","Bob"]');
   checkEqual('list 过滤内部 tags', JSON.stringify(listed.items[0]?.tags), '["public"]');
+  checkEqual(
+    'list 返回白名单 provenance author',
+    listed.items[0]?.provenance?.author_actor_id,
+    'agt_insight_author',
+  );
+  checkEqual(
+    'list 返回 provenance message/source_kind/time',
+    JSON.stringify([
+      listed.items[0]?.provenance?.source_message_id,
+      listed.items[0]?.provenance?.source_kind,
+      listed.items[0]?.provenance?.occurred_at,
+    ]),
+    JSON.stringify(['msg_insight_source', 'message', AT]),
+  );
+  check(
+    'list 项不含原始 metadata/document/chunk 键',
+    !Object.hasOwn(listed.items[0] ?? {}, 'metadata') &&
+      !Object.hasOwn(listed.items[0] ?? {}, 'document_id') &&
+      !Object.hasOwn(listed.items[0] ?? {}, 'chunk_id'),
+    listed.items[0],
+  );
   assertNoSensitive('list 输出', listed, targetBank);
 
   fake.resetRequests();
@@ -2028,6 +2089,23 @@ async function main(): Promise<void> {
   checkEqual('get context 归一化', detail.memory?.context, '来自会话消息');
   checkEqual('get source_memories 上限 10', detail.memory?.source_memories.length, 10);
   checkEqual('get history_count', detail.memory?.history_count, 2);
+  checkEqual(
+    'get 返回白名单 provenance',
+    detail.memory?.provenance?.author_actor_id,
+    'agt_insight_author',
+  );
+  checkEqual(
+    'get provenance 显示名快照',
+    detail.memory?.provenance?.author_name,
+    'Alice Insight',
+  );
+  check(
+    'get 不含原始 metadata/document/chunk 键',
+    !Object.hasOwn(detail.memory ?? {}, 'metadata') &&
+      !Object.hasOwn(detail.memory ?? {}, 'document_id') &&
+      !Object.hasOwn(detail.memory ?? {}, 'chunk_id'),
+    detail.memory,
+  );
   assertNoSensitive('get 输出', detail, targetBank);
   await expectBusiness(
     '未知 memory_id返回 NOT_FOUND',

@@ -21,6 +21,7 @@ import type {
   MemoryFreshness,
   MemoryOriginKind,
   MemoryProducerKind,
+  MemoryProvenance,
   MemoryPurgeState,
   MemoryRecallEvidenceKind,
   MemoryRepresentation,
@@ -112,6 +113,11 @@ export interface MemoryAdapterRetainItem {
   representation: MemoryExactRepresentation;
   /** 仅用于依赖核对与治理；不能据此扩大抓取范围。 */
   source: MemorySourceRef | null;
+  /**
+   * 来源展示快照；由服务端运行时从已加载 source row 构造。Adapter 只写不读，
+   * 不据此补抓正文或扩大授权。
+   */
+  provenance?: MemoryProvenance | null;
   eligibility: MemoryAdapterRetainEligibility;
 }
 
@@ -171,6 +177,11 @@ export interface MemoryAdapterSearchHit {
   source: MemorySourceRef | null;
   origin_kind: MemoryOriginKind;
   evidence: MemoryRecallEvidenceKind | null;
+  /**
+   * retain 时写入的展示快照；metadata 缺失/损坏时为 null。它不是授权依据，
+   * recall 侧仍以本地 source row 为准。
+   */
+  provenance?: MemoryProvenance | null;
   /** 后端 score 只用于排序，不代表真实性、可信度或已核验。 */
   score: number | null;
 }

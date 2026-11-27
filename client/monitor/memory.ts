@@ -29,8 +29,27 @@ export interface MemoryPackItem {
   origin_room_id: string | null;
   source_message_id: string | null;
   sender_id: string | null;
+  sender_name: string | null;
   evidence: string | null;
   source_kind: string | null;
+  /** 同一文本的重复次数；旧服务端缺省为 1。 */
+  occurrences: number;
+  message_count: number;
+  sender_count: number;
+  message_ids: string[];
+  sender_ids: string[];
+}
+
+/** stats 只做展示；新服务端补候选统计，旧服务端可能缺失。 */
+export interface MemoryPackStats {
+  sources?: number;
+  experiences?: number;
+  rooms?: number;
+  distinct_texts?: number;
+  messages?: number;
+  senders?: number;
+  deduped?: number;
+  [key: string]: unknown;
 }
 
 export interface MemoryPack {
@@ -48,7 +67,8 @@ export interface MemoryPack {
   items_bytes: number;
   truncated: boolean;
   omitted: number;
-  stats: JsonObject;
+  occurrence_count: number;
+  stats: MemoryPackStats;
   semantic: JsonObject;
   injection: JsonObject;
 }
@@ -65,20 +85,47 @@ function nullableText(value: unknown): string | null {
   return text.length > 0 ? text : null;
 }
 
+function boundedTextList(value: unknown, max: number): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const entry of asArray(value)) {
+    const text = asString(entry);
+    if (text.length === 0 || seen.has(text)) continue;
+    seen.add(text);
+    result.push(text);
+    if (result.length >= max) break;
+  }
+  return result;
+}
+
+function nonNegativeCount(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : fallback;
+}
+
 function parseItem(value: unknown): MemoryPackItem | null {
   const item = asRecord(value);
   const text = asString(item.text);
   if (text.length === 0) return null;
+  const sourceMessageId = nullableText(item.source_message_id);
+  const senderId = nullableText(item.sender_id);
   return {
     item_id: asString(item.item_id),
     kind: asString(item.kind),
     text,
     text_bytes: typeof item.text_bytes === 'number' ? item.text_bytes : Buffer.byteLength(text, 'utf8'),
     origin_room_id: nullableText(item.origin_room_id),
-    source_message_id: nullableText(item.source_message_id),
-    sender_id: nullableText(item.sender_id),
+    source_message_id: sourceMessageId,
+    sender_id: senderId,
+    sender_name: nullableText(item.sender_name),
     evidence: nullableText(item.evidence),
     source_kind: nullableText(item.source_kind),
+    occurrences: Math.max(1, nonNegativeCount(item.occurrences, 1)),
+    message_count: nonNegativeCount(item.message_count, sourceMessageId ? 1 : 0),
+    sender_count: nonNegativeCount(item.sender_count, senderId ? 1 : 0),
+    message_ids: boundedTextList(item.message_ids, LIMITS.memoryInjectItemMessageIdsMax),
+    sender_ids: boundedTextList(item.sender_ids, LIMITS.memoryInjectItemSenderIdsMax),
   };
 }
 
@@ -87,6 +134,10 @@ export function parseMemoryPack(data: JsonObject): MemoryPack | null {
   const packId = asString(data.pack_id);
   if (packId.length === 0) return null;
   const rawItems = asArray(data.items);
+  const items = rawItems
+    .map(parseItem)
+    .filter((item): item is MemoryPackItem => item !== null);
+  const itemCount = typeof data.item_count === 'number' ? data.item_count : rawItems.length;
   return {
     pack_id: packId,
     trigger: asString(data.trigger, 'message'),
@@ -97,12 +148,13 @@ export function parseMemoryPack(data: JsonObject): MemoryPack | null {
     expires_at: typeof data.expires_at === 'number' ? data.expires_at : 0,
     room_id: asString(data.room_id),
     message_id: nullableText(data.message_id),
-    items: rawItems.map(parseItem).filter((item): item is MemoryPackItem => item !== null),
-    item_count: typeof data.item_count === 'number' ? data.item_count : rawItems.length,
+    items,
+    item_count: itemCount,
     items_bytes: typeof data.items_bytes === 'number' ? data.items_bytes : 0,
     truncated: data.truncated === true,
     omitted: typeof data.omitted === 'number' ? data.omitted : 0,
-    stats: asRecord(data.stats),
+    occurrence_count: nonNegativeCount(data.occurrence_count, itemCount),
+    stats: asRecord(data.stats) as MemoryPackStats,
     semantic: asRecord(data.semantic),
     injection: asRecord(data.injection),
   };
@@ -200,6 +252,8 @@ export function memoryEventFields(
         items_bytes: 0,
         truncated: false,
         omitted: 0,
+        occurrence_count: 0,
+        stats: {},
       },
     memory_context_bytes: pack?.items_bytes ?? 0,
     memory_context_truncated: pack?.truncated ?? false,
@@ -217,7 +271,18 @@ export function memoryPromptBlock(result: MemoryContextResult): string {
   const asOf = pack.as_of > 0 ? new Date(pack.as_of).toISOString() : 'unknown';
   const lines = pack.items.map((item) => {
     const label = item.kind === 'experience' ? '经历' : '来源';
-    return `- [${label}] ${item.text}`;
+    const tags: string[] = [];
+    const sender = item.sender_name
+      ? item.sender_id
+        ? `${item.sender_name}(${item.sender_id})`
+        : item.sender_name
+      : item.sender_id;
+    if (sender) tags.push(`发送者=${promptLabel(sender)}`);
+    if (item.source_message_id) tags.push(`消息=${promptLabel(item.source_message_id)}`);
+    if (item.evidence) tags.push(`证据=${promptLabel(item.evidence)}`);
+    if (item.occurrences > 1) tags.push(`重复=${item.occurrences}`);
+    const suffix = tags.length > 0 ? `（${tags.join('，')}）` : '';
+    return `- [${label}] ${item.text}${suffix}`;
   });
   return [
     `[MEMORY CONTEXT — reference data, as_of=${asOf}, pack=${pack.pack_id}]`,
@@ -225,4 +290,11 @@ export function memoryPromptBlock(result: MemoryContextResult): string {
     ...lines,
     '[/MEMORY CONTEXT]',
   ].join('\n');
+}
+
+/** 短标签：折叠空白并截断；只影响展示，不改变字段语义。 */
+function promptLabel(value: string): string {
+  const chars = Array.from(value.replace(/\s+/gu, ' ').trim());
+  if (chars.length <= LIMITS.memoryPromptLabelMaxChars) return chars.join('');
+  return `${chars.slice(0, LIMITS.memoryPromptLabelMaxChars - 1).join('')}…`;
 }

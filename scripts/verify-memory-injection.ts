@@ -22,6 +22,7 @@ import {
 } from '../src/memory/injection';
 import { getActor } from '../src/storage/queries';
 import { sha256Hex, utf8Bytes } from '../src/storage/db';
+import { LIMITS } from '../src/contracts/limits';
 import { check, checkEqual, checksPassed } from './lib/harness';
 import {
   createMemoryEnv,
@@ -73,11 +74,18 @@ interface SeedMemoryInput {
   sourceText: string;
   experienceText: string;
   order?: number;
+  /** 默认 message；task_offer 用于验证非 message 来源不带出 message_id。 */
+  sourceKind?: 'message' | 'task_offer';
+  businessRefJson?: string;
 }
 
 async function seedMemory(env: MemoryTestEnv, input: SeedMemoryInput): Promise<void> {
   const suffix = unique('inj');
   const order = input.order ?? 1;
+  const sourceKind = input.sourceKind ?? 'message';
+  const businessRefKind = sourceKind === 'message' ? 'message' : 'task';
+  const businessRefJson =
+    input.businessRefJson ?? JSON.stringify({ message_id: input.messageId });
   const sourceId = `msrc_${suffix}`;
   const representationId = `mrep_${suffix}`;
   const experienceId = `mexp_${suffix}`;
@@ -93,13 +101,15 @@ async function seedMemory(env: MemoryTestEnv, input: SeedMemoryInput): Promise<v
           origin_joined_at, origin_archive_head_seq, origin_seq, origin_created_at,
           author_actor_id, state, revision, content_text, content_sha256, content_bytes,
           created_at, updated_at)
-       VALUES (?, ?, ?, 'message', 'message', ?, ?, 1, 0, 0, 0, NULL, ?, ?, ?, 'active', 1, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0, 0, 0, NULL, ?, ?, ?, 'active', 1, ?, ?, ?, ?, ?)`,
     )
     .run(
       sourceId,
       INSTANCE,
-      `message:${input.messageId}:${suffix}`,
-      JSON.stringify({ message_id: input.messageId }),
+      `${sourceKind}:${input.messageId}:${suffix}`,
+      sourceKind,
+      businessRefKind,
+      businessRefJson,
       input.roomId,
       order,
       AT + order,
@@ -361,6 +371,20 @@ async function main(): Promise<void> {
     experienceText: `${markerOtherAgent} B 自己的经历`,
     order: 3,
   });
+  const taskOfferMarker = 'ROOM_A_TASK_OFFER_MARKER';
+  await seedMemory(env, {
+    agentId: agentA,
+    spaceId: spaceA.space.space_id,
+    epoch: spaceA.space.ownership_epoch,
+    roomId: roomA,
+    messageId: msgA2,
+    senderId: human,
+    sourceKind: 'task_offer',
+    businessRefJson: JSON.stringify({ task_id: 'tsk_inj_offer', message_id: msgA2 }),
+    sourceText: `${taskOfferMarker} 待办来源`,
+    experienceText: `${taskOfferMarker} 待办经历`,
+    order: 4,
+  });
 
   const envA = memoryEnv(env);
   const principalA = await principalOf(env, agentA);
@@ -407,7 +431,30 @@ async function main(): Promise<void> {
     check('包内没有 Bearer 原值', !allTextA.includes('abcdefghijklmnop'), allTextA);
     check('凭据片段被掩码', allTextA.includes('[已隐藏]'), allTextA);
     check('控制字符被清理', !allTextA.includes('\u0000'), JSON.stringify(allTextA));
-    check('来源标记包含 source_message_id', packA.items.every((item) => item.source_message_id !== null));
+    const messageItems = packA.items.filter((item) => item.source_kind === 'message');
+    check(
+      'message 来源保留 source_message_id',
+      messageItems.length > 0 && messageItems.every((item) => item.source_message_id === msgA1),
+      messageItems,
+    );
+    const taskOfferItems = packA.items.filter((item) => item.source_kind === 'task_offer');
+    check(
+      'task_offer 来源 source_message_id 为 null',
+      taskOfferItems.length === 2 &&
+        taskOfferItems.every(
+          (item) =>
+            item.source_message_id === null &&
+            item.message_count === 0 &&
+            item.message_ids.length === 0,
+        ),
+      taskOfferItems,
+    );
+    check(
+      'task_offer 的 business_ref message id 不进入包',
+      !JSON.stringify(packA).includes(msgA2),
+      packA.items,
+    );
+    checkEqual('task_offer 不计入候选消息数', packA.stats.messages, 1);
 
     const same = await callPack(serverA.client, { room_id: roomA });
     checkEqual('相同输入 pack_id 稳定', same.pack_id, packA.pack_id);
@@ -564,6 +611,114 @@ async function main(): Promise<void> {
     check('仍有可用条目', bigPack.items.length > 0, bigPack.items.length);
   } finally {
     await bigServer.close();
+  }
+
+  // 计数口径：同 sender 重发、不同 sender 同文、experience/source 同文。
+  const countEnv = createMemoryEnv();
+  const countAgent = unique('agt_inj_count');
+  const senderOne = unique('usr_inj_sender_one');
+  const senderTwo = unique('usr_inj_sender_two');
+  const longSenderName = `Alice api_key=supersecret123456 ${'x'.repeat(200)}`;
+  seedActor(countEnv, { actorId: countAgent, kind: 'agent' });
+  seedActor(countEnv, { actorId: senderOne, kind: 'human', name: longSenderName });
+  seedActor(countEnv, { actorId: senderTwo, kind: 'human', name: 'Bob' });
+  const countRoom = unique('rm_inj_count');
+  seedRoom(countEnv, {
+    roomId: countRoom,
+    kind: 'group',
+    ownerId: senderOne,
+    headSeq: 15,
+    members: [
+      { actorId: senderOne, role: 'owner' },
+      { actorId: senderTwo },
+      { actorId: countAgent },
+    ],
+    now: AT,
+  });
+  const countSpace = await ensureAgentSpace(countEnv.d1, {
+    agentId: countAgent,
+    instanceId: INSTANCE,
+    now: AT,
+  });
+  if (countSpace.status !== 'created' && countSpace.status !== 'existing') {
+    throw new Error('space count');
+  }
+  const sharedText = `COUNT-MARKER-${crypto.randomUUID().slice(0, 8)} 同一条文本`;
+  for (let index = 0; index < 15; index += 1) {
+    // 后 10 条由 senderOne 发送，使 created_at 最新的一条带长显示名。
+    const senderId = index < 5 ? senderTwo : senderOne;
+    const messageId = unique('msg_inj_count');
+    insertMessage(countEnv, {
+      messageId,
+      roomId: countRoom,
+      senderId,
+      seq: index + 1,
+      body: sharedText,
+    });
+    await seedMemory(countEnv, {
+      agentId: countAgent,
+      spaceId: countSpace.space.space_id,
+      epoch: countSpace.space.ownership_epoch,
+      roomId: countRoom,
+      messageId,
+      senderId,
+      sourceText: sharedText,
+      experienceText: sharedText,
+      order: index + 1,
+    });
+  }
+  const countPrincipal = await principalOf(countEnv, countAgent);
+  const countServer = await connectServer(memoryEnv(countEnv), countPrincipal);
+  try {
+    const counted = await callPack(countServer.client, { room_id: countRoom });
+    checkEqual('计数：experience/source 不跨 kind 折叠', counted.item_count, 2);
+    checkEqual('计数：experience 条目数', counted.stats.experiences, 1);
+    checkEqual('计数：source 条目数', counted.stats.sources, 1);
+    checkEqual('计数：候选行数 occurrence_count=30', counted.occurrence_count, 30);
+    checkEqual('计数：distinct_texts=1', counted.stats.distinct_texts, 1);
+    checkEqual('计数：候选消息数=15', counted.stats.messages, 15);
+    checkEqual('计数：候选发送者数=2', counted.stats.senders, 2);
+    checkEqual('计数：deduped=29', counted.stats.deduped, 29);
+    checkEqual('计数：未因折叠误报截断', counted.truncated, false);
+    checkEqual('计数：未省略条目', counted.omitted, 0);
+    for (const item of counted.items) {
+      checkEqual(`计数：${item.kind} occurrences=15`, item.occurrences, 15);
+      checkEqual(`计数：${item.kind} message_count=15`, item.message_count, 15);
+      checkEqual(`计数：${item.kind} sender_count=2`, item.sender_count, 2);
+      checkEqual(
+        `计数：${item.kind} message_ids 有上限`,
+        item.message_ids.length,
+        LIMITS.memoryInjectItemMessageIdsMax,
+      );
+      checkEqual(
+        `计数：${item.kind} sender_ids 去重`,
+        new Set(item.sender_ids).size,
+        2,
+      );
+    }
+    const experienceItem = counted.items.find((item) => item.kind === 'experience')!;
+    checkEqual('计数：同 sender 重发仍是一条事件', experienceItem.sender_ids[0], senderOne);
+    check(
+      'sender_name 掩码',
+      experienceItem.sender_name?.includes('[已隐藏]') === true,
+      experienceItem.sender_name,
+    );
+    check(
+      'sender_name 截断',
+      Array.from(experienceItem.sender_name ?? '').length <=
+        LIMITS.memoryProvenanceNameMaxChars,
+      experienceItem.sender_name,
+    );
+
+    const limitedCount = await callPack(countServer.client, { room_id: countRoom, limit: 1 });
+    checkEqual('计数：limit 后返回条目数', limitedCount.item_count, 1);
+    checkEqual('计数：limit 省略去重文本组', limitedCount.omitted, 1);
+    checkEqual('计数：limit 标记截断', limitedCount.truncated, true);
+    checkEqual('计数：裁剪不改 occurrence_count', limitedCount.occurrence_count, 30);
+    checkEqual('计数：裁剪不改候选统计', limitedCount.stats.messages, 15);
+    checkEqual('计数：裁剪不改候选发送者', limitedCount.stats.senders, 2);
+  } finally {
+    await countServer.close();
   }
 
   // 超时：候选查询故意不返回，外层必须降级为空包而不是错误。

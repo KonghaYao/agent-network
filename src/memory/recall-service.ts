@@ -25,11 +25,14 @@ import type {
 import {
   MEMORY_POLICY_VERSION,
   type MemoryExactRepresentation,
+  type MemoryProvenance,
   type MemoryRecallInput,
   type MemoryRecallItem,
   type MemoryRecallEvidenceKind,
   type MemoryRecallResult,
   type MemoryRecallStatus,
+  type MemoryRepresentation,
+  type MemorySourceRef,
   type MemorySpaceRef,
   type MemoryTargetScope,
 } from './contracts';
@@ -39,6 +42,7 @@ import {
 } from './access';
 import { createLookupMemoryContext, resolveContextOriginScope } from './context';
 import { loadRepresentationExact } from './experience-source';
+import { loadSourceProvenance, mergeProvenance } from './provenance';
 import { requireHostBinding, integrationLevel, bindingCapabilities } from './input-manifest';
 import { hostSupports } from './contracts';
 import { assertRecallMessageVisible, taskTargetUnsupported } from './target';
@@ -73,6 +77,35 @@ function evidenceRank(evidence: string | null): number {
   if (evidence === 'gateway_observed_submitted') return 2;
   if (evidence === 'host_reported_submitted') return 1;
   return 0;
+}
+
+function sourceOfRepresentation(
+  representation: MemoryRepresentation,
+): MemorySourceRef | null {
+  return representation.kind === 'raw_full' ||
+    representation.kind === 'raw_fragment' ||
+    representation.kind === 'preview'
+    ? {
+        source_id: representation.source_id,
+        source_revision: representation.source_revision,
+      }
+    : null;
+}
+
+/**
+ * 本地 `memory_sources` 优先，Hindsight metadata 快照兜底；两者都没有为 null。
+ * 本地行不存在（例如旧数据被 Hindsight 丢弃 metadata）时仍可解析 retain 快照，
+ * 但绝不会把快照当授权依据。
+ */
+async function provenanceOfHit(
+  db: D1Like,
+  representation: MemoryRepresentation,
+  source: MemorySourceRef | null,
+  remote: MemoryProvenance | null | undefined,
+): Promise<MemoryProvenance | null> {
+  const localSource = source ?? sourceOfRepresentation(representation);
+  const local = localSource ? await loadSourceProvenance(db, localSource) : null;
+  return mergeProvenance(local, remote ?? null);
 }
 
 /**
@@ -407,19 +440,13 @@ async function buildBootstrapResult(
     if (!decision.allowed) continue;
     const origin = await resolveContextOriginScope(db, exact.representation);
     if (!origin) continue;
+    const source = sourceOfRepresentation(exact.representation);
     items.push({
       origin_kind: 'experienced',
       representation: exact.representation,
       evidence,
-      source:
-        exact.representation.kind === 'raw_full' ||
-        exact.representation.kind === 'raw_fragment' ||
-        exact.representation.kind === 'preview'
-          ? {
-              source_id: exact.representation.source_id,
-              source_revision: exact.representation.source_revision,
-            }
-          : null,
+      source,
+      provenance: await provenanceOfHit(db, exact.representation, source, null),
       score: null,
       trust: 'reference_data',
     });
@@ -700,6 +727,7 @@ export async function recallMemory(
       representation: exact.representation,
       evidence: hit.evidence,
       source: hit.source,
+      provenance: await provenanceOfHit(db, exact.representation, hit.source, hit.provenance),
       score: hit.score,
       trust: 'reference_data',
     });

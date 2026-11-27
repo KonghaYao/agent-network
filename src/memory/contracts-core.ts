@@ -401,6 +401,24 @@ export interface MemorySource extends MemorySourceRef {
   created_at: number;
 }
 
+/**
+ * 记忆来源快照（provenance）。
+ *
+ * 只用于展示与引用，不参与授权、成员资格、证据等级或 delivery 状态判断。
+ * `author_actor_id` 是唯一身份；`author_name` 只是 retain 时或读取时的显示名
+ * 快照，可能已改名或与他人同名。`occurred_at` 与
+ * `memory_sources.origin_created_at` 一致，是 epoch 毫秒。
+ */
+export interface MemoryProvenance {
+  author_actor_id: string | null;
+  author_name: string | null;
+  author_name_source: 'retain_snapshot' | 'read_current' | null;
+  source_kind: MemorySourceKind | null;
+  origin_room_id: string | null;
+  source_message_id: string | null;
+  occurred_at: number | null;
+}
+
 export const MEMORY_REPRESENTATION_KINDS = [
   'raw_full',
   'raw_fragment',

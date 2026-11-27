@@ -246,7 +246,7 @@ export function registerMemoryTools(
   registerMemoryTool(
     server,
     'network_memory_context_pack',
-    '读取当前 Agent 自己空间的只读记忆参考包：按 room_id 硬过滤 origin_room_id，可选 message_id 与有界 limit/query；返回来源/经历摘要、计数、来源标记与截断信息。只读 SQLite，不调用 Hindsight，不写 memory_contexts/operations/events/outbox，不产生 lookup/bound 注入许可。人类身份、跨 Agent、跨房间与撤销凭据均拒绝；无空间/无内容/超时返回 available=false 的空包，不阻塞投递。',
+    '读取当前 Agent 自己空间的只读记忆参考包：按 room_id 硬过滤 origin_room_id，可选 message_id 与有界 limit/query；返回来源/经历摘要、来源标记（sender_id/sender_name/source_message_id/evidence/occurrences/message_ids/sender_ids）与计数。计数口径：item_count 是返回条目数（去重文本组），不是消息数；stats.distinct_texts 是候选中的不同文本数；stats.messages/senders 是候选中的去重消息/发送者数；occurrence_count 是候选出现次数；omitted/truncated 只表示因 limit/字节预算未返回的去重文本组，重复被折叠不算截断。只读 SQLite，不调用 Hindsight，不写 memory_contexts/operations/events/outbox，不产生 lookup/bound 注入许可。人类身份、跨 Agent、跨房间与撤销凭据均拒绝；无空间/无内容/超时返回 available=false 的空包，不阻塞投递。',
     memoryContextPackInputSchema,
     memoryContextPackOutputSchema,
     async (input) => {
@@ -281,7 +281,7 @@ export function registerMemoryTools(
   registerMemoryTool(
     server,
     'network_memory_recall',
-    '显式召回当前 Agent 已有记忆或按目标预热。lookup/reflect 返回参考数据与 lookup Context，永不携带注入许可；auto 必须绑定有效 HostBinding 与准确消息目标，且仍只是预热。status=pending/unavailable/unsupported/disabled 如实返回；结果不改变聊天、delivery 或 pending_count。',
+    '显式召回当前 Agent 已有记忆或按目标预热。lookup/reflect 返回参考数据与 lookup Context，永不携带注入许可；items[].provenance 只返回白名单来源快照（author_actor_id/author_name/author_name_source/source_kind/origin_room_id/source_message_id/occurred_at），不返回 document_id/chunk_id/原始 metadata/内部 tags；本地 source 优先，旧数据缺失时回退 retain 快照，provenance 不是授权依据。auto 必须绑定有效 HostBinding 与准确消息目标，且仍只是预热。status=pending/unavailable/unsupported/disabled 如实返回；结果不改变聊天、delivery 或 pending_count。',
     memoryRecallInputSchema,
     memoryRecallOutputSchema,
     async (input) => {

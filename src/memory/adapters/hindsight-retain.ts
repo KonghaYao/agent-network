@@ -7,6 +7,7 @@ import type {
   MemorySpaceRef,
 } from '../contracts';
 import type { MemoryAdapterRetainItem } from './types';
+import { serializeProvenance } from '../provenance';
 import {
   ORIGIN_TAG,
   RAW_KINDS,
@@ -106,6 +107,9 @@ async function buildRetainItem(
       representation.partition_proof.generation,
     );
   }
+  // 只加一个版本化 JSON 键；不写 document/chunk/raw tags/正文/token。
+  const provenance = serializeProvenance(item.provenance ?? null);
+  if (provenance !== null) metadata.agentnet_provenance = provenance;
 
   // observation scope 只允许同 origin + source revision 或同表示内汇总。
   const scope: string[] = [`${ORIGIN_TAG}${item.origin_kind}`];

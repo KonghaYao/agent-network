@@ -18,6 +18,7 @@ import {
   type MemoryOperationId,
   type MemoryOperationStage,
   type MemoryOriginKind,
+  type MemoryProvenance,
   type MemoryPurgeState,
   type MemoryRecallBudget,
   type MemoryRecallId,
@@ -158,6 +159,8 @@ export interface MemoryRecallItem {
   representation: MemoryRepresentation;
   evidence: MemoryRecallEvidenceKind | null;
   source: MemorySourceRef | null;
+  /** 白名单来源快照；只用于展示/引用，不是授权依据。 */
+  provenance: MemoryProvenance | null;
   score: number | null;
   trust: typeof MEMORY_PAYLOAD_AUTHORITY;
 }

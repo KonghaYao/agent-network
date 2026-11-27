@@ -42,8 +42,20 @@ export interface MemoryInjectionItem {
   origin_room_id: string;
   source_message_id: string | null;
   sender_id: string | null;
+  /** 展示名快照；身份仍只认 `sender_id`。 */
+  sender_name: string | null;
   evidence: string | null;
   source_kind: string | null;
+  /** 该文本折叠的候选行数（同一 kind 内）。 */
+  occurrences: number;
+  /** 该文本关联的去重 source_message_id 数。 */
+  message_count: number;
+  /** 该文本关联的去重 sender_id 数。 */
+  sender_count: number;
+  /** 最多 `memoryInjectItemMessageIdsMax` 个；完整数量看 message_count。 */
+  message_ids: string[];
+  /** 最多 `memoryInjectItemSenderIdsMax` 个；完整数量看 sender_count。 */
+  sender_ids: string[];
 }
 
 export interface MemoryInjectionPack {
@@ -57,14 +69,28 @@ export interface MemoryInjectionPack {
   room_id: string;
   message_id: string | null;
   items: MemoryInjectionItem[];
+  /** 返回的条目数（去重文本组），不是消息数。 */
   item_count: number;
   items_bytes: number;
   truncated: boolean;
+  /** 因 limit/字节预算未返回的去重文本组数。 */
   omitted: number;
+  /** 本次扫描到的候选行数（含被折叠/未返回的候选）。 */
+  occurrence_count: number;
   stats: {
+    /** 返回的 source item 数。 */
     sources: number;
+    /** 返回的 experience item 数。 */
     experiences: number;
     rooms: number;
+    /** 候选中的不同文本数。 */
+    distinct_texts: number;
+    /** 候选中的去重消息数。 */
+    messages: number;
+    /** 候选中的去重发送者数。 */
+    senders: number;
+    /** occurrence_count - distinct_texts。 */
+    deduped: number;
   };
   semantic: {
     status: 'not_requested';
@@ -100,6 +126,7 @@ interface ExperienceCandidate {
   text: string;
   text_sha256: string;
   sender_id: string | null;
+  sender_name: string | null;
   source_kind: string | null;
   source_message_id: string | null;
 }
@@ -110,6 +137,7 @@ interface SourceCandidate {
   origin_room_id: string;
   source_kind: string;
   sender_id: string | null;
+  sender_name: string | null;
   text: string;
   text_sha256: string;
   created_at: number;
@@ -156,7 +184,21 @@ function itemBytes(items: readonly MemoryInjectionItem[]): number {
   return items.reduce((sum, item) => sum + item.text_bytes, 0);
 }
 
-function statsOf(items: readonly MemoryInjectionItem[]): MemoryInjectionPack['stats'] {
+function prepareSenderName(value: string | null): string | null {
+  if (!value) return null;
+  const masked = maskSecrets(value).trim();
+  if (masked.length === 0) return null;
+  const chars = Array.from(masked);
+  return chars.length > LIMITS.memoryProvenanceNameMaxChars
+    ? chars.slice(0, LIMITS.memoryProvenanceNameMaxChars).join('')
+    : masked;
+}
+
+/** stats 里随返回条目变化的计数；裁剪 items 后需要重算这三个。 */
+function returnedCounts(items: readonly MemoryInjectionItem[]): Pick<
+  MemoryInjectionPack['stats'],
+  'sources' | 'experiences' | 'rooms'
+> {
   let sources = 0;
   let experiences = 0;
   for (const item of items) {
@@ -164,6 +206,21 @@ function statsOf(items: readonly MemoryInjectionItem[]): MemoryInjectionPack['st
     else experiences += 1;
   }
   return { sources, experiences, rooms: items.length > 0 ? 1 : 0 };
+}
+
+/** 候选集合统计只由扫描结果决定，不因 limit/字节裁剪而改变。 */
+function packStats(
+  items: readonly MemoryInjectionItem[],
+  candidates: { texts: Set<string>; messages: Set<string>; senders: Set<string> },
+  occurrenceCount: number,
+): MemoryInjectionPack['stats'] {
+  return {
+    ...returnedCounts(items),
+    distinct_texts: candidates.texts.size,
+    messages: candidates.messages.size,
+    senders: candidates.senders.size,
+    deduped: Math.max(0, occurrenceCount - candidates.texts.size),
+  };
 }
 
 async function packId(parts: Record<string, unknown>): Promise<string> {
@@ -191,7 +248,8 @@ async function finalizePack(
       items_bytes: itemBytes(candidate.items),
       truncated: true,
       omitted: candidate.omitted + 1,
-      stats: statsOf(candidate.items),
+      // distinct/messages/senders 是候选统计，不随裁剪变化。
+      stats: { ...candidate.stats, ...returnedCounts(candidate.items) },
     };
   }
   candidate.pack_id = await packId({
@@ -240,7 +298,16 @@ async function emptyPack(
       items_bytes: 0,
       truncated: false,
       omitted: 0,
-      stats: { sources: 0, experiences: 0, rooms: 0 },
+      occurrence_count: 0,
+      stats: {
+        sources: 0,
+        experiences: 0,
+        rooms: 0,
+        distinct_texts: 0,
+        messages: 0,
+        senders: 0,
+        deduped: 0,
+      },
       semantic: { status: 'not_requested', context_ref: null },
       injection: { eligible: false, admit_required: true, reason: 'advisory_only' },
     },
@@ -304,12 +371,16 @@ async function collectExperiences(
               r.text AS text,
               r.text_sha256 AS text_sha256,
               s.author_actor_id AS sender_id,
+              a.name AS sender_name,
               s.source_kind AS source_kind,
-              json_extract(s.business_ref_json, '$.message_id') AS source_message_id
+              CASE WHEN s.source_kind = 'message'
+                   THEN json_extract(s.business_ref_json, '$.message_id')
+              END AS source_message_id
          FROM memory_experiences e
          JOIN memory_representations r ON r.representation_id = e.representation_id
          LEFT JOIN memory_sources s
                 ON s.source_id = e.source_id AND s.revision = e.source_revision
+         LEFT JOIN actors a ON a.actor_id = s.author_actor_id
         WHERE e.space_id = ?
           AND e.ownership_epoch = ?
           AND e.agent_actor_id = ?
@@ -355,11 +426,15 @@ async function collectSources(
               s.origin_room_id,
               s.source_kind,
               s.author_actor_id AS sender_id,
+              a.name AS sender_name,
               s.content_text AS text,
               s.content_sha256 AS text_sha256,
               s.created_at,
-              json_extract(s.business_ref_json, '$.message_id') AS source_message_id
+              CASE WHEN s.source_kind = 'message'
+                   THEN json_extract(s.business_ref_json, '$.message_id')
+              END AS source_message_id
          FROM memory_sources s
+         LEFT JOIN actors a ON a.actor_id = s.author_actor_id
         WHERE s.state = 'active'
           AND s.origin_room_id = ?
           AND s.content_text IS NOT NULL AND s.content_text <> ''
@@ -435,15 +510,80 @@ export async function buildInjectionPack(
     query,
   });
 
-  const seen = new Set<string>();
-  const items: MemoryInjectionItem[] = [];
-  const candidates: number = experiences.length + sources.length;
+  interface Group {
+    item: MemoryInjectionItem;
+    messages: Set<string>;
+    senders: Set<string>;
+  }
+  const groups = new Map<string, Group>();
+  const returned: Group[] = [];
+  const candidateStats = {
+    texts: new Set<string>(),
+    messages: new Set<string>(),
+    senders: new Set<string>(),
+  };
+  let occurrenceCount = 0;
+  let omitted = 0;
 
-  const push = (item: MemoryInjectionItem, dedupe: string): void => {
-    if (items.length >= limit) return;
-    if (seen.has(dedupe)) return;
-    seen.add(dedupe);
-    items.push(item);
+  const push = (input: {
+    kind: MemoryInjectionItem['kind'];
+    itemId: string;
+    text: string;
+    textKey: string;
+    sourceMessageId: string | null;
+    senderId: string | null;
+    senderName: string | null;
+    evidence: string | null;
+    sourceKind: string | null;
+  }): void => {
+    occurrenceCount += 1;
+    candidateStats.texts.add(input.textKey);
+    if (input.sourceMessageId) candidateStats.messages.add(input.sourceMessageId);
+    if (input.senderId) candidateStats.senders.add(input.senderId);
+
+    // 同 kind 同文本折叠为一条；跨 kind 不折叠，保留“房间原文 vs Agent 经历”。
+    const groupKey = `${input.kind}\u0000${input.textKey}`;
+    const existing = groups.get(groupKey);
+    if (existing) {
+      existing.item.occurrences += 1;
+      if (input.sourceMessageId) existing.messages.add(input.sourceMessageId);
+      if (input.senderId) existing.senders.add(input.senderId);
+      existing.item.message_count = existing.messages.size;
+      existing.item.sender_count = existing.senders.size;
+      existing.item.message_ids = [...existing.messages].slice(
+        0,
+        LIMITS.memoryInjectItemMessageIdsMax,
+      );
+      existing.item.sender_ids = [...existing.senders].slice(
+        0,
+        LIMITS.memoryInjectItemSenderIdsMax,
+      );
+      return;
+    }
+    const group: Group = {
+      item: {
+        item_id: input.itemId,
+        kind: input.kind,
+        text: input.text,
+        text_bytes: utf8Bytes(input.text),
+        origin_room_id: options.roomId,
+        source_message_id: input.sourceMessageId,
+        sender_id: input.senderId,
+        sender_name: input.senderName,
+        evidence: input.evidence,
+        source_kind: input.sourceKind,
+        occurrences: 1,
+        message_count: input.sourceMessageId ? 1 : 0,
+        sender_count: input.senderId ? 1 : 0,
+        message_ids: input.sourceMessageId ? [input.sourceMessageId] : [],
+        sender_ids: input.senderId ? [input.senderId] : [],
+      },
+      messages: new Set(input.sourceMessageId ? [input.sourceMessageId] : []),
+      senders: new Set(input.senderId ? [input.senderId] : []),
+    };
+    groups.set(groupKey, group);
+    if (returned.length < limit) returned.push(group);
+    else omitted += 1;
   };
 
   for (const row of experiences) {
@@ -451,40 +591,35 @@ export async function buildInjectionPack(
     if (row.origin_room_id !== options.roomId) continue;
     const text = prepareItemText(row.text);
     if (text.length === 0) continue;
-    push(
-      {
-        item_id: `exp:${row.experience_id}`,
-        kind: 'experience',
-        text,
-        text_bytes: utf8Bytes(text),
-        origin_room_id: options.roomId,
-        source_message_id: row.source_message_id,
-        sender_id: row.sender_id,
-        evidence: row.evidence,
-        source_kind: row.source_kind,
-      },
-      row.text_sha256 || text,
-    );
+    push({
+      kind: 'experience',
+      itemId: `exp:${row.experience_id}`,
+      text,
+      textKey: row.text_sha256 || text,
+      sourceMessageId: row.source_message_id,
+      senderId: row.sender_id,
+      senderName: prepareSenderName(row.sender_name),
+      evidence: row.evidence,
+      sourceKind: row.source_kind,
+    });
   }
   for (const row of sources) {
     if (row.origin_room_id !== options.roomId) continue;
     const text = prepareItemText(row.text);
     if (text.length === 0) continue;
-    push(
-      {
-        item_id: `src:${row.source_id}:${row.revision}`,
-        kind: 'source',
-        text,
-        text_bytes: utf8Bytes(text),
-        origin_room_id: options.roomId,
-        source_message_id: row.source_message_id,
-        sender_id: row.sender_id,
-        evidence: null,
-        source_kind: row.source_kind,
-      },
-      row.text_sha256 || text,
-    );
+    push({
+      kind: 'source',
+      itemId: `src:${row.source_id}:${row.revision}`,
+      text,
+      textKey: row.text_sha256 || text,
+      sourceMessageId: row.source_message_id,
+      senderId: row.sender_id,
+      senderName: prepareSenderName(row.sender_name),
+      evidence: null,
+      sourceKind: row.source_kind,
+    });
   }
+  const items = returned.map((group) => group.item);
 
   if (items.length === 0) {
     return await emptyPack('empty', {
@@ -507,9 +642,10 @@ export async function buildInjectionPack(
       items,
       item_count: items.length,
       items_bytes: itemBytes(items),
-      truncated: candidates > items.length,
-      omitted: Math.max(0, candidates - items.length),
-      stats: statsOf(items),
+      truncated: omitted > 0,
+      omitted,
+      occurrence_count: occurrenceCount,
+      stats: packStats(items, candidateStats, occurrenceCount),
       semantic: { status: 'not_requested', context_ref: query },
       injection: { eligible: false, admit_required: true, reason: 'advisory_only' },
     },

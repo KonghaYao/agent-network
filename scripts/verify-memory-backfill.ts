@@ -19,6 +19,7 @@ import { MemoryIntegration } from '../src/memory/integration';
 import { recallMemory } from '../src/memory/recall-service';
 import { MemoryRuntime } from '../src/memory/runtime';
 import { ensureSpaceForAgent } from '../src/memory/store';
+import { parseProvenanceMetadata } from '../src/memory/provenance';
 import { createMemoryEnv, seedActor, seedManagement, seedRoom, spaceRef, unique } from './lib/memory-unit';
 import { FakeHindsight } from './lib/memory-hindsight-fake';
 import { check, checkEqual } from './lib/harness';
@@ -384,7 +385,14 @@ async function basicChecks(): Promise<void> {
   checkEqual('回填后 pack reason=ready', packA.reason, 'ready');
   checkEqual('回填后 pack 非空', packA.item_count > 0, true);
   checkEqual('回填后 pack 有经历', packA.stats.experiences, 1);
-  checkEqual('回填后 pack sources 为 0', packA.stats.sources, 0);
+  // 同文本的 source 与 experience 不再跨 kind 折叠：房间原文仍可单独引用。
+  checkEqual('回填后 pack 保留同文 source', packA.stats.sources, 1);
+  checkEqual('回填后 pack 两个条目', packA.item_count, 2);
+  checkEqual('回填后 pack distinct_texts=1', packA.stats.distinct_texts, 1);
+  checkEqual('回填后 pack occurrence_count=2', packA.occurrence_count, 2);
+  checkEqual('回填后 pack 折叠 1 次', packA.stats.deduped, 1);
+  checkEqual('回填后 pack 未截断', packA.truncated, false);
+  checkEqual('回填后 pack 未省略', packA.omitted, 0);
   checkEqual('pack 只含当前房间', packA.items.every((item) => item.origin_room_id === roomOne), true);
   checkEqual('pack 文本为消息正文', packA.items[0]?.text, `BACKFILL-BODY-${messageOne}`);
   checkEqual('pack 经历携带房间历史证据', packA.items[0]?.evidence, 'gateway_observed_room_history');
@@ -422,7 +430,7 @@ async function basicChecks(): Promise<void> {
     roomId: roomTwo,
     now: AT + 1_000,
   });
-  checkEqual('另一 Agent 在自己房间可见', packB.item_count, 1);
+  checkEqual('另一 Agent 在自己房间可见', packB.item_count, 2);
   checkEqual('另一 Agent 只看到自己房间', packB.items[0]?.origin_room_id, roomTwo);
 
   checkEqual(
@@ -780,7 +788,10 @@ async function multiDayReplayChecks(): Promise<void> {
     now: AT + 1_000,
   });
   checkEqual('多日重放 pack 包含三条经历', pack.stats.experiences, 3);
-  checkEqual('多日重放 pack sources 为 0', pack.stats.sources, 0);
+  // source 与 experience 分开去重：三条房间原文同样各保留一条 source。
+  checkEqual('多日重放 pack 保留三条同文 source', pack.stats.sources, 3);
+  checkEqual('多日重放 pack 六条条目', pack.item_count, 6);
+  checkEqual('多日重放 pack distinct_texts=3', pack.stats.distinct_texts, 3);
   check(
     '多日重放补上 gap 正文',
     pack.items.some((item) => item.text === gapBody),
@@ -1136,6 +1147,51 @@ async function recallEndToEndChecks(): Promise<void> {
     check(
       'recall 不再报 representation_missing',
       !recalled.recall.exclusions.some((item) => item.detail === 'representation_missing'),
+    );
+    const recallProvenance = recalled.recall.items[0]?.provenance;
+    checkEqual('recall provenance author', recallProvenance?.author_actor_id, human);
+    checkEqual('recall provenance 显示名取当前 actor', recallProvenance?.author_name, human);
+    checkEqual(
+      'recall provenance 显示名来源 read_current',
+      recallProvenance?.author_name_source,
+      'read_current',
+    );
+    checkEqual('recall provenance source_kind', recallProvenance?.source_kind, 'message');
+    checkEqual('recall provenance room', recallProvenance?.origin_room_id, roomOne);
+    checkEqual('recall provenance message', recallProvenance?.source_message_id, messageId);
+    checkEqual('recall provenance occurred_at', recallProvenance?.occurred_at, MESSAGE_AT);
+    check(
+      'recall provenance 只含白名单字段',
+      !/document_id|chunk_id|metadata|tags/u.test(JSON.stringify(recallProvenance)),
+      recallProvenance,
+    );
+    check(
+      'retain 请求写入 provenance 快照',
+      parseProvenanceMetadata(fake.documents[0]?.metadata.agentnet_provenance) !== null,
+      fake.documents[0]?.metadata,
+    );
+
+    // 旧数据：Hindsight 丢弃 provenance metadata 时，recall 仍以本地 source row 回退。
+    for (const document of fake.documents) {
+      delete document.metadata.agentnet_provenance;
+    }
+    const fallback = await recallMemory(env.d1, runtime, {
+      instanceId,
+      agentId: agentA,
+      space: spaceA,
+      now: AT + 1_500,
+      input: {
+        request_id: unique('req_bf_fallback'),
+        mode: 'lookup',
+        dispatch: 'explicit',
+        query: body,
+        budget: { candidate_limit: 10, output_bytes: 64 * 1024 },
+      },
+    });
+    checkEqual(
+      '旧数据无 provenance 回退本地 source',
+      JSON.stringify(fallback.recall.items[0]?.provenance),
+      JSON.stringify(recallProvenance),
     );
 
     const strict = await recallMemory(env.d1, runtime, {

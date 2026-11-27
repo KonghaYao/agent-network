@@ -662,6 +662,13 @@ export const LIMITS = {
   memoryInjectMessageMaxItems: 6,
   memoryInjectItemMaxChars: 320,
   memoryInjectItemMaxBytes: 1_024,
+  /** 单条记忆的 sender/message 去重 ID 展示上限；完整次数看 occurrences。 */
+  memoryInjectItemMessageIdsMax: 8,
+  memoryInjectItemSenderIdsMax: 8,
+  /** provenance 显示名快照的最大字符数；身份仍只认 actor_id。 */
+  memoryProvenanceNameMaxChars: 96,
+  /** 注入 prompt 中 sender/message/evidence 短标签的最大字符数。 */
+  memoryPromptLabelMaxChars: 48,
   memoryInjectMessageMaxBytes: 4 * 1024,
   /** 新工具结构化结果的绝对硬上限（16 KiB）；低于 MCP 通用响应上限。 */
   memoryInjectResponseBytes: 16 * 1024,
