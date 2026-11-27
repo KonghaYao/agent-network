@@ -417,6 +417,21 @@ export async function dispatchFocusJob(
       return;
     }
 
+    if (!receipt.accepted) {
+      // 202 但未受理（例如队列拒绝）：保留候选等待下一次恢复重派。
+      observation?.close();
+      await db
+        .prepare(
+          `UPDATE focus_jobs
+              SET status = 'waiting', last_error = 'focus_input_rejected',
+                  lease_until = NULL, updated_at = ?
+            WHERE job_id = ? AND status = 'queued'`,
+        )
+        .bind(at, jobId)
+        .run();
+      return;
+    }
+
     const submitted = await db
       .prepare(
         `UPDATE focus_jobs
