@@ -133,6 +133,8 @@ import type { RegistrationServer } from './registration';
 import { register } from './tool-registration';
 import { registerContactTools } from './contact-tools';
 import { registerFocusTools } from './focus-tools';
+import { registerFocusSecretaryTools } from './focus-secretary-tools';
+import { isFocusServicePrincipal } from '../focus/service';
 import { registerRoomTools } from './room-tools';
 import { registerMessageTools, type ToolHooks } from './message-tools';
 
@@ -152,6 +154,11 @@ export function registerTools(
   principal: Principal,
   hooks: ToolHooks = {},
 ): void {
+  // 秘书服务身份只暴露四个 Focus 工具，避免模型看到并调用房间/消息工具。
+  if (isFocusServicePrincipal(principal)) {
+    registerFocusSecretaryTools(server, { env, principal }, register);
+    return;
+  }
   const db = env.DB;
   const origin = env.PUBLIC_ORIGIN;
   const ticketSecret = fileTicketSecret(env.FILE_TICKET_SECRET);

@@ -26,7 +26,7 @@
 | P0-5 | 两个工作 Agent 各自领取/报告；同名人员/项目；撤回/退群/收紧边界后读卡 | runtime/web 覆盖 delivery 领取、owner 隔离、restricted 遮蔽；未跑两个真实工作 Agent | 本地部分 |
 | P0-6 | 未发言开启、静默领取、只回「收到」、无 @ 改期、重放 | `verify-focus-runtime`：Watch 对普通消息/领取事件建候选、领取流水恰一条、重放不重复；E2E 覆盖无 @ 普通消息建卡 | 本地部分（未跑完整双 Agent 剧本） |
 | P0-7 | 关页面、双端并发启停、迟到/乱序、模型故障、重启、普通 Agent 不在场 | E2E 停服重启后同一秘书/卡保留；运行时覆盖暂停/重开/代次拒绝/租约；真实模型故障与双端并发未跑 | 本地部分 |
-| P0-8 | 独立 Swarm 上同一 SDK 客户端运行秘书与普通群交付角色；双副本回调 | 本地 docker compose 启动 2 副本 + nginx + PG + Rivet；真实模型通过 MCP 建卡/改卡；未跑普通群交付测试角色 | 本地部分通过 |
+| P0-8 | 独立 Swarm 上同一 SDK 客户端运行秘书与普通群交付角色；双副本回调 | 本地 docker compose 启动 2 副本 + nginx + PG + Rivet；服务身份 `tools/list` 仅 4 个 Focus 工具；真实模型通过 MCP 建卡/改卡；未跑普通群交付测试角色 | 本地部分通过 |
 | P0-9 | 4.5 真实链路；断线恢复同一根；串用作业引用；撤权后模型实际输入 | 真实链路已通；断线恢复/同根撤权后的模型输入未做专门注入验证 | 本地部分 / 外部依赖 |
 | P0-10 | 10 万标注事件：新增 10 卡、更新 5 卡、归档复活 0；同一根会话 | 未跑；当前可用确定性夹具在本地跑业务计数，但缺少真实模型与 10 万规模环境 | 外部阻塞 |
 | P0-11 | 带草稿开窗原地收起；跨会话跳到未加载原消息；返回看板 | `verify-focus-web` 59 项：草稿保留、跨房原消息高亮、返回恢复 tab/列/选中/搜索词/滚动断点 | 本地通过 |
@@ -47,7 +47,7 @@
 | `bun scripts/verify-focus-e2e.ts` | 22 项 HTTP 端到端检查通过（假 Swarm；两 owner、归档、重启） |
 | `PERI_SWARM_API_KEY=... bun scripts/verify-focus-live.ts` | 20 项真实 Swarm/真实模型检查通过（两用户、私有群、私聊、归档、重启） |
 | `bun scripts/verify-drizzle-schema.ts` | `schema parity checks passed: 397`（49 个迁移） |
-| `bun scripts/verify-mcp-parity.ts` | `MCP parity passed`，tools 146 |
+| `bun scripts/verify-mcp-parity.ts` | `MCP parity passed`，Human/Agent 142 工具；服务身份 4 工具 |
 | `bun scripts/q01-upgrade-check.ts` | `Q01 升级检查通过: 81 项`（含 0053 零残留） |
 | `bun scripts/verify-protocol.ts` | `协议验收通过: 1101 项`（需本地实例，`PUBLIC_ORIGIN` 显式设置） |
 | `bun scripts/q01-doc-check.ts` | `Q01 文档/工具一致性检查通过: 48 项` |
@@ -74,7 +74,7 @@
    - 首次开启按 C→H 最近 7 天回看（当前从开启水位之后接续）；
    - Web 来源会话筛选；
    - Web 列表超过 50 件时的翻页（计数仍为后端完整口径）。
-3. **服务身份边界**：所有秘书共用一个部署 Bearer；普通 Agent 被拒，跨 owner 由 `attempt_ref` 归属约束。`tools/list` 仍返回全部工具，Swarm 侧 `allowed_tools` 只声明四项，逐项授权在 WeBots 工具层执行。若需从请求区分具体秘书，需要上游传 `binding_ref`。
+3. **服务身份边界**：所有秘书共用一个部署 Bearer；服务身份 `tools/list` 已收窄为 4 个 Focus 工具，跨 owner 由 `attempt_ref` 归属约束。若需从请求区分具体秘书，需要上游传 `binding_ref`。
 4. **Watch 为粗筛**：owner 可见的普通消息与领取事件都会成为候选，相关性交给秘书判断；大群/大流量下候选量与扫描成本偏高，需要真实规模调参。
 5. **旧 Task 受管副本**：本地迁移、升级库与恢复路径已清零；生产备份/快照/外部记忆库中的旧投影需按部署清单核销，本仓库无法执行。
 6. **Memory 枚举**：`memory_sources.source_kind` 仍保留 `task_*` 取值以兼容历史表结构，但停止写入并清理了数据；未重建枚举。

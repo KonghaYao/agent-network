@@ -24,7 +24,6 @@ import {
   provisionFocusBinding,
 } from '../focus/jobs';
 import { requireActor } from './auth';
-import { registerFocusSecretaryTools } from './focus-secretary-tools';
 import {
   focusArchiveResultSchema,
   focusGetResultSchema,
@@ -136,5 +135,4 @@ export function registerFocusTools(
     { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   );
 
-  registerFocusSecretaryTools(server, { env, principal }, register);
 }

@@ -19,7 +19,6 @@ import {
   check,
   checkEqual,
   connectClient,
-  expectToolError,
   newRequestId,
   newToken,
   sleep,
@@ -315,12 +314,15 @@ async function run(): Promise<void> {
       '重启后归档卡仍存在',
       restartedArchived.items.some((item) => item.item_id === linCard.item_id),
     );
-    const humanDenied = await expectToolError(
-      'Human 不能调用秘书工具',
-      callTool(lin.client, 'network_focus_job_get', { attempt_ref: 'fat_live_denied' }),
-      'PERMISSION_DENIED',
-    );
-    check('Human 调用秘书工具返回 PERMISSION_DENIED', humanDenied.code === 'PERMISSION_DENIED');
+    let humanToolDenied = false;
+    try {
+      await callTool(lin.client, 'network_focus_job_get', {
+        attempt_ref: 'fat_live_denied',
+      });
+    } catch {
+      humanToolDenied = true;
+    }
+    check('Human 的工具目录不含秘书工具', humanToolDenied);
   } finally {
     await lin.close().catch(() => undefined);
     await zhou.close().catch(() => undefined);

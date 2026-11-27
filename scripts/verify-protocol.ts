@@ -427,10 +427,6 @@ async function main(): Promise<void> {
     'network_focus_list',
     'network_focus_get',
     'network_focus_archive',
-    'network_focus_job_get',
-    'network_focus_evidence_read',
-    'network_focus_items_find',
-    'network_focus_commit',
   ];
   const roomFileTools = [
     'network_room_file_bind',

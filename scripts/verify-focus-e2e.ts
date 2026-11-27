@@ -269,11 +269,15 @@ async function run(): Promise<void> {
       'NOT_FOUND',
     );
     check('跨 owner 读卡不泄露存在性', cross.code === 'NOT_FOUND');
-    await expectToolError(
-      'Human 不能调用秘书工具',
-      callTool(lin.client, 'network_focus_job_get', { attempt_ref: linJobRef!.attemptRef }),
-      'PERMISSION_DENIED',
-    );
+    let humanToolDenied = false;
+    try {
+      await callTool(lin.client, 'network_focus_job_get', {
+        attempt_ref: linJobRef!.attemptRef,
+      });
+    } catch {
+      humanToolDenied = true;
+    }
+    check('Human 的工具目录不含秘书工具', humanToolDenied);
 
     // 3) 归档屏障：林舟归档后，迟到消息不能复活；秘书尝试更新整批 CONFLICT。
     const archived = await callTool<{ version: number; item_id: string }>(
