@@ -379,10 +379,12 @@ export async function focusItemsFind(
     }
   }
   const visible = new Set<string>();
-  for (const list of evidence.values()) {
+  const restricted = new Set<string>();
+  for (const [itemId, list] of evidence) {
     const reads = await resolveEvidenceReads(db, owner, list);
     for (const row of list) {
-      if (reads.get(row.evidence_id)?.readable === true) visible.add(row.item_id);
+      if (reads.get(row.evidence_id)?.readable === true) visible.add(itemId);
+      else restricted.add(itemId);
     }
   }
   const items: FocusFindItem[] = rows.results
@@ -390,11 +392,12 @@ export async function focusItemsFind(
     .slice(0, LIMITS.focusSecretaryFindMax)
     .map((row) => ({
       item_id: row.item_id,
-      title: row.title,
+      // 任一来源失权时遮蔽依赖证据的标题与下一步，避免借查重泄露私群内容。
+      title: restricted.has(row.item_id) ? '' : row.title,
       column_key: row.column_key as FocusColumn,
       version: row.version,
       archived: row.archived_at !== null,
-      next_step: row.next_step,
+      next_step: restricted.has(row.item_id) ? '' : row.next_step,
     }));
   return { items };
 }
