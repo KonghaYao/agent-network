@@ -24,7 +24,7 @@
 | P0-3 | 逐条回放第 1 节；同账号同卡；两人同刻不同列；周敏不泄露验收群/32/32 | `verify-focus-live`：同一委托两卡不同列；私有验收群进展更新林舟原卡；周敏搜索 32/32 为 0、无该来源 | 本地通过（真实模型，第二次运行已合回原卡） |
 | P0-4 | 林舟归档后迟到回执、同包补发、旧作业重试、同线程独立复盘 | `verify-focus-live`：归档后补发同包，归档卡版本与列不变；`verify-focus-e2e`/runtime 覆盖归档屏障与重放 | 本地通过（真实模型 + 假 Swarm） |
 | P0-5 | 两个工作 Agent 各自领取/报告；同名人员/项目；撤回/退群/收紧边界后读卡 | runtime/web 覆盖 delivery 领取、owner 隔离、restricted 遮蔽；未跑两个真实工作 Agent | 本地部分 |
-| P0-6 | 未发言开启、静默领取、只回「收到」、无 @ 改期、重放 | `verify-focus-runtime`：Watch 对普通消息/领取事件建候选、领取流水恰一条、重放不重复；E2E 覆盖无 @ 普通消息建卡 | 本地部分（未跑完整双 Agent 剧本） |
+| P0-6 | 未发言开启、静默领取、只回「收到」、无 @ 改期、重放 | `verify-focus-live-delivery`：Agent 静默 claim → 卡出现；complete + 无 @ 结果消息 → 原卡进入需要我、来源增加；领取流水 recipient/claimed_by/attempt 正确；runtime 覆盖重放与多条领取 | 本地通过（单 Agent 真实链路） |
 | P0-7 | 关页面、双端并发启停、迟到/乱序、模型故障、重启、普通 Agent 不在场 | E2E 停服重启后同一秘书/卡保留；运行时覆盖暂停/重开/代次拒绝/租约；真实模型故障与双端并发未跑 | 本地部分 |
 | P0-8 | 独立 Swarm 上同一 SDK 客户端运行秘书与普通群交付角色；双副本回调 | 本地 docker compose 启动 2 副本 + nginx + PG + Rivet；服务身份 `tools/list` 仅 4 个 Focus 工具；真实模型通过 MCP 建卡/改卡；未跑普通群交付测试角色 | 本地部分通过 |
 | P0-9 | 4.5 真实链路；断线恢复同一根；串用作业引用；撤权后模型实际输入 | 真实链路已通；断线恢复/同根撤权后的模型输入未做专门注入验证 | 本地部分 / 外部依赖 |
@@ -46,6 +46,7 @@
 | `bun scripts/verify-focus-web.ts` | `59 项检查通过` |
 | `bun scripts/verify-focus-e2e.ts` | 22 项 HTTP 端到端检查通过（假 Swarm；两 owner、归档、重启） |
 | `PERI_SWARM_API_KEY=... bun scripts/verify-focus-live.ts` | 20 项真实 Swarm/真实模型检查通过（两用户、私有群、私聊、归档、重启） |
+| `PERI_SWARM_API_KEY=... bun scripts/verify-focus-live-delivery.ts` | 12 项真实交付领取/完成/原卡更新检查通过 |
 | `bun scripts/verify-drizzle-schema.ts` | `schema parity checks passed: 397`（49 个迁移） |
 | `bun scripts/verify-mcp-parity.ts` | `MCP parity passed`，Human/Agent 142 工具；服务身份 4 工具 |
 | `bun scripts/q01-upgrade-check.ts` | `Q01 升级检查通过: 81 项`（含 0053 零残留） |
