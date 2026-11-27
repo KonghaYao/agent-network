@@ -4,7 +4,7 @@
 - 分支：`feat/webots-v4-task-focus`
 - 基线：WeBots `1b8ccc65`；Peri-Swarm 锁版 `b2dcabfa`；官方 SDK `openai@7.60.0`
 - 范围：本地实现与本地/离线验收。**未部署、未连接真实 Peri-Swarm、未使用真实模型。**
-- 总体结论：个人看板、秘书运行时、Watch、四个秘书工具、Web 浮窗与旧 Task 退役的代码与本地验收已完成；计划中依赖真实模型/独立 Swarm/生产规模的发布项仍为外部阻塞。
+- 总体结论：个人看板、秘书运行时、Watch、四个秘书工具、Web 浮窗与旧 Task 退役的代码已完成；**已启动本地 Peri-Swarm（2 副本 + nginx + PG + Rivet）并用真实模型跑通两用户建卡、私有群隔离、私聊改期、归档与重启**。生产规模、同根撤权与 100 万事件仍未验收。
 
 ## 1. 证据等级
 
@@ -20,14 +20,14 @@
 | # | 计划验收项 | 证据 | 状态 |
 | --- | --- | --- | --- |
 | P0-1 | 代表性备份升级、空库启动、迁移中断重试、干净快照恢复、旧 Task 零残留、普通 IM 对照 | `q01-upgrade-check` 81 项：0053 后无 task 列/索引/guard/旧表，普通消息/引用链/delivery/未读保留；`verify-drizzle-schema` 397 项；空库与升级库索引一致。受管备份/生产快照不可得 | 本地通过（受管副本外部阻塞） |
-| P0-2 | 两位用户同群、仅林舟开启、周敏独立开启；各自秘书/看板；开启前零作业 | `verify-focus-e2e`：两 Human、同一条消息各自建卡、不同秘书、状态 active；`verify-focus-runtime` 141 项（provisioning 不派模型） | 本地通过（HTTP 链路，假 Swarm） |
-| P0-3 | 逐条回放第 1 节；同账号同卡；两人同刻不同列；周敏不泄露验收群/32/32 | E2E 首条消息→林舟跟进中、周敏需要我；`verify-focus-web` 59 项覆盖 restricted 卡、另一 owner 数据不出现；`verify-focus-runtime` 覆盖验收群候选仅林舟可见 | 本地部分（未跑完整 09:00–09:36 叙事） |
-| P0-4 | 林舟归档后迟到回执、同包补发、旧作业重试、同线程独立复盘 | E2E：归档→迟到消息→秘书更新整批 CONFLICT→忽略候选→归档卡不回三列、仍可回看；运行时覆盖归档/版本/代次闸门 | 本地通过（同线程新卡未单列） |
-| P0-5 | 两个工作 Agent 各自领取/报告；同名人员/项目；撤回/退群/收紧边界后读卡 | `verify-focus-runtime` 覆盖 delivery 领取候选、owner 隔离、暂停释放；`verify-focus-web` 覆盖 restricted 遮蔽；未跑两个真实工作 Agent | 本地部分 |
+| P0-2 | 两位用户同群、仅林舟开启、周敏独立开启；各自秘书/看板；开启前零作业 | `verify-focus-live`：真实 Swarm + 真实模型两位用户各得独立秘书/卡；`verify-focus-e2e` 覆盖 HTTP 链路 | 本地通过（真实模型） |
+| P0-3 | 逐条回放第 1 节；同账号同卡；两人同刻不同列；周敏不泄露验收群/32/32 | `verify-focus-live`：同一委托两卡不同列；私有验收群进展更新林舟原卡；周敏搜索 32/32 为 0、无该来源 | 本地通过（真实模型，第二次运行已合回原卡） |
+| P0-4 | 林舟归档后迟到回执、同包补发、旧作业重试、同线程独立复盘 | `verify-focus-live`：归档后补发同包，归档卡版本与列不变；`verify-focus-e2e`/runtime 覆盖归档屏障与重放 | 本地通过（真实模型 + 假 Swarm） |
+| P0-5 | 两个工作 Agent 各自领取/报告；同名人员/项目；撤回/退群/收紧边界后读卡 | runtime/web 覆盖 delivery 领取、owner 隔离、restricted 遮蔽；未跑两个真实工作 Agent | 本地部分 |
 | P0-6 | 未发言开启、静默领取、只回「收到」、无 @ 改期、重放 | `verify-focus-runtime`：Watch 对普通消息/领取事件建候选、领取流水恰一条、重放不重复；E2E 覆盖无 @ 普通消息建卡 | 本地部分（未跑完整双 Agent 剧本） |
 | P0-7 | 关页面、双端并发启停、迟到/乱序、模型故障、重启、普通 Agent 不在场 | E2E 停服重启后同一秘书/卡保留；运行时覆盖暂停/重开/代次拒绝/租约；真实模型故障与双端并发未跑 | 本地部分 |
-| P0-8 | 独立 Swarm 上同一 SDK 客户端运行秘书与普通群交付角色；双副本回调 | 未部署 Swarm | 外部阻塞 |
-| P0-9 | 4.5 真实链路；断线恢复同一根；串用作业引用；撤权后模型实际输入 | 未连接真实模型/同根撤权宿主 | 外部阻塞 |
+| P0-8 | 独立 Swarm 上同一 SDK 客户端运行秘书与普通群交付角色；双副本回调 | 本地 docker compose 启动 2 副本 + nginx + PG + Rivet；真实模型通过 MCP 建卡/改卡；未跑普通群交付测试角色 | 本地部分通过 |
+| P0-9 | 4.5 真实链路；断线恢复同一根；串用作业引用；撤权后模型实际输入 | 真实链路已通；断线恢复/同根撤权后的模型输入未做专门注入验证 | 本地部分 / 外部依赖 |
 | P0-10 | 10 万标注事件：新增 10 卡、更新 5 卡、归档复活 0；同一根会话 | 未跑；当前可用确定性夹具在本地跑业务计数，但缺少真实模型与 10 万规模环境 | 外部阻塞 |
 | P0-11 | 带草稿开窗原地收起；跨会话跳到未加载原消息；返回看板 | `verify-focus-web` 59 项：草稿保留、跨房原消息高亮、返回恢复 tab/列/选中/搜索词/滚动断点 | 本地通过 |
 | P1-1 | 桌面/手机走查：浮窗、快捷键、中文输入、三列、归档、重开、320px | `verify-focus-web` 覆盖 1440×900、390×844、⌘K、IME、归档、重开；来源会话筛选未实现 | 本地部分 |
@@ -44,7 +44,8 @@
 | `bun scripts/verify-focus-runtime.ts` | `Focus 运行时验收通过：141 项检查` |
 | `bun scripts/verify-focus-swarm.ts` | `Swarm 客户端验收通过：51 项检查` |
 | `bun scripts/verify-focus-web.ts` | `59 项检查通过` |
-| `bun scripts/verify-focus-e2e.ts` | 22 项 HTTP 端到端检查通过（两 owner、归档、重启） |
+| `bun scripts/verify-focus-e2e.ts` | 22 项 HTTP 端到端检查通过（假 Swarm；两 owner、归档、重启） |
+| `PERI_SWARM_API_KEY=... bun scripts/verify-focus-live.ts` | 20 项真实 Swarm/真实模型检查通过（两用户、私有群、私聊、归档、重启） |
 | `bun scripts/verify-drizzle-schema.ts` | `schema parity checks passed: 397`（49 个迁移） |
 | `bun scripts/verify-mcp-parity.ts` | `MCP parity passed`，tools 146 |
 | `bun scripts/q01-upgrade-check.ts` | `Q01 升级检查通过: 81 项`（含 0053 零残留） |
@@ -60,6 +61,8 @@
 | `bun run test:units` | 21 pass / 0 fail |
 | `bun scripts/verify-pwa-recovery.ts` / `verify-pwa-update.ts` | 通过 |
 | `git diff --check` | 无输出 |
+
+真实 Swarm 部署：`deploy/docker-compose.yml` + `docker-compose.local.yml`（arm64 主机使用 amd64 镜像；2 副本、nginx、PostgreSQL、Rivet）；模型 `deepseek-v4-flash`；首轮真实运行曾把私有群进展拆成新卡，强化秘书指令后第二轮合回原卡。`verify-focus-live` 需要 `PERI_SWARM_API_KEY`，不进入默认 CI。
 
 补充：`lenso-alerts` / `lenso-overlays` 的 6 个既有失败在基线 `3227fb9` 同样复现（基线 7 个，含已删除的 TaskTrace 用例）；失败签名与本次改动无关，未纳入本 PR 修复。
 

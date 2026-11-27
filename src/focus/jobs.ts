@@ -391,6 +391,7 @@ export async function dispatchFocusJob(
       `job_id: ${job.job_id}`,
       `attempt_ref: ${job.attempt_ref}`,
       `候选 ${candidateCount?.n ?? 0} 条，事件区间 ${job.event_from_seq}-${job.event_to_seq}。`,
+      '只使用本次 job_get 返回的 candidate_id；旧作业 candidate_id 已失效。',
       '请读取本次候选，核对来源后通过 network_focus_commit 提交个人看板决定。',
     ].join('\n');
 
