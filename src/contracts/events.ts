@@ -10,12 +10,8 @@ export const DELIVERY_REMINDER_SOURCE = 'delivery.reminder';
 export const MENTION_REMINDER_EVENT = 'mention_reminder';
 /** 提及提醒在统一 stream 中的 source；不产生 delivery 或待办。 */
 export const MENTION_REMINDER_SOURCE = 'mention.reminder';
-/** 消息式 Task 起点被标记；room scope 提示，不写 inbox、不推进 head。 */
-export const MESSAGE_TASK_MARKED_EVENT = 'message_task_marked';
-/** 消息式 Task 起点取消标记；只撤销聚合入口，保留消息与引用。 */
-export const MESSAGE_TASK_UNMARKED_EVENT = 'message_task_unmarked';
-/** 消息式 Task 起点被标记完成；与 delivery 完成无关，不推进 head。 */
-export const MESSAGE_TASK_COMPLETED_EVENT = 'message_task_completed';
+/** Task Focus 看板变化；只写 actor scope 提示，不写 inbox、不推进 head。 */
+export const FOCUS_UPDATED_EVENT = 'focus_updated';
 
 /**
  * Callback endpoint 验证失败的错误码。

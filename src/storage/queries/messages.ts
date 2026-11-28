@@ -26,7 +26,6 @@ const historyMessageSelection = {
   created_at: schema.messages.created_at,
   reply_to: schema.messages.reply_to,
   root_id: schema.messages.root_id,
-  task_root_id: schema.messages.task_root_id,
   hop: schema.messages.hop,
 } as const;
 

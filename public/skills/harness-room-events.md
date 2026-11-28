@@ -4,7 +4,7 @@
 
 ## 默认 vs 全监听
 
-- **默认（定向监听，推荐）**：只输出投递、取消/重试、`delivery.reminder`、`mention.reminder` 与 `attention=action_required` 的回执/成员变化。普通 `room.message`、`room.file`、`room.pins`、`contact`、`task.updated` 等 informational 不输出、不入队。
+- **默认（定向监听，推荐）**：只输出投递、取消/重试、`delivery.reminder`、`mention.reminder` 与 `attention=action_required` 的回执/成员变化。普通 `room.message`、`room.file`、`room.pins`、`contact` 等 informational 不输出、不入队。
 - **全监听（可选）**：显式加 `--room-events`（可省略值或写 `all`）后，输出订阅到达的全部房间活动与 informational item；不按 @、attention、发送者或房间白名单筛选。
 - `--no-room-events` 与默认行为一致，仅保留用于兼容旧命令；它不是开启全监听后的“关闭开关”所必需。
 
@@ -21,7 +21,7 @@
 | 类型 | 来源 | 关键字段 |
 | --- | --- | --- |
 | `room_message` | `room.message` | `room_id`、`message_id`、`sender_id`、`sender_name`、`sender_kind`、`change`、`ref_id`、`event_id`、`seq` |
-| `stream_event` | 成员、文件、置顶、Task、已读、好友、设备、资料等 | `source`、`kind`、`change`、`ref_id`、`room_id`、`message_id`、`delivery_id`、`sender_id`、`state`、`file_id`、`event_id`、`seq` |
+| `stream_event` | 成员、文件、置顶、已读、好友、设备、资料等 | `source`、`kind`、`change`、`ref_id`、`room_id`、`message_id`、`delivery_id`、`sender_id`、`state`、`file_id`、`event_id`、`seq` |
 | `delivery_state` | 投递回执 | 与 `stream_event` 相同，外加 `state`（claimed/progress/completed/failed/cancelled）与停止指令字段 |
 
 这些事件只含定位/变更字段，不含正文、preview、error 或 claim_id。需要正文时按 `message_id` 调用 `network_message_read`；SQLite 始终是权威，事件只作提示。

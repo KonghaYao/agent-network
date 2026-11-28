@@ -9,8 +9,6 @@ import { queryKeys } from '../lib/query-keys';
 import type { WebSession } from '../lib/identity';
 import { revalidateWebSession, resetWebSession, cachedWebSession } from '../lib/identity';
 import { clearPrivateQueries, clearRoomScope } from '../lib/scope-reset';
-import { discardRoomTasks, resetRoomTasks } from '../lib/task-cache';
-import type { RecoveryReason } from '../lib/recovery-coordinator';
 import {
   getRecoverySnapshot,
   installRecoveryTriggers,
@@ -38,13 +36,6 @@ interface RecoveryHostProps {
 
 const AUTH_INVALID_REASON =
   '当前身份已失效或已被撤销。请使用另一台已登录设备重新配对，或返回会话列表。';
-
-/** 这些触发都意味着授权边界可能变化：旧 Task/Trace 必须先丢弃再重读。 */
-const TASK_SCOPE_RESET_REASONS: ReadonlySet<RecoveryReason> = new Set([
-  'auth',
-  'membership',
-  'stream-ack',
-]);
 
 function failureCode(error: unknown): string | null {
   return (error as McpError | null)?.code ?? null;
@@ -324,16 +315,7 @@ export function RecoveryHost({ routeName, roomId }: RecoveryHostProps) {
   }, [queryClient, recovery.masked, recovery.sticky]);
 
   useEffect(() => {
-    setRecoveryRunner(async (round) => {
-      const resetTaskScope = round.reasons.some((reason) =>
-        TASK_SCOPE_RESET_REASONS.has(reason),
-      );
-      const route = routeRef.current;
-      if (resetTaskScope && route.routeName === 'room' && route.roomId) {
-        // 身份/撤权/重连确认前先清空旧 Task 列表与 Trace；遮罩与既有
-        // 模块级 epoch 仍负责拦截晚到写，清理本身不放宽任何校验。
-        discardRoomTasks(queryClient, route.roomId);
-      }
+    setRecoveryRunner(async () => {
       const previous = queryClient.getQueryData<WebSession>(queryKeys.session()) ?? cachedWebSession();
       // 同一页内 localStorage 被改写（切号/撤权）时，即使本轮不是 auth 触发，
       // 也必须在发起网络核对前切到粘性遮罩。
@@ -431,18 +413,10 @@ export function RecoveryHost({ routeName, roomId }: RecoveryHostProps) {
           );
           return;
         }
-        // 只重新读取状态，不重建/派发已有 Agent 任务。
         void queryClient.invalidateQueries({
           queryKey: queryKeys.roomFiles(current.roomId),
           exact: true,
         });
-        if (resetTaskScope) {
-          // 鉴权通过后再重读：列表从首页重建，已打开的 Trace 原位重读。
-          void resetRoomTasks(queryClient, current.roomId);
-        } else {
-          void queryClient.invalidateQueries({ queryKey: queryKeys.taskSummaries(current.roomId) });
-          void queryClient.invalidateQueries({ queryKey: queryKeys.roomTasks(current.roomId) });
-        }
       }
 
       void queryClient.invalidateQueries({
@@ -477,9 +451,7 @@ export function RecoveryHost({ routeName, roomId }: RecoveryHostProps) {
       snapshot: () => getRecoverySnapshot(),
       cache: () => ({
         room: countPrefix('room'),
-        roomTasks: countPrefix('room-tasks'),
         removedRoom: removed.room ?? 0,
-        removedRoomTasks: removed['room-tasks'] ?? 0,
         sessionPresent: Boolean(queryClient.getQueryData(queryKeys.session())),
       }),
       // 诊断只暴露已读水位，不包含正文、token 或标题。

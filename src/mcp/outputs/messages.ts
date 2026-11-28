@@ -26,8 +26,6 @@ export const messageSchema = messagePreviewSchema.extend({
   room_id: z.string(),
   reply_to: z.string().nullable(),
   root_id: z.string().nullable(),
-  /** 消息式 Task 归属；null 表示普通消息，起点自身等于 message_id。 */
-  task_root_id: z.string().nullable(),
   hop: z.number(),
   delivery_states: z.record(z.string(), z.number()),
   /** 该消息的提及集合；human 只产生个人提醒，agent 才可能有 delivery。 */

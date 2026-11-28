@@ -12,6 +12,8 @@ export interface ModalProps {
   titleId?: string;
   children: ReactNode;
   footer?: ReactNode;
+  /** 标题区右侧动作；与内置关闭键同一行，由调用方控制响应式。 */
+  headerActions?: ReactNode;
   className?: string;
   contentId?: string;
   /** 保留 legacy 关闭按钮 id，供灰度与 E2E 对照。 */
@@ -67,7 +69,7 @@ export function Modal(props: ModalProps) {
 }
 
 function LensoModal({
-  open, onOpenChange, title, titleId, children, footer, className = '',
+  open, onOpenChange, title, titleId, children, footer, headerActions, className = '',
   contentId, closeId, closeButtonRef, initialFocusRef, returnFocusRef, modal: Dialog,
 }: ModalProps & { modal: NonNullable<ReturnType<typeof useLenso>>['Modal'] }) {
   const generatedTitleId = useId();
@@ -125,6 +127,7 @@ function LensoModal({
           render={(props) => <div {...props} className={`modal-card spa-dialog-content ${className}`.trim()} />}
         >
           <Dialog.Title id={headingId} render={(props) => <h2 {...props} className={undefined} />}>{title}</Dialog.Title>
+          {headerActions}
           {children}
           {footer}
           <Dialog.Close
@@ -139,7 +142,7 @@ function LensoModal({
 }
 
 function RadixModal({
-  open, onOpenChange, title, titleId, children, footer, className = '',
+  open, onOpenChange, title, titleId, children, footer, headerActions, className = '',
   contentId, closeId, closeButtonRef, initialFocusRef, returnFocusRef, shell,
 }: ModalProps) {
   const restoreRef = useRef<HTMLElement | null>(null);
@@ -170,6 +173,7 @@ function RadixModal({
           <DialogPrimitive.Title asChild>
             <h2 id={titleId}>{title}</h2>
           </DialogPrimitive.Title>
+          {headerActions}
           {children}
           {footer}
           <DialogPrimitive.Close

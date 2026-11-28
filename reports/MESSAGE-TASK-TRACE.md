@@ -1,3 +1,8 @@
+> **已退役（TF-08，2026-11-27）。** 本文记录的消息式 Task / Trace 已被整体删除：
+> `migrations/0053_drop_message_tasks.sql` 清理 `messages` 的五个 task 列、`idx_messages_task_root`、
+> 两个 `guard_task_mark_*` 闸门、任务事件/outbox/operations 与 Memory `task_*` 来源；`network_task_*`
+> 工具、CLI 子命令与网页入口均不存在。下文仅作为历史归档，不代表当前实现。当前里程碑见 Task Focus。
+
 # 消息式 Task / Trace（阶段 4b-2 收口）
 
 - 分支：`feat/message-task-trace`

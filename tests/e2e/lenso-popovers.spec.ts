@@ -10,25 +10,11 @@ async function room(page: Page, ready = true) {
     request_id: requestId('s07_announcement'), room_id: fixture.roomId,
     announcement: '公告摘要\n' + '超长公告换行\n'.repeat(60), expected_announcement_revision: 1,
   });
-  const sent = await callTool<{ message: { message_id: string } }>(base, fixture.tokenA, 'network_message_send', {
-    request_id: requestId('s07_send'), client_message_id: requestId('s07_client'),
-    room_id: fixture.roomId, body: 'Task 预览正文\n' + '滚动内容'.repeat(80), invoke: [],
-  });
-  const rootId = sent.message.message_id;
-  await callTool(base, fixture.tokenA, 'network_task_mark', {
-    request_id: requestId('s07_mark'), room_id: fixture.roomId, message_id: rootId,
-  });
-  for (let index = 0; index < 3; index++) {
-    await callTool(base, fixture.tokenB, 'network_message_send', {
-      request_id: requestId('s07_reply'), client_message_id: requestId('s07_client'),
-      room_id: fixture.roomId, task_root_id: rootId, body: `回复 ${index}：滚动内容`, invoke: [],
-    });
-  }
   await login(page, base, fixture.tokenA);
   await page.goto(`${base}/c/${fixture.roomId}`);
   await expect(page.locator('#title')).toContainText(fixture.roomTitle);
   if (ready) await expect(page.locator('#room-announcement-info')).toHaveAttribute('data-tooltip-backend', 'lenso');
-  return { ...fixture, rootId };
+  return fixture;
 }
 
 async function geometry(page: Page, popup: Locator, width: number) {
@@ -165,81 +151,15 @@ test('浏览器后退到已缓存房间：上一个房间的公告浮层不残�
   await expect(page.locator('#room-announcement-popover')).toContainText('B 房间公告');
 });
 
-test('Task hover 延迟、不抢焦点、移入保持、pinned、外点判定与 Escape', async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 844 });
-  const fixture = await room(page);
-  await page.locator('#task-dock-toggle').click();
-  const trigger = page.locator('.task-dock-item-trigger');
-  const popup = page.locator(`#task-preview-${fixture.rootId}`);
-  await page.locator('#body').focus();
-  await trigger.hover();
-  await page.waitForTimeout(120);
-  await expect(popup).toHaveCount(0);
-  await expect(popup).toHaveAttribute('data-popover-backend', 'lenso');
-  await expect(page.locator('#body')).toBeFocused();
-  await geometry(page, popup, 1280);
-  await popup.hover();
-  await page.waitForTimeout(250);
-  await expect(popup).toBeVisible();
-  await page.locator('#title').hover();
-  await page.waitForTimeout(60);
-  await expect(popup).toBeVisible();
-  await expect(popup).toHaveCount(0);
-  await trigger.hover();
-  await expect(popup).toBeVisible();
-  await trigger.click();
-  await page.locator('#title').hover();
-  await page.waitForTimeout(300);
-  await expect(popup).toBeVisible();
-  await popup.locator('.task-preview-text').click();
-  await expect(page.locator('#task-dock-panel')).toBeVisible();
-  await expect(popup).toHaveClass(/task-preview-popover/);
-  await page.locator('#title').click();
-  await expect(popup).toHaveCount(0);
-  await expect(trigger).toBeFocused();
-  await trigger.press('Enter');
-  await expect(popup.locator('.task-preview-recent').first()).toBeFocused();
-  await page.keyboard.press('Escape');
-  await expect(popup).toHaveCount(0);
-  await expect(trigger).toBeFocused();
-  await expect(page.locator('#task-dock-panel')).toBeVisible();
-  await page.keyboard.press('Escape');
-  await expect(page.locator('#task-dock-panel')).toBeHidden();
-});
-
-test('Task 390 暗色：点按、滚动与外部点击', async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.emulateMedia({ colorScheme: 'dark' });
-  const fixture = await room(page);
-  await page.locator('#task-dock-toggle').click();
-  const trigger = page.locator('.task-dock-item-trigger');
-  await trigger.click();
-  const popup = page.locator(`#task-preview-${fixture.rootId}`);
-  await geometry(page, popup, 390);
-  expect(await popup.evaluate((node) => getComputedStyle(node).backgroundColor)).toBe(
-    await semanticColor(page, '--wx-panel'),
-  );
-  expect(await popup.evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true);
-  await popup.evaluate((node) => { node.scrollTop = node.scrollHeight; });
-  expect(await popup.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
-  const action = popup.locator('.task-preview-all');
-  expect((await action.boundingBox())!.height).toBeGreaterThanOrEqual(44);
-  await page.locator('#title').click();
-  await expect(popup).toHaveCount(0);
-  await expect(trigger).toBeFocused();
-});
-
-for (const kind of ['announcement', 'task'] as const) {
-  test(`${kind} 真实 index 延迟：打开不换壳，关闭重开升级`, async ({ page }) => {
+test('announcement 真实 index 延迟：打开不换壳，关闭重开升级', async ({ page }) => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     let intercepted = 0;
     await page.route('**/assets/index-*.js', async (route) => { intercepted++; await gate; await route.continue(); });
     try {
-      const fixture = await room(page, false);
-      if (kind === 'task') await page.locator('#task-dock-toggle').click();
-      const trigger = page.locator(kind === 'task' ? '.task-dock-item-trigger' : '#room-announcement-info');
-      const popup = page.locator(kind === 'task' ? `#task-preview-${fixture.rootId}` : '#room-announcement-popover');
+      await room(page, false);
+      const trigger = page.locator('#room-announcement-info');
+      const popup = page.locator('#room-announcement-popover');
       await trigger.click();
       await expect(popup).toHaveAttribute('data-popover-backend', 'fallback');
       const original = await popup.elementHandle();
@@ -258,13 +178,12 @@ for (const kind of ['announcement', 'task'] as const) {
     } finally { release(); }
   });
 
-  test(`${kind} 真实 index 阻断：fallback 外点/Esc 与焦点仍可用`, async ({ page }) => {
+  test('announcement 真实 index 阻断：fallback 外点/Esc 与焦点仍可用', async ({ page }) => {
     let intercepted = 0;
     await page.route('**/assets/index-*.js', async (route) => { intercepted++; await route.abort(); });
-    const fixture = await room(page, false);
-    if (kind === 'task') await page.locator('#task-dock-toggle').click();
-    const trigger = page.locator(kind === 'task' ? '.task-dock-item-trigger' : '#room-announcement-info');
-    const popup = page.locator(kind === 'task' ? `#task-preview-${fixture.rootId}` : '#room-announcement-popover');
+    await room(page, false);
+    const trigger = page.locator('#room-announcement-info');
+    const popup = page.locator('#room-announcement-popover');
     await trigger.click();
     await expect(popup).toHaveAttribute('data-popover-backend', 'fallback');
     await page.keyboard.press('Escape');
@@ -276,4 +195,3 @@ for (const kind of ['announcement', 'task'] as const) {
     await expect(trigger).toBeFocused();
     expect(intercepted).toBeGreaterThan(0);
   });
-}

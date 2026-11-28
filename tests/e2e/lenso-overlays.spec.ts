@@ -162,12 +162,12 @@ async function nestedFallback(page: Page, item: Consumer) {
   }
 }
 
-test('共享 Modal：14/14 默认 Lenso，TaskTrace 仅保留 Drawer 的 Radix fallback', () => {
+test('共享 Modal：14/14 默认 Lenso', () => {
   expect(consumers).toHaveLength(14);
   const paths = ['chat/ForwardDialog', 'overlays/AgentReissueDialog', 'overlays/AnnouncementDialog',
     'overlays/ContactRequestsDialog', 'overlays/GroupCreateDialog', 'overlays/MeRenameDialog',
     'overlays/MembersDialog', 'overlays/NewAgentDialog', 'overlays/RenameAgentDialog',
-    'overlays/RenameRoomDialog', 'overlays/ReportDialog', 'overlays/TransferDialog', 'tasks/MessageSearchDialog'];
+    'overlays/RenameRoomDialog', 'overlays/ReportDialog', 'overlays/TransferDialog', 'search/MessageSearchDialog'];
   let instances = 0;
   for (const path of paths) {
     const source = readFileSync(`src/web/features/${path}.tsx`, 'utf8');
@@ -205,9 +205,8 @@ test.beforeAll(async () => {
     ...request(), kind: 'direct', members: [agent.actor_id],
   })).room.room_id;
   message = (await tool<{ message: { message_id: string } }>(token, 'network_message_send', {
-    ...request(), client_message_id: crypto.randomUUID(), room_id: group, body: 'N2a overlay task', invoke: [],
+    ...request(), client_message_id: crypto.randomUUID(), room_id: group, body: 'N2a overlay probe', invoke: [],
   })).message.message_id;
-  await tool(token, 'network_task_mark', { ...request(), room_id: group, message_id: message });
 });
 
 for (const item of consumers) {
@@ -298,7 +297,7 @@ test('ContactRequests 使用 Lenso：撤销链接取消与确认均保留父层�
   await expect(page.locator('#contact-requests')).toBeFocused();
 });
 
-test('MessageSearch 双实例与 TaskTrace 使用 Lenso，关闭子层不关闭搜索', async ({ page }) => {
+test('MessageSearch 双实例使用 Lenso，关闭子层不关闭搜索', async ({ page }) => {
   await login(page);
   await page.locator('#message-search-button').click();
   await expect(page.locator('#message-search-dialog')).toHaveAttribute('data-lenso-slot', 'modal-popup');
@@ -309,14 +308,6 @@ test('MessageSearch 双实例与 TaskTrace 使用 Lenso，关闭子层不关闭�
   await page.locator('#message-context-close').click();
   await expect(page.locator('#message-context-dialog')).toHaveCount(0);
   await expect(page.locator('#message-search-dialog')).toBeVisible();
-  await page.getByRole('checkbox', { name: '只看任务' }).check();
-  await page.locator('#message-search-form button[type=submit]').click();
-  await page.locator('.task-search-result').first().click();
-  await expect(page.locator('#task-trace-drawer')).toHaveAttribute('data-task-trace-shell', 'lenso');
-  await page.keyboard.press('Escape');
-  await expect(page.locator('#task-trace-drawer')).toHaveCount(0);
-  // Task 分支既有行为是先关闭搜索再打开 Trace。
-  await expect(page.locator('#message-search-dialog')).toHaveCount(0);
 });
 
 for (const width of [1280, 390]) {
@@ -397,22 +388,6 @@ for (const width of [1280, 390]) {
         if (item === context) await page.keyboard.press('Escape');
         await expect.poll(() => page.evaluate(() => [document.body, document.documentElement].map((node) => node.style.cssText))).toEqual(scrollBefore);
       }
-      await login(page);
-      await page.locator('#message-search-button').click();
-      await page.locator('#message-search-input').fill('N2a overlay');
-      await page.getByRole('checkbox', { name: '只看任务' }).check();
-      await page.locator('#message-search-form button[type=submit]').click();
-      await page.locator('.task-search-result').first().click();
-      const trace = page.locator('#task-trace-drawer');
-      await expect(trace).toHaveAttribute('data-task-trace-shell', 'lenso');
-      await expect.poll(async () => Math.round((await trace.boundingBox())?.width ?? 0)).toBe(width === 390 ? 390 : 560);
-      // Radix 保留既有入场动画；宽度不随动画变化，需等待完整几何而非只等宽度。
-      await expect.poll(async () => {
-        const box = await trace.boundingBox();
-        return box && { x: Math.round(box.x), y: Math.round(box.y), height: Math.round(box.height) };
-      }).toEqual({ x: width === 390 ? 0 : 720, y: 0, height: 844 });
-      await page.keyboard.press('Escape');
-      await expect(trace).toHaveCount(0);
     });
   }
 }
@@ -505,45 +480,6 @@ for (const item of consumers) {
     }
     expect(aborted).toBeGreaterThan(0);
     expect(errors).toEqual([]);
-  });
-}
-
-for (const delayed of [true, false]) {
-  test(`MessageSearch → TaskTrace：${delayed ? '慢加载保持 fallback、重开升级' : '阻断后同库 fallback'}`, async ({ page }) => {
-    let release!: () => void;
-    const gate = new Promise<void>((done) => { release = done; });
-    let intercepted = 0;
-    await page.route(`**/${lensoChunk}`, async (route) => {
-      intercepted++;
-      if (delayed) { await gate; await route.continue(); }
-      else await route.abort('failed');
-    });
-    try {
-      await login(page, group, false);
-      await search.open(page);
-      await expect(page.locator('#message-search-dialog')).toHaveAttribute('data-modal-shell', 'fallback');
-      await page.getByRole('checkbox', { name: '只看任务' }).check();
-      const openTask = async () => {
-        await page.locator('#message-search-input').fill('N2a overlay');
-        await page.locator('#message-search-form button[type=submit]').click();
-        await page.locator('.task-search-result').first().click();
-      };
-      await openTask();
-      const trace = page.locator('#task-trace-drawer');
-      await expect(trace).toHaveAttribute('data-modal-shell', 'radix');
-      if (delayed) {
-        release();
-        await expect(page.locator('#message-search-button')).toHaveAttribute('data-lenso-slot', 'button');
-        await expect(trace).toHaveAttribute('data-modal-shell', 'radix');
-      }
-      await page.keyboard.press('Escape');
-      await expect(trace).toHaveCount(0);
-      await search.open(page);
-      await page.getByRole('checkbox', { name: '只看任务' }).check();
-      await openTask();
-      await expect(trace).toHaveAttribute(delayed ? 'data-task-trace-shell' : 'data-modal-shell', delayed ? 'lenso' : 'radix');
-      expect(intercepted).toBeGreaterThan(0);
-    } finally { release(); }
   });
 }
 

@@ -181,7 +181,6 @@ export interface SendOptions {
   mentions?: string;
   mention?: string;
   replyTo?: string;
-  taskRoot?: string;
   claim?: string;
   requestId?: string;
   clientMessageId?: string;
@@ -207,7 +206,6 @@ export async function send(
   const requestId = options.requestId ?? newId('req');
   const clientMessageId = options.clientMessageId ?? newId('msg');
   const replyTo = options.replyTo;
-  const taskRoot = options.taskRoot;
   const result = await client.callTool('network_message_send', {
     request_id: requestId,
     client_message_id: clientMessageId,
@@ -216,7 +214,6 @@ export async function send(
     ...(invoke === undefined ? {} : { invoke }),
     ...(mentions === undefined ? {} : { mentions }),
     ...(replyTo === undefined ? {} : { reply_to: replyTo }),
-    ...(taskRoot === undefined ? {} : { task_root_id: taskRoot }),
     ...(claim === undefined ? {} : { claim }),
   });
   const output: Record<string, unknown> = {

@@ -4036,7 +4036,6 @@ function planMessage(senderId: string, seq: string): HistoryItem {
     created_at: seq,
     reply_to: null,
     root_id: null,
-    task_root_id: null,
     hop: 0,
     delivery_states: {},
     mentions: [],
@@ -5152,8 +5151,9 @@ async function main(): Promise<void> {
         '1',
       );
       check(
-        '账号区高度保持紧凑 77px',
-        accountLayout?.footer?.height === 77,
+        '账号区含任务秘书入口后仍紧凑（77–120px）',
+        (accountLayout?.footer?.height ?? 0) >= 77 &&
+          (accountLayout?.footer?.height ?? 0) <= 120,
         accountLayout?.footer,
       );
       checkEqual('侧栏账号区不再使用「···」菜单', accountLayout?.menuToggle, false);

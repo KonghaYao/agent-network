@@ -118,7 +118,7 @@ function deliveryIdFor(messageId: string): string {
 }
 
 function assertNoRoomOneId(label: string, row: MessageRow, roomOneIds: string[]): void {
-  const fields = [row.reply_to, row.root_id, row.task_root_id];
+  const fields = [row.reply_to, row.root_id];
   check(
     label,
     roomOneIds.every((id) => !fields.includes(id)),
@@ -142,7 +142,6 @@ try {
   checkEqual('A reply_to 为空', a.reply_to, null);
   checkEqual('A root_id 为空', a.root_id, null);
   checkEqual('A hop 为 0', a.hop, 0);
-  checkEqual('A task_root_id 为空', a.task_root_id, null);
   assertNoRoomOneId('A 不含 R1 消息 id', a, [claimedMessage.message_id]);
 
   console.log('  · 场景 B：显式 reply_to 决定本房间引用链');

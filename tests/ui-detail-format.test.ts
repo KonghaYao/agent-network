@@ -17,14 +17,6 @@ import {
   isHtmlPreview,
 } from '../src/web/lib/files-ui';
 import { relativeTime } from '../src/web/lib/rooms';
-import {
-  TASK_STATUS_DISPLAY_ORDER,
-  sortTaskStatusEntries,
-  summarizeTaskStatuses,
-  taskEntryMeta,
-  taskStatusLabel,
-  taskTimeLabel,
-} from '../src/web/features/tasks/task-format';
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -187,101 +179,6 @@ describe('计数与入口顺序', () => {
     expect(formatEntryMeta({})).toBe('');
     expect(formatParticipantCount(2)).toBe('2 个 Agent 参与');
     expect(formatParticipantCount(null)).toBe('');
-  });
-
-  test('Task 入口摘要与 taskTimeLabel 复用 detail 口径', () => {
-    expect(
-      taskEntryMeta({
-        messageCount: 3,
-        agentCount: 2,
-        time: NOW - 3 * MINUTE,
-        now: NOW,
-        timeZone: 'UTC',
-      }),
-    ).toBe('3 条消息 · 2 个 Agent · 3 分钟前');
-    const now = new Date(2026, 10, 18, 0, 10).getTime();
-    withNow(now, () => {
-      expect(taskTimeLabel(String(now - 3 * MINUTE))).toBe('3 分钟前');
-      expect(taskTimeLabel(String(now - HOUR))).toBe('1 小时前');
-      expect(taskTimeLabel(String(new Date(2026, 10, 16, 16, 10).getTime()))).toBe(
-        '11月16日 16:10',
-      );
-      expect(taskTimeLabel(String(now))).toBe('刚刚');
-      expect(taskTimeLabel('invalid')).toBe('');
-      expect(taskTimeLabel('8640000000000001')).toBe('');
-      expect(taskTimeLabel(null)).toBe('');
-    });
-  });
-});
-
-describe('Task 状态顺序与聚合', () => {
-  test('状态顺序固定为 pending, claimed, completed, failed, cancelled', () => {
-    expect([...TASK_STATUS_DISPLAY_ORDER]).toEqual([
-      'pending',
-      'claimed',
-      'completed',
-      'failed',
-      'cancelled',
-    ]);
-    expect(
-      sortTaskStatusEntries([
-        { status: 'failed', count: 1 },
-        { status: 'pending', count: 2 },
-        { status: 'cancelled', count: 1 },
-        { status: 'completed', count: 3 },
-        { status: 'claimed', count: 4 },
-      ]).map((entry) => entry.status),
-    ).toEqual(['pending', 'claimed', 'completed', 'failed', 'cancelled']);
-  });
-
-  test('未知状态稳定排在末尾且不伪装成已知状态', () => {
-    expect(
-      sortTaskStatusEntries([
-        { status: 'mystery' },
-        { status: 'pending' },
-        { status: 'other' },
-      ]).map((entry) => entry.status),
-    ).toEqual(['pending', 'mystery', 'other']);
-    expect(taskStatusLabel('completed')).toBe('已完成');
-    expect(taskStatusLabel('failed')).toBe('失败');
-    expect(taskStatusLabel('cancelled')).toBe('已取消');
-    expect(taskStatusLabel('mystery')).toBe('');
-    expect(taskStatusLabel(null)).toBe('');
-  });
-
-  test('已结束不等于成功，失败与取消单列', () => {
-    const summary = summarizeTaskStatuses({
-      pending: 2,
-      claimed: 1,
-      completed: 3,
-      failed: 2,
-      cancelled: 1,
-    });
-    expect(summary.entries.map((entry) => entry.status)).toEqual([
-      'pending',
-      'claimed',
-      'completed',
-      'failed',
-      'cancelled',
-    ]);
-    expect(summary.total).toBe(9);
-    expect(summary.active).toBe(3);
-    expect(summary.ended).toBe(6);
-    expect(summary.completed).toBe(3);
-    expect(summary.failed).toBe(2);
-    expect(summary.cancelled).toBe(1);
-    expect(summary.ended).not.toBe(summary.completed);
-  });
-
-  test('空计数不显示 0 条目，可选包含零值', () => {
-    expect(summarizeTaskStatuses(null).entries).toEqual([]);
-    expect(summarizeTaskStatuses(null).total).toBe(0);
-    expect(
-      summarizeTaskStatuses(
-        { pending: 0, claimed: 0, completed: 0, failed: 0, cancelled: 0 },
-        { includeZero: true },
-      ).entries.map((entry) => entry.count),
-    ).toEqual([0, 0, 0, 0, 0]);
   });
 });
 

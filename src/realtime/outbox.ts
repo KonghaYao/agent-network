@@ -1,4 +1,5 @@
 import { LIMITS } from '../contracts/limits';
+import { wakeFocusWatch } from '../focus/watch';
 import { backoffMs, nowMs } from '../storage/db';
 import type { Env } from '../env';
 import { fanoutStreamItems, type OutboxStreamRow } from './stream';
@@ -94,6 +95,10 @@ export async function drainOutbox(env: Env, limit = LIMITS.outboxBatchMax): Prom
       .run();
     if ((result.meta.changes ?? 0) > 0) claimed.push(row);
   }
+
+  // 已提交房间事件先唤醒 Watch 中心（异步、单飞）；失败不影响本次 fan-out，
+  // 下一次唤醒或 60s 维护会按持久游标补扫。
+  wakeFocusWatch(env, claimed);
 
   // 统一 actor stream：按事件映射后 fan-out。outbox 的 topic 仅是内部
   // 写分区键，cutover 后不再作为可订阅 URI 或 hub topic 发布。

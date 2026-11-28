@@ -3,11 +3,9 @@ import { LIMITS } from '../contracts/limits';
 import {
   DELIVERY_REMINDER_EVENT,
   DELIVERY_REMINDER_SOURCE,
+  FOCUS_UPDATED_EVENT,
   MENTION_REMINDER_EVENT,
   MENTION_REMINDER_SOURCE,
-  MESSAGE_TASK_MARKED_EVENT,
-  MESSAGE_TASK_COMPLETED_EVENT,
-  MESSAGE_TASK_UNMARKED_EVENT,
 } from '../contracts/events';
 import type { Env } from '../env';
 import { utf8Bytes } from '../storage/db';
@@ -58,6 +56,8 @@ export interface StreamItem {
   /** 房间文件事件的 file_id 与 room_file_id。 */
   file_id?: string;
   ref_id?: string;
+  /** Task Focus 变更后的卡版本；不携带卡面正文。 */
+  version?: number;
   /** Agent 上下线通知：仅用于当前房间刷新，不产生未读。 */
   presence_event_id?: string;
   transition?: string;
@@ -135,6 +135,30 @@ function baseItem(
     attention,
     created_at: String(row.created_at),
   };
+}
+
+/**
+ * actor scope 的事件映射。
+ *
+ * `focus_updated` 只是卡主刷新提示：source/kind 固定、attention 恒为
+ * informational，change 与 ref_id 来自事件 metadata；其余 actor 事件维持
+ * 既有的 raw 兜底。
+ */
+function actorStreamItem(row: OutboxStreamRow, metadata: Record<string, unknown>): StreamItem {
+  if (row.event_type === FOCUS_UPDATED_EVENT) {
+    const item = baseItem(row, 'focus.updated', 'focus', 'informational');
+    if (row.ref_id) item.ref_id = row.ref_id;
+    const refId = stringField(metadata, 'ref_id');
+    if (refId) item.ref_id = refId;
+    const itemId = stringField(metadata, 'item_id');
+    if (itemId) item.subject_id = itemId;
+    const change = stringField(metadata, 'change');
+    if (change) item.change = change;
+    const version = numberField(metadata, 'version');
+    if (version !== undefined) item.version = version;
+    return item;
+  }
+  return withLocation(baseItem(row, 'unknown', 'raw', 'informational'), row, metadata);
 }
 
 function withLocation(
@@ -248,32 +272,6 @@ export function roomStreamItems(
           metadata,
         );
         item.change = change;
-        if (changedBy) item.changed_by = changedBy;
-        result.push({ actorId: member.actor_id, item });
-      }
-      return result;
-    }
-    case MESSAGE_TASK_MARKED_EVENT:
-    case MESSAGE_TASK_UNMARKED_EVENT:
-    case MESSAGE_TASK_COMPLETED_EVENT: {
-      // 消息式 Task 只通知 active human 刷新摘要行；不写 inbox、不产生 delivery。
-      const change =
-        row.event_type === MESSAGE_TASK_MARKED_EVENT
-          ? 'marked'
-          : row.event_type === MESSAGE_TASK_COMPLETED_EVENT
-            ? 'completed'
-            : 'unmarked';
-      const changedBy = stringField(metadata, 'changed_by');
-      const taskRootId = stringField(metadata, 'task_root_id') ?? row.ref_id ?? undefined;
-      for (const member of activeRecipients(members, eventSeq)) {
-        if (member.kind !== 'human') continue;
-        const item = withLocation(
-          baseItem(row, 'task.updated', 'task', 'informational'),
-          row,
-          metadata,
-        );
-        item.change = change;
-        if (taskRootId) item.ref_id = taskRootId;
         if (changedBy) item.changed_by = changedBy;
         result.push({ actorId: member.actor_id, item });
       }
@@ -939,11 +937,7 @@ export async function fanoutStreamItems(
       continue;
     }
     if (row.scope_kind === 'actor') {
-      addItem(
-        actorItems,
-        row.scope_id,
-        withLocation(baseItem(row, 'unknown', 'raw', 'informational'), row, metadata),
-      );
+      addItem(actorItems, row.scope_id, actorStreamItem(row, metadata));
       continue;
     }
     const members = await membersOf(row.scope_id);

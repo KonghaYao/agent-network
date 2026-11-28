@@ -7,8 +7,6 @@ import type {
   MessageSearchMode,
   MessageSearchPage,
   MessageSearchScope,
-  TaskSearchHit,
-  TaskSearchPage,
 } from './message-search-types';
 
 export type MessageSearchPhase =
@@ -26,7 +24,6 @@ interface SearchArguments {
   query: string;
   mode: MessageSearchMode;
   scope: MessageSearchScope;
-  taskOnly: boolean;
 }
 
 interface UseMessageSearchQueryOptions extends SearchArguments {
@@ -36,13 +33,11 @@ interface UseMessageSearchQueryOptions extends SearchArguments {
 
 export interface MessageSearchQueryController {
   hits: MessageSearchHit[];
-  tasks: TaskSearchHit[];
   phase: MessageSearchPhase;
   busy: boolean;
   hasMore: boolean;
   scanLimited: boolean;
   scannedCount: number;
-  truncated: boolean;
   error: string;
   /** 每次非“加载更多”的响应递增，用来重置键盘选中项。 */
   session: number;
@@ -77,26 +72,22 @@ export function useMessageSearchQuery({
   query,
   mode,
   scope,
-  taskOnly,
   composing,
 }: UseMessageSearchQueryOptions): MessageSearchQueryController {
   const [hits, setHits] = useState<MessageSearchHit[]>([]);
-  const [tasks, setTasks] = useState<TaskSearchHit[]>([]);
   const [phase, setPhase] = useState<MessageSearchPhase>('idle');
   const [busy, setBusy] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [scanLimited, setScanLimited] = useState(false);
   const [scannedCount, setScannedCount] = useState(0);
-  const [truncated, setTruncated] = useState(false);
   const [error, setError] = useState('');
   const [session, setSession] = useState(0);
 
-  const argsRef = useRef<SearchArguments>({ roomId, token, query, mode, scope, taskOnly });
-  argsRef.current = { roomId, token, query, mode, scope, taskOnly };
+  const argsRef = useRef<SearchArguments>({ roomId, token, query, mode, scope });
+  argsRef.current = { roomId, token, query, mode, scope };
   const openRef = useRef(open);
   openRef.current = open;
   const hitsRef = useRef<MessageSearchHit[]>([]);
-  const tasksRef = useRef<TaskSearchHit[]>([]);
   const cursorRef = useRef<string | null>(null);
   const generationRef = useRef(0);
   const keyRef = useRef('');
@@ -118,15 +109,12 @@ export function useMessageSearchQuery({
     busyRef.current = false;
     cursorRef.current = null;
     hitsRef.current = [];
-    tasksRef.current = [];
     setHits([]);
-    setTasks([]);
     setPhase('idle');
     setBusy(false);
     setHasMore(false);
     setScanLimited(false);
     setScannedCount(0);
-    setTruncated(false);
     setError('');
   }, []);
 
@@ -139,7 +127,6 @@ export function useMessageSearchQuery({
     const key = [
       current.roomId,
       current.scope,
-      current.taskOnly ? 'task' : 'message',
       current.mode,
       value,
     ].join('\u0000');
@@ -155,89 +142,56 @@ export function useMessageSearchQuery({
     setPhase(more ? 'loading-more' : 'loading');
     if (!more) {
       hitsRef.current = [];
-      tasksRef.current = [];
       cursorRef.current = null;
       setHits([]);
-      setTasks([]);
       setHasMore(false);
       setScanLimited(false);
       setScannedCount(0);
-      setTruncated(false);
-    }
+      }
 
     const currentRequest = () =>
       generation === generationRef.current && key === keyRef.current;
 
     try {
-      if (current.taskOnly && current.scope === 'room') {
-        const page = await callTool<TaskSearchPage>(
-          'network_task_search',
-          {
-            room_id: current.roomId,
-            query: value,
-            limit: LIMITS.taskSearchPageDefault,
-            ...(more && cursorRef.current ? { cursor: cursorRef.current } : {}),
-          },
-          { token: current.token, signal: controller.signal },
-        );
-        if (!currentRequest()) return;
-        const seen = new Set(tasksRef.current.map((entry) => entry.task.root_message_id));
-        const next = (page.items ?? []).filter((entry) => {
-          if (seen.has(entry.task.root_message_id)) return false;
-          seen.add(entry.task.root_message_id);
-          return true;
-        });
-        const merged = more ? [...tasksRef.current, ...next] : next;
-        tasksRef.current = merged;
-        setTasks(merged);
-        cursorRef.current = page.next_cursor ?? null;
-        setHasMore(Boolean(page.next_cursor));
-        setTruncated(page.truncated === true);
-        setPhase(merged.length === 0 ? 'empty' : 'results');
-        if (!more) setSession((valueNow) => valueNow + 1);
-      } else {
-        const page = await callTool<MessageSearchPage>(
-          'network_message_search',
-          {
-            ...(current.scope === 'room' ? { room_id: current.roomId } : {}),
-            scope: current.scope,
-            mode: current.mode,
-            query: value,
-            limit: LIMITS.messageSearchPageDefault,
-            ...(more && cursorRef.current ? { cursor: cursorRef.current } : {}),
-          },
-          { token: current.token, signal: controller.signal },
-        );
-        if (!currentRequest()) return;
-        const seen = new Set(hitsRef.current.map(messageKey));
-        const next = (page.items ?? []).filter((hit) => {
-          const keyOfHit = messageKey(hit);
-          if (seen.has(keyOfHit)) return false;
-          seen.add(keyOfHit);
-          return true;
-        });
-        const merged = more ? [...hitsRef.current, ...next] : next;
-        hitsRef.current = merged;
-        setHits(merged);
-        cursorRef.current = page.next_cursor ?? null;
-        setHasMore(page.has_more === true);
-        setScanLimited(page.scan_limited === true);
-        setScannedCount(page.scanned_count ?? 0);
-        setPhase(
-          merged.length === 0 ? (page.scan_limited ? 'scan-limited-empty' : 'empty') : 'results',
-        );
-        if (!more) setSession((valueNow) => valueNow + 1);
-      }
+      const page = await callTool<MessageSearchPage>(
+        'network_message_search',
+        {
+          ...(current.scope === 'room' ? { room_id: current.roomId } : {}),
+          scope: current.scope,
+          mode: current.mode,
+          query: value,
+          limit: LIMITS.messageSearchPageDefault,
+          ...(more && cursorRef.current ? { cursor: cursorRef.current } : {}),
+        },
+        { token: current.token, signal: controller.signal },
+      );
+      if (!currentRequest()) return;
+      const seen = new Set(hitsRef.current.map(messageKey));
+      const next = (page.items ?? []).filter((hit) => {
+        const keyOfHit = messageKey(hit);
+        if (seen.has(keyOfHit)) return false;
+        seen.add(keyOfHit);
+        return true;
+      });
+      const merged = more ? [...hitsRef.current, ...next] : next;
+      hitsRef.current = merged;
+      setHits(merged);
+      cursorRef.current = page.next_cursor ?? null;
+      setHasMore(page.has_more === true);
+      setScanLimited(page.scan_limited === true);
+      setScannedCount(page.scanned_count ?? 0);
+      setPhase(
+        merged.length === 0 ? (page.scan_limited ? 'scan-limited-empty' : 'empty') : 'results',
+      );
+      if (!more) setSession((valueNow) => valueNow + 1);
     } catch (failure) {
       if (!currentRequest() || isCancelled(failure)) return;
       setError(failureText(failure));
       setPhase('error');
       if (!more) {
         hitsRef.current = [];
-        tasksRef.current = [];
         cursorRef.current = null;
         setHits([]);
-        setTasks([]);
         setHasMore(false);
         setScanLimited(false);
         setScannedCount(0);
@@ -269,7 +223,7 @@ export function useMessageSearchQuery({
       window.clearTimeout(timer);
     };
     // token 变化（重新登录/身份切换）也必须丢弃旧结果。
-  }, [open, roomId, token, query, mode, scope, taskOnly, composing, reset, run]);
+  }, [open, roomId, token, query, mode, scope, composing, reset, run]);
 
   useEffect(
     () => () => {
@@ -292,13 +246,11 @@ export function useMessageSearchQuery({
 
   return {
     hits,
-    tasks,
     phase,
     busy,
     hasMore,
     scanLimited,
     scannedCount,
-    truncated,
     error,
     session,
     runNow,

@@ -3,7 +3,7 @@ import { expect, test, type Browser, type Page } from '@playwright/test';
 import { baseUrl, callTool, requestId } from './fixtures/components';
 
 /**
- * 头像 UI 验收：上传 → 保存 → 六处渲染 → 替换 → 移除，以及坏图、非法类型、
+ * 头像 UI 验收：上传 → 保存 → 五处渲染 → 替换 → 移除，以及坏图、非法类型、
  * 390 布局与焦点返回。所有数据来自真实 MCP 与真实 /mcp-upload。
  */
 
@@ -44,7 +44,6 @@ let agentToken = '';
 let agentActor = '';
 let agentName = '';
 let groupId = '';
-let taskRoot = '';
 let firstAvatar = '';
 let secondAvatar = '';
 
@@ -187,37 +186,18 @@ test.beforeAll(async () => {
   });
   groupId = group.room.room_id;
 
-  const root = await callTool<{ message: { message_id: string } }>(
-    base,
-    managerToken,
-    'network_message_send',
-    {
-      request_id: requestId('avatar_task'),
-      client_message_id: requestId('avatar_task_cm'),
-      room_id: groupId,
-      body: '头像 Task 起点',
-      invoke: [],
-    },
-  );
-  taskRoot = root.message.message_id;
-  await callTool(base, managerToken, 'network_task_mark', {
-    request_id: requestId('avatar_task_mark'),
-    room_id: groupId,
-    message_id: taskRoot,
-  });
   await callTool(base, agentToken, 'network_message_send', {
     request_id: requestId('avatar_reply'),
     client_message_id: requestId('avatar_reply_cm'),
     room_id: groupId,
     body: 'Agent 任务回复',
     invoke: [],
-    task_root_id: taskRoot,
   });
   expect(managerActor).not.toBe('');
 });
 
 test.describe.serial('avatar ui', () => {
-  test('上传 1×1 PNG、保存并在六处显示同一 avatar_url', async ({ browser }) => {
+  test('上传 1×1 PNG、保存并在五处显示同一 avatar_url', async ({ browser }) => {
     const agentPage = await loginAs(browser, agentToken);
     try {
       await expect(agentPage.page.locator('#account-avatar-edit')).toBeVisible();
@@ -243,7 +223,7 @@ test.describe.serial('avatar ui', () => {
 
       const humanPage = await loginAs(browser, humanToken, `/c/${groupId}`);
       try {
-        // 消息与 Task 摘要
+        // 消息
         const reply = humanPage.page.locator('.msg').filter({ hasText: 'Agent 任务回复' });
         await expect(reply).toBeVisible();
         await expectAvatarSrc(
@@ -251,17 +231,6 @@ test.describe.serial('avatar ui', () => {
           `.msg:has-text("Agent 任务回复") .msg-avatar img.avatar-img`,
           firstAvatar,
         );
-        await expect
-          .poll(
-            () =>
-              humanPage.page
-                .locator('.msg-task-bar-slot .task-bar-avatars img.avatar-img')
-                .first()
-                .evaluate((element) => (element as HTMLImageElement).src)
-                .catch(() => ''),
-            { timeout: 10_000 },
-          )
-          .toBe(absolute(firstAvatar));
 
         // 群成员
         await humanPage.page.locator('#members-button').click();

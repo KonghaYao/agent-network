@@ -18,7 +18,7 @@ import * as schema from './schema';
  *   触发器（`0045`/`0046`）；
  * - 复杂 SQL：JOIN/UNION/EXISTS、`json_each` 权限谓词、`CASE`、CTE 与
  *   `EXPLAIN` 敏感查询；
- * - 未迁移域：tasks 等仍以 raw SQL 为准；messages / deliveries / files /
+ * - 未迁移域：messages / deliveries / files /
  *   events / memory 只迁移了简单只读查询，其余仍为 raw。
  *
  * 边界约束：

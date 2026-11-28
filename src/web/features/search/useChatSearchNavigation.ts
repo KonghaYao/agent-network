@@ -137,8 +137,8 @@ export function useChatSearchNavigation({
    *
    * 服务端 anchor 请求会拒绝已撤回消息（body_bytes=0），因此不能原地重读
    * 墓碑；这里直接丢弃旧窗口并回到最新页，避免继续展示旧正文缓存。
-   * 返回被丢弃的 anchor 消息；调用方据此复位滚动，并在该消息带 Task
-   * 标记时重读 Task 列表。未丢弃窗口或消息不在窗口内时返回 null。
+   * 返回被丢弃的 anchor 消息，调用方据此复位滚动；未丢弃窗口或消息
+   * 不在窗口内时返回 null。
    */
   const onRemoteRecall = useCallback(
     (messageId: string): HistoryMessage | null => {

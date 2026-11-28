@@ -12,11 +12,8 @@ export interface PendingRefresh {
   detail: boolean;
   history: boolean;
   files: boolean;
-  taskSummaries: boolean;
-  /** 常驻 Task 列表与已打开的 Trace；普通消息也可能改变计数/预览。 */
-  tasks: boolean;
-  /** 成员代次、历史策略或生命周期变化：丢弃旧授权下的 Task 缓存。 */
-  taskReset: boolean;
+  /** 个人看板变化：只失效 `['focus']`，与房间窗口无关。 */
+  focus: boolean;
   contacts: boolean;
   contactBadge: boolean;
   /** 当前房间内需要按锚点重读的消息（回执等旧窗口项）。 */
@@ -29,9 +26,7 @@ export function emptyPendingRefresh(): PendingRefresh {
     detail: false,
     history: false,
     files: false,
-    taskSummaries: false,
-    tasks: false,
-    taskReset: false,
+    focus: false,
     contacts: false,
     contactBadge: false,
     messageIds: new Set(),
@@ -43,10 +38,9 @@ export function emptyPendingRefresh(): PendingRefresh {
  *
  * - 当前房间的消息、回执、成员/生命周期变化才失效 history 与 detail；
  * - 其他房间只失效侧栏列表，不碰当前房间历史；
- * - 文件与任务摘要各自失效，避免 `['room', id]` 前缀把 history 一并命中；
+ * - 文件单独失效，避免 `['room', id]` 前缀把 history 一并命中；
  * - `room.read` 是本地 mark_read mutation 的回声，缓存已写回，不再重读；
- * - 撤回只重读受影响的已加载窗口，不整页重读；Task 列表由调用方按
- *   被撤回消息的 Task 标记决定是否追加。
+ * - 撤回只重读受影响的已加载窗口，不整页重读。
  */
 export function markPendingRefresh(
   pending: PendingRefresh,
@@ -68,8 +62,12 @@ export function markPendingRefresh(
     pending.rooms = true;
     pending.detail = true;
     pending.history = true;
-    pending.tasks = true;
-    pending.taskSummaries = true;
+    pending.focus = true;
+    return;
+  }
+  // actor scope 的看板提示不带房间定位，必须在缺 roomId 前分流。
+  if (source === 'focus.updated' || kind === 'focus') {
+    pending.focus = true;
     return;
   }
   if (!roomId) {
@@ -87,8 +85,8 @@ export function markPendingRefresh(
   if (source === 'room.read' || kind === 'read') {
     return;
   }
-  // 置顶只改变房间详情里的 pinned_messages：不重读历史、不重置 Task，
-  // 也不推进未读或滚动。必须先于通用 `kind === 'room'` 分支处理。
+  // 置顶只改变房间详情里的 pinned_messages：不重读历史，也不推进未读
+  // 或滚动。必须先于通用 `kind === 'room'` 分支处理。
   if (source === 'room.pins') {
     pending.detail = true;
     return;
@@ -105,13 +103,6 @@ export function markPendingRefresh(
   if (messageId && (kind === 'message' || kind === 'receipt')) {
     pending.messageIds.add(messageId);
   }
-  if (source === 'task.updated' || kind === 'task') {
-    pending.history = true;
-    pending.detail = true;
-    pending.taskSummaries = true;
-    pending.tasks = true;
-    return;
-  }
   if (source === 'room.presence' || kind === 'presence') {
     pending.detail = true;
     pending.rooms = true;
@@ -123,33 +114,11 @@ export function markPendingRefresh(
     pending.history = true;
     pending.detail = true;
     pending.rooms = true;
-    pending.tasks = true;
-    pending.taskReset = true;
-    pending.taskSummaries = true;
     return;
   }
   pending.history = true;
   pending.detail = true;
   pending.rooms = true;
-  if (source === 'room.message' || kind === 'message') {
-    // 普通消息与撤回改变消息数、参与者、最近活动与 recent_messages。
-    pending.tasks = true;
-    pending.taskSummaries = true;
-  }
-}
-
-/** 撤回消息是否在当前时间线缓存里带 Task 标记。 */
-export function historyItemHasTaskMarker(
-  items: HistoryItem[] | undefined,
-  messageId: string,
-): boolean {
-  if (!items) return false;
-  return items.some(
-    (item) =>
-      item.kind !== 'presence' &&
-      item.message_id === messageId &&
-      item.task_root_id !== null,
-  );
 }
 
 /** 消息是否已经渲染在实时时间线缓存里。 */

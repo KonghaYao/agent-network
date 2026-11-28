@@ -50,6 +50,7 @@ export function AppSidebar({ notice = null, live = true, streamError = null }: A
   const streamRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const actionNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const streamContactRef = useRef(false);
+  const streamFocusRef = useRef(false);
   useEffect(
     () => () => {
       if (streamRefreshTimerRef.current) clearTimeout(streamRefreshTimerRef.current);
@@ -81,11 +82,23 @@ export function AppSidebar({ notice = null, live = true, streamError = null }: A
         if (event.type === 'event' && event.source === 'contact') {
           streamContactRef.current = true;
         }
+        if (
+          event.type === 'event' &&
+          (event.source === 'focus.updated' ||
+            event.kind === 'focus' ||
+            event.source === 'stream.gap')
+        ) {
+          streamFocusRef.current = true;
+        }
         // 同一 300ms 窗口内的多 item 只刷新一次会话列表。
         if (streamRefreshTimerRef.current) return;
         streamRefreshTimerRef.current = setTimeout(() => {
           streamRefreshTimerRef.current = null;
           void queryClient.invalidateQueries({ queryKey: queryKeys.rooms(actorId) });
+          if (streamFocusRef.current) {
+            streamFocusRef.current = false;
+            void queryClient.invalidateQueries({ queryKey: queryKeys.focus() });
+          }
           // 好友申请只随 contact 事件变化；普通消息不重复拉申请列表。
           if (!streamContactRef.current) return;
           streamContactRef.current = false;

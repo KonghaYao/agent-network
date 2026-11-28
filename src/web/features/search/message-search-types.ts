@@ -1,5 +1,3 @@
-import type { TaskSummary } from '../tasks/TaskSummaryBar';
-
 /** 搜索弹窗的前端类型；不从 domain 导入，避免服务端模块进入浏览器 chunk。 */
 export type MessageSearchMode = 'exact' | 'fuzzy';
 export type MessageSearchScope = 'room' | 'all';
@@ -33,19 +31,6 @@ export interface MessageSearchPage {
   has_more: boolean;
   scan_limited?: boolean;
   scanned_count?: number;
-}
-
-export interface TaskSearchHit {
-  task: TaskSummary;
-  hit_count: number;
-  matches: { message_id: string; snippet: string }[];
-}
-
-export interface TaskSearchPage {
-  items: TaskSearchHit[];
-  next_cursor: string | null;
-  has_more: boolean;
-  truncated: boolean;
 }
 
 /** 定位请求只描述结果，不携带授权或房间快照；每次定位重新向服务端鉴权。 */

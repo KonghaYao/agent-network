@@ -74,8 +74,8 @@ interface SeedMemoryInput {
   sourceText: string;
   experienceText: string;
   order?: number;
-  /** 默认 message；task_offer 用于验证非 message 来源不带出 message_id。 */
-  sourceKind?: 'message' | 'task_offer';
+  /** 默认 message；file 用于验证非 message 来源不带出 message_id。 */
+  sourceKind?: 'message' | 'file';
   businessRefJson?: string;
 }
 
@@ -83,7 +83,7 @@ async function seedMemory(env: MemoryTestEnv, input: SeedMemoryInput): Promise<v
   const suffix = unique('inj');
   const order = input.order ?? 1;
   const sourceKind = input.sourceKind ?? 'message';
-  const businessRefKind = sourceKind === 'message' ? 'message' : 'task';
+  const businessRefKind = sourceKind === 'message' ? 'message' : 'file';
   const businessRefJson =
     input.businessRefJson ?? JSON.stringify({ message_id: input.messageId });
   const sourceId = `msrc_${suffix}`;
@@ -371,7 +371,7 @@ async function main(): Promise<void> {
     experienceText: `${markerOtherAgent} B 自己的经历`,
     order: 3,
   });
-  const taskOfferMarker = 'ROOM_A_TASK_OFFER_MARKER';
+  const fileMarker = 'ROOM_A_FILE_MARKER';
   await seedMemory(env, {
     agentId: agentA,
     spaceId: spaceA.space.space_id,
@@ -379,10 +379,10 @@ async function main(): Promise<void> {
     roomId: roomA,
     messageId: msgA2,
     senderId: human,
-    sourceKind: 'task_offer',
-    businessRefJson: JSON.stringify({ task_id: 'tsk_inj_offer', message_id: msgA2 }),
-    sourceText: `${taskOfferMarker} 待办来源`,
-    experienceText: `${taskOfferMarker} 待办经历`,
+    sourceKind: 'file',
+    businessRefJson: JSON.stringify({ file_id: 'file_inj_source', message_id: msgA2 }),
+    sourceText: `${fileMarker} 文件来源`,
+    experienceText: `${fileMarker} 文件经历`,
     order: 4,
   });
 
@@ -437,24 +437,24 @@ async function main(): Promise<void> {
       messageItems.length > 0 && messageItems.every((item) => item.source_message_id === msgA1),
       messageItems,
     );
-    const taskOfferItems = packA.items.filter((item) => item.source_kind === 'task_offer');
+    const fileItems = packA.items.filter((item) => item.source_kind === 'file');
     check(
-      'task_offer 来源 source_message_id 为 null',
-      taskOfferItems.length === 2 &&
-        taskOfferItems.every(
+      'file 来源 source_message_id 为 null',
+      fileItems.length === 2 &&
+        fileItems.every(
           (item) =>
             item.source_message_id === null &&
             item.message_count === 0 &&
             item.message_ids.length === 0,
         ),
-      taskOfferItems,
+      fileItems,
     );
     check(
-      'task_offer 的 business_ref message id 不进入包',
+      'file 的 business_ref message id 不进入包',
       !JSON.stringify(packA).includes(msgA2),
       packA.items,
     );
-    checkEqual('task_offer 不计入候选消息数', packA.stats.messages, 1);
+    checkEqual('file 不计入候选消息数', packA.stats.messages, 1);
 
     const same = await callPack(serverA.client, { room_id: roomA });
     checkEqual('相同输入 pack_id 稳定', same.pack_id, packA.pack_id);

@@ -133,5 +133,4 @@ test('a dropped-only frame still refreshes current-room history', async () => {
   expect(pending.rooms).toBe(true);
   expect(pending.detail).toBe(true);
   expect(pending.history).toBe(true);
-  expect(pending.tasks).toBe(true);
 });

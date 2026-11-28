@@ -401,8 +401,6 @@ function verifyWriteGuard(): void {
     'network_room_create',
     'network_contact_request',
     'network_contact_link_redeem',
-    'network_task_mark',
-    'network_task_complete',
   ]) {
     check(`不兼容时拦截 ${tool}`, updateWriteBlockReason(tool) === UPDATE_WRITE_BLOCKED_MESSAGE);
   }

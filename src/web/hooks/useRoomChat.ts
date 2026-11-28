@@ -20,14 +20,12 @@ import { callTool, mcpError, type McpError } from '../lib/mcp-client';
 import { queryKeys } from '../lib/query-keys';
 import {
   emptyPendingRefresh,
-  historyItemHasTaskMarker,
   historyItemVisible,
   markPendingRefresh,
   type PendingRefresh,
 } from '../lib/room-stream-refresh';
 import type { RoomsPage } from '../lib/rooms';
 import { SCOPE_RESET_EVENT, type ScopeResetDetail } from '../lib/scope-reset';
-import { invalidateRoomTasks, resetRoomTasks } from '../lib/task-cache';
 import { triggerRecovery } from '../pwa/recovery';
 import { useWebSession } from './useWebSession';
 
@@ -86,8 +84,6 @@ export interface RoomChatOptions {
 export interface ModerationRefresh {
   messageId?: string;
   pinsOnly?: boolean;
-  /** 被撤回消息带 Task 标记时才刷新 Task 列表。 */
-  hasTask?: boolean;
 }
 
 interface HistoryCache {
@@ -289,7 +285,7 @@ export function useRoomChat(roomId: string, options: RoomChatOptions = {}) {
     },
   });
 
-  // 群成员/直聊对端资料进入 actor 头像缓存，供消息与 Task 摘要补图。
+  // 群成员/直聊对端资料进入 actor 头像缓存，供消息补图。
   useEffect(() => {
     const members = detailQuery.data?.members;
     if (!members) return;
@@ -694,7 +690,7 @@ export function useRoomChat(roomId: string, options: RoomChatOptions = {}) {
       jobs.push(queryClient.invalidateQueries({ queryKey: queryKeys.rooms(actorId) }));
     }
     if (pending.detail) {
-      // exact：不能命中同前缀的 history / files / task-summary。
+      // exact：不能命中同前缀的 history / files。
       jobs.push(queryClient.invalidateQueries({ queryKey: detailKey, exact: true }));
     }
     if (pending.history) {
@@ -705,15 +701,6 @@ export function useRoomChat(roomId: string, options: RoomChatOptions = {}) {
       jobs.push(
         queryClient.invalidateQueries({ queryKey: queryKeys.roomFiles(roomId), exact: true }),
       );
-    }
-    if (pending.taskSummaries && !pending.tasks && !pending.taskReset) {
-      jobs.push(queryClient.invalidateQueries({ queryKey: queryKeys.taskSummaries(roomId) }));
-    }
-    if (pending.taskReset) {
-      // 丢弃旧代次下的列表与 Trace 预览；活动查询会重新鉴权后重读。
-      jobs.push(resetRoomTasks(queryClient, roomId));
-    } else if (pending.tasks) {
-      jobs.push(invalidateRoomTasks(queryClient, roomId));
     }
     if (pending.contacts) {
       jobs.push(
@@ -728,6 +715,9 @@ export function useRoomChat(roomId: string, options: RoomChatOptions = {}) {
           queryKey: queryKeys.contactRequestBadge(actorId),
         }),
       );
+    }
+    if (pending.focus) {
+      jobs.push(queryClient.invalidateQueries({ queryKey: queryKeys.focus() }));
     }
     for (const messageId of pending.messageIds) {
       jobs.push(refreshVisibleMessage(messageId));
@@ -751,25 +741,20 @@ export function useRoomChat(roomId: string, options: RoomChatOptions = {}) {
   /**
    * 群管理操作后的定向刷新，与 SSE 共用同一 pending 合并器。
    *
-   * - 置顶只失效 detail；不重读历史、Task 或会话排序；
-   * - 撤回只重读已渲染窗口，只有带 Task 标记时才刷新 Task 列表；
+   * - 置顶只失效 detail；不重读历史与会话排序；
+   * - 撤回只重读已渲染窗口；
    * - 若已有防抖刷新在排队，先取消并合并到本次，避免两个 refresh 互相覆盖。
    */
   const refreshModeration = useCallback(
     async ({
       messageId,
       pinsOnly = false,
-      hasTask = false,
     }: ModerationRefresh = {}): Promise<void> => {
       if (!token) return;
       const pending = pendingRefreshRef.current;
       pending.detail = true;
       if (!pinsOnly) {
         pending.rooms = true;
-        if (hasTask) {
-          pending.tasks = true;
-          pending.taskSummaries = true;
-        }
         if (messageId) {
           // 撤回消息无法作为 anchor 重读；只有已渲染的窗口需要重读一次。
           const cached = queryClient.getQueryData<HistoryCache>(historyKey);
@@ -815,8 +800,6 @@ export function useRoomChat(roomId: string, options: RoomChatOptions = {}) {
         // 只补当前房间；无关房间事件仍只刷新侧栏。
         pending.history = true;
         pending.detail = true;
-        pending.tasks = true;
-        pending.taskSummaries = true;
       } else {
         const membershipEvent =
           event.roomId === roomId &&
@@ -832,16 +815,9 @@ export function useRoomChat(roomId: string, options: RoomChatOptions = {}) {
         }
         markPendingRefresh(pending, event, roomId, humanTimeline);
         if (event.change === 'recalled' && event.messageId) {
-          // 事件本身不带 Task 标记；只有已加载窗口里的消息才需要重读，
-          // 也只有带 Task 标记的撤回才刷新 Task 列表。
+          // 撤回只影响已加载窗口；未渲染的消息等下次读取权威状态。
           const cached = queryClient.getQueryData<HistoryCache>(historyKey);
-          if (historyItemVisible(cached?.items, event.messageId)) {
-            pending.history = true;
-            if (historyItemHasTaskMarker(cached?.items, event.messageId)) {
-              pending.tasks = true;
-              pending.taskSummaries = true;
-            }
-          }
+          if (historyItemVisible(cached?.items, event.messageId)) pending.history = true;
         }
         // anchor 窗口不在 React Query；由这里转发 recalled 提示，避免另开订阅。
         onEventRef.current?.(event);

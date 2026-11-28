@@ -53,8 +53,6 @@ export function TimelineDom({
   onQuote,
   onStatus,
   onMarkRead,
-  onToggleTask,
-  onOpenTask,
   onOpenFile,
   onRecall,
   onReedit,
@@ -267,8 +265,6 @@ export function TimelineDom({
           searchFlash={flashId === item.message_id}
           onQuote={onQuote}
           onStatus={onStatus}
-          onToggleTask={onToggleTask}
-          onOpenTask={onOpenTask}
           onOpenFile={onOpenFile}
           onRecall={onRecall}
           onReedit={onReedit}

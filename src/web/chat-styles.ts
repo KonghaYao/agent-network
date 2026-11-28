@@ -57,7 +57,7 @@ export const APP_STYLE = `
 
   button:where(:not([data-lenso-slot])) { border-radius: 4px; border: 1px solid var(--wx-line); background: var(--wx-panel);
     color: var(--wx-text); padding: 7px 14px; font-size: 13px; cursor: pointer; }
-  /* 页面内原生控件采用共享的紧凑 role，避免影响 Task 等独立区域。 */
+  /* 页面内原生控件采用共享的紧凑 role，避免影响独立区域。 */
   :is(.sidebar, .chat-head, .composer) button:where(:not([data-lenso-slot])) {
     box-sizing: border-box; height: var(--app-control-normal) !important;
     min-height: var(--app-control-normal) !important; padding: 0 12px;
@@ -410,8 +410,6 @@ export const APP_STYLE = `
     border-radius: 4px; background: var(--wx-bg); color: var(--wx-text);
     font: inherit; font-size: 13px; }
   .field textarea:not([data-lenso-slot]) { resize: vertical; line-height: 1.6; }
-  .msg.task-message-flash .bubble { outline: 2px solid var(--wx-link);
-    outline-offset: 2px; }
 
   .chat-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
     position: relative; background: var(--wx-bg); }
@@ -585,7 +583,7 @@ export const APP_STYLE = `
   .mention-item[data-active-item] { background: var(--wx-hover); }
   .mention-kind { margin-left: auto; font-size: 11px; color: var(--wx-muted); }
 
-  /* Task dock 的定位锚点：只包住输入区，不参与消息流高度。 */
+  /* 输入区定位锚点：只包住输入区，不参与消息流高度。 */
   .composer-area { position: relative; flex: 0 0 auto; }
   .composer { flex: 0 0 auto; display: flex; align-items: flex-end; gap: 8px;
     padding: 8px 16px calc(8px + env(safe-area-inset-bottom));

@@ -57,29 +57,6 @@ export const LIMITS = {
   webMessageSearchDebounceMs: 300,
   /** 网页定位目标消息的闪烁时长（毫秒）。 */
   webMessageSearchFlashMs: 1_600,
-  /** 消息式 Task 单次摘要批量上限；未标记或不可见的根直接省略。 */
-  taskSummaryRootsMax: 20,
-  /** 摘要参与者头像组上限；`participant_count` 仍返回完整去重计数。 */
-  taskParticipantsMax: 200,
-  /** Trace 页默认 / 最大条数；长集合分页读取，不一次全量返回。 */
-  taskTracePageDefault: 50,
-  taskTracePageMax: 100,
-  /** Task 搜索页默认 / 最大条数；按起点聚合后分页。 */
-  taskSearchPageDefault: 20,
-  taskSearchPageMax: 50,
-  /** 每个 Task 摘要返回的命中消息上限；完整数量用 hit_count。 */
-  taskSearchMatchesMax: 3,
-  /** 单次 Task 搜索扫描的命中消息上限；超过时标记 truncated，不静默全表扫描。 */
-  taskSearchScanMax: 2_000,
-  /** 房间常驻 Task 列表默认 / 最大条数。 */
-  taskListPageDefault: 20,
-  taskListPageMax: 20,
-  /** 列表项最多展示的 Agent 参与者；`participant_count` 仍返回完整计数。 */
-  taskListParticipantsMax: 3,
-  /** 列表项最近处理消息预览条数。 */
-  taskListRecentMessagesMax: 3,
-  /** 列表项根与最近消息的字符预览上限；完整正文仍走消息读取。 */
-  taskListPreviewChars: 160,
   /** 普通工具响应上限。 */
   toolResponseBytes: 256 * 1024,
   /** inbox 页默认 / 最大条数。 */
@@ -336,16 +313,6 @@ export const LIMITS = {
   fileTicketTtlMs: 60 * 60_000,
   /** 网页监控面板 URL 的 UTF-8 字节上限；只允许 http/https。 */
   roomMonitorUrlMax: 2048,
-  /** 消息式 Task 起点短标题字符上限（按 Unicode 码点）。 */
-  taskTitleMax: 120,
-  /** 单次提交冻结的材料数量上限（旧成果接口兼容）。 */
-  taskSubmissionMaterialsMax: 20,
-  /** 单次提交记录的外链数量上限（旧成果接口兼容）。 */
-  taskSubmissionLinksMax: 20,
-  /** 实现提交 SHA 字符上限；接受 7–64 位十六进制（旧成果接口兼容）。 */
-  taskSubmissionCommitShaMax: 64,
-  /** 单条验收核对项 UTF-8 字节上限（旧成果接口兼容）。 */
-  taskReviewChecklistItemBytes: 2 * 1024,
   /** 房间文件列表默认 / 最大条数。 */
   roomFilePageDefault: 20,
   roomFilePageMax: 100,
@@ -799,6 +766,29 @@ export const LIMITS = {
   memoryPanelDateSpanDays: 366,
   /** 列表 offset 上限，避免深分页放大上游压力。 */
   memoryPanelOffsetMax: 5_000,
+  /** Task Focus 看板每页默认 / 最大条数。 */
+  focusListPageDefault: 20,
+  focusListPageMax: 50,
+  /** 详情证据摘录字符上限（码点）；完整正文仍走消息读取。 */
+  focusEvidenceExcerptChars: 600,
+  /** 单次作业最多读取的候选批大小。 */
+  focusJobCandidatesMax: 50,
+  /** 同一作业最多重派次数；超过后失败并把候选释放回 pending。 */
+  focusJobAttemptMax: 3,
+  /** 秘书作业租约；每次工具调用续租，过期后可被恢复任务重派。 */
+  focusJobLeaseMs: 10 * 60_000,
+  /** Watch 单次数据库读取的已提交事件条数。 */
+  focusScanBatchMax: 200,
+  /** 单次唤醒最多连续追赶的批数，剩余的留到下一次唤醒。 */
+  focusScanBatchesMax: 20,
+  /** 秘书单次读取的证据来源条数上限。 */
+  focusSecretaryEvidenceMax: 20,
+  /** 秘书查重返回的紧凑卡上限。 */
+  focusSecretaryFindMax: 20,
+  /** 秘书提交单条 decision 的文本长度上限。 */
+  focusSecretaryTextMax: 2_000,
+  /** 列表搜索词字符上限。 */
+  focusQueryMax: 200,
 } as const;
 
 export function clampPage(value: number | undefined, fallback: number, max: number): number {

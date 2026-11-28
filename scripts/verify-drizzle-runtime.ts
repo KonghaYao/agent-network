@@ -429,9 +429,8 @@ function seed(sqlite: Database): void {
   const message = sqlite.prepare(
     `INSERT INTO messages
        (message_id, room_id, sender_id, client_message_id, created_seq, body, body_bytes,
-        preview, reply_to, root_id, hop, root_invocations_used, created_at,
-        task_root_id, task_marked_by, task_marked_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        preview, reply_to, root_id, hop, root_invocations_used, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const messages: [
     string,
@@ -443,19 +442,16 @@ function seed(sqlite: Database): void {
     string | null,
     number,
     string,
-    string | null,
-    string | null,
-    number | null,
   ][] = [
-    ['msg_d1_1', 'room_direct_1', 'act_human_1', 1, 'hello direct', null, null, 0, 'cm_d1_1', null, null, null],
-    ['msg_d1_2', 'room_direct_1', 'act_agent_1', 2, 'agent reply', 'msg_d1_1', 'msg_d1_1', 1, 'cm_d1_2', null, null, null],
-    ['msg_d1_5', 'room_direct_1', 'act_human_1', 5, 'later message', null, null, 0, 'cm_d1_5', null, null, null],
-    ['msg_d2_1', 'room_direct_2', 'act_agent_2', 1, 'second room', null, null, 0, 'cm_d2_1', null, null, null],
-    ['msg_d2_2', 'room_direct_2', 'act_human_1', 2, 'second reply', null, null, 0, 'cm_d2_2', null, null, null],
-    ['msg_g1_3', 'room_group_1', 'act_human_1', 3, 'group start', null, null, 0, 'cm_g1_3', null, null, null],
-    ['msg_g1_8', 'room_group_1', 'act_agent_1', 8, 'group task', null, null, 0, 'cm_g1_8', 'msg_g1_8', 'act_human_1', 1_300],
-    ['msg_g1_9', 'room_group_1', 'act_agent_3', 9, 'group answer', 'msg_g1_8', 'msg_g1_8', 1, 'cm_g1_9', 'msg_g1_9', 'act_agent_1', 1_400],
-    ['msg_ghost', 'room_group_1', 'act_missing', 7, 'ghost sender', null, null, 0, 'cm_ghost', null, null, null],
+    ['msg_d1_1', 'room_direct_1', 'act_human_1', 1, 'hello direct', null, null, 0, 'cm_d1_1'],
+    ['msg_d1_2', 'room_direct_1', 'act_agent_1', 2, 'agent reply', 'msg_d1_1', 'msg_d1_1', 1, 'cm_d1_2'],
+    ['msg_d1_5', 'room_direct_1', 'act_human_1', 5, 'later message', null, null, 0, 'cm_d1_5'],
+    ['msg_d2_1', 'room_direct_2', 'act_agent_2', 1, 'second room', null, null, 0, 'cm_d2_1'],
+    ['msg_d2_2', 'room_direct_2', 'act_human_1', 2, 'second reply', null, null, 0, 'cm_d2_2'],
+    ['msg_g1_3', 'room_group_1', 'act_human_1', 3, 'group start', null, null, 0, 'cm_g1_3'],
+    ['msg_g1_8', 'room_group_1', 'act_agent_1', 8, 'group task', null, null, 0, 'cm_g1_8'],
+    ['msg_g1_9', 'room_group_1', 'act_agent_3', 9, 'group answer', 'msg_g1_8', 'msg_g1_8', 1, 'cm_g1_9'],
+    ['msg_ghost', 'room_group_1', 'act_missing', 7, 'ghost sender', null, null, 0, 'cm_ghost'],
   ];
   for (const [
     id,
@@ -467,9 +463,6 @@ function seed(sqlite: Database): void {
     rootId,
     hop,
     clientMessageId,
-    taskRootId,
-    taskMarkedBy,
-    taskMarkedAt,
   ] of messages) {
     message.run(
       id,
@@ -485,9 +478,6 @@ function seed(sqlite: Database): void {
       hop,
       hop,
       1_000 + seq,
-      taskRootId,
-      taskMarkedBy,
-      taskMarkedAt,
     );
   }
 
@@ -856,7 +846,7 @@ function placeholders(values: unknown[]): string {
 
 /** 历史页共享列；与生产 `historyMessageSelection` 的列和顺序一致。 */
 const HISTORY_SELECT =
-  'message_id, room_id, sender_id, created_seq, preview, body_bytes, created_at, reply_to, root_id, task_root_id, hop';
+  'message_id, room_id, sender_id, created_seq, preview, body_bytes, created_at, reply_to, root_id, hop';
 
 function rawHistoryBefore(
   sqlite: Database,
@@ -2048,11 +2038,6 @@ async function rowParityChecks(sqlite: Database, db: D1Database): Promise<void> 
     'getMessage',
     JSON.stringify(await getMessage(db, 'msg_d1_2')),
     JSON.stringify(rawFirst(sqlite, 'SELECT * FROM messages WHERE message_id = ?', ['msg_d1_2'])),
-  );
-  checkEqual(
-    'getMessage task root',
-    JSON.stringify(await getMessage(db, 'msg_g1_9')),
-    JSON.stringify(rawFirst(sqlite, 'SELECT * FROM messages WHERE message_id = ?', ['msg_g1_9'])),
   );
   checkEqual('getMessage missing', await getMessage(db, 'msg_missing'), null);
 

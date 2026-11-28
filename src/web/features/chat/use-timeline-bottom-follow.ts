@@ -229,7 +229,7 @@ export function useTimelineBottomFollow({
     if (gestureActive()) return false;
     if (pinnedRef.current) return true;
     const now = Date.now();
-    // 搜索/引用/Task 跳转刚发生时，入口 settle 的贴底宽限不得把定位拉回底部。
+    // 搜索/引用跳转刚发生时，入口 settle 的贴底宽限不得把定位拉回底部。
     if (now < suppressFollowUntilRef.current) return false;
     if (now - lastUpwardInputRef.current < 500) return false;
     // 刚显示后的首轮异步长高（图片/Markdown）：用户还没机会操作，

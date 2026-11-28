@@ -26,7 +26,6 @@ export interface HistoryMessage {
   created_at: string;
   reply_to: string | null;
   root_id: string | null;
-  task_root_id: string | null;
   hop: number;
   delivery_states: Record<string, number>;
   mentions: MentionView[];

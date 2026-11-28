@@ -11,24 +11,6 @@ export const queryKeys = {
   roomFiles: (roomId: string) => ['room', roomId, 'files'] as const,
   history: (roomId: string, timeline: boolean) =>
     ['room', roomId, 'history', timeline ? 'timeline' : 'default'] as const,
-  taskSummary: (roomId: string, rootId: string, version: string) =>
-    ['room', roomId, 'task-summary', rootId, version] as const,
-  taskSummaries: (roomId: string) => ['room', roomId, 'task-summary'] as const,
-  /** 房间级 Task 缓存前缀：列表、打开的 Trace 共用同一失效入口。
-   *  放在 `room` 前缀之外，避免房间级 invalidate 用旧游标重读所有列表页。 */
-  roomTasks: (roomId: string) => ['room-tasks', roomId] as const,
-  /** 只命中常驻列表，不命中 Trace。 */
-  taskLists: (roomId: string) => ['room-tasks', roomId, 'list'] as const,
-  taskList: (
-    roomId: string,
-    actorId: string | null,
-    status: 'open' | 'completed' | 'all',
-    authorization: string,
-  ) =>
-    ['room-tasks', roomId, 'list', actorId ?? 'anonymous', status, authorization] as const,
-  taskTraces: (roomId: string) => ['room-tasks', roomId, 'trace'] as const,
-  taskTrace: (roomId: string, rootId: string | null, focusId: string | null) =>
-    ['room-tasks', roomId, 'trace', rootId ?? 'none', focusId ?? 'root'] as const,
   contacts: (actorId: string | null) => ['contacts', actorId ?? 'anonymous'] as const,
   contactBlocks: (actorId: string | null) => ['contact-blocks', actorId ?? 'anonymous'] as const,
   agentManagement: (actorId: string | null) =>
@@ -40,6 +22,13 @@ export const queryKeys = {
   archivedAgents: (actorId: string | null, ids: readonly string[]) =>
     ['archived-agents', actorId ?? 'anonymous', ids.join('|')] as const,
   leavePreview: (roomId: string) => ['room', roomId, 'leave-preview'] as const,
+  /** 个人看板：`['focus']` 是 SSE 与写操作的统一失效前缀。 */
+  focus: () => ['focus'] as const,
+  focusStatus: (actorId: string | null) => ['focus', 'status', actorId ?? 'anonymous'] as const,
+  focusItems: (actorId: string | null, archived: boolean, query: string) =>
+    ['focus', 'items', actorId ?? 'anonymous', archived ? 'archived' : 'current', query] as const,
+  focusItem: (actorId: string | null, itemId: string | null) =>
+    ['focus', 'item', actorId ?? 'anonymous', itemId ?? 'none'] as const,
 };
 
 export type QueryKey = ReturnType<(typeof queryKeys)[keyof typeof queryKeys]>;

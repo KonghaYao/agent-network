@@ -215,9 +215,8 @@ for (const fallback of [false, true]) {
       await expect(toggle).toBeFocused();
       await trigger(page).click();
       await expect(page.locator('#message-action-menu')).toHaveAttribute('data-lenso-slot', fallback ? 'menu-fallback' : 'menu-popup');
-      expectMenuMetrics(await menuMetrics(page, '#message-action-menu', '#message-action-task'));
+      expectMenuMetrics(await menuMetrics(page, '#message-action-menu', '#message-action-quote'));
       await expectLiveRimHidden(page, '#message-action-menu', !fallback);
-      await expect(page.locator('#message-action-task')).toHaveText('标记为 Task');
       await expect(page.locator('#message-action-recall')).toHaveClass(/danger/);
       await expect(page.locator('#message-action-memory')).toHaveCount(0);
       await page.locator('#message-action-forward').focus();
@@ -282,7 +281,7 @@ for (const fallback of [false, true]) {
     await page.locator('.message-actions-trigger').first().click();
     await expect(page.locator('#message-action-copy')).toBeVisible();
     await expect(page.locator('#message-action-forward')).toBeVisible();
-    for (const id of ['task', 'quote', 'recall', 'memory']) {
+    for (const id of ['quote', 'recall', 'memory']) {
       await expect(page.locator(`#message-action-${id}`)).toHaveCount(0);
     }
   });

@@ -19,8 +19,7 @@ export interface ScopeResetDetail {
 
 function roomPredicate(roomId: string) {
   return (query: { queryKey: readonly unknown[] }) =>
-    (query.queryKey[0] === 'room' && query.queryKey[1] === roomId) ||
-    (query.queryKey[0] === 'room-tasks' && query.queryKey[1] === roomId);
+    query.queryKey[0] === 'room' && query.queryKey[1] === roomId;
 }
 
 function privatePredicate(query: { queryKey: readonly unknown[] }) {

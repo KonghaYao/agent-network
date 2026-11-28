@@ -36,8 +36,8 @@ export interface MessageRecallResult { message_id: string; recalled: true }
  * - 非 owner human：只撤回自己的消息，保留两分钟窗口、`send_message` 能力与
  *   “不能包含投递”的既有规则；admin 不继承 owner 的任意撤回。
  *
- * 软撤回只清空 `body`/`body_bytes` 并写 tombstone，不改变 sender、时间线、
- * Task 或引用；已置顶消息在同一事务内取消置顶。撤回事件保留原 sender_id，
+ * 软撤回只清空 `body`/`body_bytes` 并写 tombstone，不改变 sender、时间线与
+ * 引用；已置顶消息在同一事务内取消置顶。撤回事件保留原 sender_id，
  * 另记 `recalled_by`，并保留 `body_sha256` 供发送重放校验。
  */
 export async function messageRecall(

@@ -19,9 +19,7 @@ import { RenameRoomDialog } from '../overlays/RenameRoomDialog';
 import { ReportDialog } from '../overlays/ReportDialog';
 import type { RoomOverlay } from '../overlays/RoomMenu';
 import { TransferDialog } from '../overlays/TransferDialog';
-import { MessageSearchDialog } from '../tasks/MessageSearchDialog';
-import { TaskTraceDialog } from '../tasks/TaskTraceDialog';
-import type { TaskTraceTarget } from '../tasks/useRoomTaskController';
+import { MessageSearchDialog } from '../search/MessageSearchDialog';
 import type { ReissueState } from '../../hooks/useRoomMenuActions';
 
 /**
@@ -50,10 +48,6 @@ export function ChatDialogs({
   onSearchOpenChange,
   searchReturnFocusRef,
   onLocateSearchResult,
-  onOpenTrace,
-  taskTrace,
-  onCloseTrace,
-  onJumpToMessage,
   forwardItem,
   onForwardItemChange,
   onForwardSent,
@@ -76,10 +70,6 @@ export function ChatDialogs({
   onSearchOpenChange: (open: boolean) => void;
   searchReturnFocusRef: RefObject<HTMLElement | null>;
   onLocateSearchResult: (target: SearchNavigationTarget) => Promise<LocateResult>;
-  onOpenTrace: (rootId: string, focusId: string | null) => void;
-  taskTrace: TaskTraceTarget | null;
-  onCloseTrace: () => void;
-  onJumpToMessage: (messageId: string) => void;
   forwardItem: HistoryMessage | null;
   onForwardItemChange: (item: HistoryMessage | null) => void;
   onForwardSent: (roomName: string) => void;
@@ -158,21 +148,6 @@ export function ChatDialogs({
         token={token}
         returnFocusRef={searchReturnFocusRef}
         onLocate={onLocateSearchResult}
-        onOpenTask={(rootId, focusId) => {
-          onSearchOpenChange(false);
-          onOpenTrace(rootId, focusId);
-        }}
-      />
-      <TaskTraceDialog
-        open={taskTrace !== null}
-        onOpenChange={(open) => {
-          if (!open) onCloseTrace();
-        }}
-        roomId={room.room_id}
-        rootId={taskTrace?.rootId ?? null}
-        focusId={taskTrace?.focusId ?? null}
-        token={token}
-        onJump={onJumpToMessage}
       />
       {forwardItem ? (
         <ForwardDialog

@@ -132,6 +132,9 @@ import { DEFAULT_MEMORY_HOST_POLICY } from '../memory/host-bridge';
 import type { RegistrationServer } from './registration';
 import { register } from './tool-registration';
 import { registerContactTools } from './contact-tools';
+import { registerFocusTools } from './focus-tools';
+import { registerFocusSecretaryTools } from './focus-secretary-tools';
+import { isFocusServicePrincipal } from '../focus/service';
 import { registerRoomTools } from './room-tools';
 import { registerMessageTools, type ToolHooks } from './message-tools';
 
@@ -151,6 +154,11 @@ export function registerTools(
   principal: Principal,
   hooks: ToolHooks = {},
 ): void {
+  // 秘书服务身份只暴露四个 Focus 工具，避免模型看到并调用房间/消息工具。
+  if (isFocusServicePrincipal(principal)) {
+    registerFocusSecretaryTools(server, { env, principal }, register);
+    return;
+  }
   const db = env.DB;
   const origin = env.PUBLIC_ORIGIN;
   const ticketSecret = fileTicketSecret(env.FILE_TICKET_SECRET);
@@ -198,7 +206,7 @@ export function registerTools(
   register(
     server,
     'network_login',
-    '常驻 MCP 客户端在 agentnet://stream 订阅 ack 后显式上线；未上线时投递仍保存在 SQLite。单次收发与宿主 webhook 回调无需以 login 建立监听。重复调用幂等，返回待办数量与 inbox 头。pending_count 是未领取的普通投递数，不代表任务总数；会话与任务摘要由 network_inbox_list、network_rooms_list 与 network_task_summaries 读取。login 不改变 pending_count、房间 head、未读或在线状态。online: true 只代表调用成功，不能证明订阅可达。',
+    '常驻 MCP 客户端在 agentnet://stream 订阅 ack 后显式上线；未上线时投递仍保存在 SQLite。单次收发与宿主 webhook 回调无需以 login 建立监听。重复调用幂等，返回待办数量与 inbox 头。pending_count 是未领取的普通投递数，不代表任务总数；会话与房间摘要由 network_inbox_list 与 network_rooms_list 读取。login 不改变 pending_count、房间 head、未读或在线状态。online: true 只代表调用成功，不能证明订阅可达。',
     loginSchema,
     loginResultSchema,
     async () => login(env, principal),
@@ -611,4 +619,5 @@ export function registerTools(
   registerContactTools(server, db, principal, origin);
   registerRoomTools(server, env, principal);
   registerMessageTools(server, env, principal, memory, hooks);
+  registerFocusTools(server, { db: env.DB, principal, env }, register);
 }

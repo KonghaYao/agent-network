@@ -55,7 +55,6 @@ interface MessageItem {
   created_at: string;
   reply_to: string | null;
   root_id: string | null;
-  task_root_id: string | null;
   hop: number;
   delivery_states: Record<string, number>;
   mentions: never[];
@@ -76,7 +75,6 @@ function message(seq: number): MessageItem {
     created_at: String(1_700_000_000_000 + seq),
     reply_to: null,
     root_id: null,
-    task_root_id: null,
     hop: 0,
     delivery_states: {},
     mentions: [],

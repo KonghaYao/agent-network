@@ -1,8 +1,8 @@
 {
   "version": 1,
   "protocolVersion": "2026-07-28",
-  "toolCount": 143,
-  "toolsetSha256": "feb8656d3ef8329e52c5b8ae030e2e220ba8805473651d7c6898d4ccfa6889ee",
+  "toolCount": 142,
+  "toolsetSha256": "b4a35926d398e9dc9e49b0e4c29f9c243e263de1179255f1e066cde0bc1265bb",
   "instructionsSha256": "ec26290a0a6cbe945cdcad7dc8d860207013de90817b700422d26c8214e577e8",
   "frames": [
     {
@@ -206,9 +206,9 @@
       },
       "response": {
         "result": {
-          "toolCount": 143,
-          "toolset_sha256": "feb8656d3ef8329e52c5b8ae030e2e220ba8805473651d7c6898d4ccfa6889ee",
-          "listing_sha256": "39eed0bafbd1aa958512d7ac4cacc8f1a7654b1fdb889601e3fcfa5d291f7724",
+          "toolCount": 142,
+          "toolset_sha256": "b4a35926d398e9dc9e49b0e4c29f9c243e263de1179255f1e066cde0bc1265bb",
+          "listing_sha256": "e0724b7b731f84f8bafe0814d262a8d0b2310e148d68cab6c9de21a799575011",
           "tools": [
             {
               "name": "network_issue_token",
@@ -220,15 +220,15 @@
             },
             {
               "name": "network_me",
-              "digest": "59e701067881d4eeb95154321d473ff0abeb4281b3ee6527267bda123aff33a6"
+              "digest": "fbf13c6007396006d381354b0785ee440f08c9b41664c11650a778cec469b18b"
             },
             {
               "name": "network_client_guide",
-              "digest": "bef63eb708ac5dca2f9abc96b91eb3917b4259adcf5218deff59b5f73bdcf808"
+              "digest": "d4cfb83bc76d26a87ccdbe65e6525c8bb2bbee3195a4840f2398cca0d6bbd72c"
             },
             {
               "name": "network_login",
-              "digest": "0d2b369d1efbd6fe5e28e883840408c9f03c534c258a1fa0ddd3106886cfbe9c"
+              "digest": "8375d67977ccc9e2d8a99303a057b922caed7af4da97bcfeb31fd2a5c5d04012"
             },
             {
               "name": "network_profile_update",
@@ -544,11 +544,11 @@
             },
             {
               "name": "network_message_send",
-              "digest": "766f0dd067a1dd1ddf3fe48a6c34fa5203f6e5bb7c16bbb669218c5d17de4209"
+              "digest": "870384006ffc4e800c5b2ebe0227d00b9d97a56e1850c7c2dbabfcbf2de48179"
             },
             {
               "name": "network_message_recall",
-              "digest": "b1efdc1d514bf91eed794d3bbf8f03a5be8a4a8ad85980c1d661c7be3d460791"
+              "digest": "a527ad013cca321d5a31b5fbf0b6a857efd12b29351168990b348a094e00cc52"
             },
             {
               "name": "network_room_message_pin",
@@ -560,39 +560,11 @@
             },
             {
               "name": "network_history_list",
-              "digest": "67a17789618095480e0fe57f00c4b92986c5b4af93d9fa1ca6cd2ca9786325fd"
+              "digest": "876c89ed55695758ea563007e255fec191f75e9227c4011a50294506e7a451a2"
             },
             {
               "name": "network_message_search",
               "digest": "f80dc80383475df0323cb7955cf50fde21122f2affe8cff457cceedd3a5343e6"
-            },
-            {
-              "name": "network_task_mark",
-              "digest": "96a0da47235c206a027321fdaaf0b3d9a940d4b55cf2c77e8bffd47d825d218b"
-            },
-            {
-              "name": "network_task_unmark",
-              "digest": "11e184dfcc30cb1460d24514dd0b669c8c0f9d7b5c5fce0391054401375ed354"
-            },
-            {
-              "name": "network_task_summaries",
-              "digest": "9bd3c7ab2dffec53d325125a12a19377a8d15b2f8dbcf802996df2d07c81baf5"
-            },
-            {
-              "name": "network_task_trace",
-              "digest": "c10237a6c0b6e19e3f0a63adef5bd67352453c91e906120d3f6ce49b67edd3b2"
-            },
-            {
-              "name": "network_task_search",
-              "digest": "8325818c47c57f9dd592d1be3300daf0bcbd233a301be70ae37dbecc5e7a17a9"
-            },
-            {
-              "name": "network_task_list",
-              "digest": "ee2256e3a3b03a154eb9c3aeb97e67156bd621f02086655794f249e072bda79c"
-            },
-            {
-              "name": "network_task_complete",
-              "digest": "e33dcccf93ff0cb2848d895c77f3dffaf8b654e6564d568ebfa1f9739b43bc3b"
             },
             {
               "name": "network_message_context",
@@ -624,7 +596,7 @@
             },
             {
               "name": "network_delivery_complete",
-              "digest": "ca5699f59564313edea3d05a253f6c8d1cc2b464ff511b9b7e7e4ad9b0625611"
+              "digest": "2217926671516009074425dffea444f6d29331b6e08a61ad278a53f5191b2c48"
             },
             {
               "name": "network_delivery_fail",
@@ -637,6 +609,30 @@
             {
               "name": "network_delivery_retry",
               "digest": "2beeca5bbe13d5f0848fcbd1adb5b335e152d06a8c6cde57ca6c3182ffcbc510"
+            },
+            {
+              "name": "network_focus_status",
+              "digest": "158f82eea612708c7a62628e2b16365fcdd6798c768701bef52d0af79d4fe2ab"
+            },
+            {
+              "name": "network_focus_enable",
+              "digest": "3bf326e08fd6f00219f60367f749fd29d38c1604c0b33ce5e5ca1cbe02772a45"
+            },
+            {
+              "name": "network_focus_disable",
+              "digest": "27449a306694ec982c40b480206758b1a9985501bcbc044cc9b865b26bc03290"
+            },
+            {
+              "name": "network_focus_list",
+              "digest": "8ee2f237a7f11c0ceada6c1ef2bc9df846b89959f5affbb4496538e0ff8f0a48"
+            },
+            {
+              "name": "network_focus_get",
+              "digest": "7d91e21ff0b9bf8e1288f45ee1634f687e82e3a27517eecebe72f6a8a9601230"
+            },
+            {
+              "name": "network_focus_archive",
+              "digest": "0c84ebb1b1f0e8f63d9983a89ca3be21408530b714a203b66f2d4e2bd35c1a75"
             },
             {
               "name": "network_memory_status",
@@ -814,7 +810,7 @@
           "content": [
             {
               "type": "text",
-              "text": "{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"agent_session_id\":\"sess_parity_owner\",\"name\":\"Parity Owner\",\"metadata\":{},\"pending_count\":0,\"inbox_head_seq\":\"0\",\"created_at\":\"<ts>\",\"share_url\":\"<origin>/a/sess_parity_owner\",\"avatar_url\":null,\"resources\":[\"agentnet://stream\"],\"service\":{\"protocol_version\":\"2026-07-28\",\"contract_version\":\"2026-11-13.2\",\"toolset_sha256\":\"feb8656d3ef8329e52c5b8ae030e2e220ba8805473651d7c6898d4ccfa6889ee\",\"tool_count\":143,\"guide_tool\":\"network_client_guide\",\"files_enabled\":true,\"events_enabled\":false,\"memory\":{\"enabled\":false,\"contract_version\":\"2026-11-10.1\",\"capture\":false,\"engine_status\":\"unavailable\",\"host_modes\":[\"tool_only\"],\"recall_modes\":[\"bootstrap\",\"related\",\"task\",\"lookup\",\"reflect\"],\"tools\":[\"network_memory_admit\",\"network_memory_catchup_get\",\"network_memory_catchup_prepare\",\"network_memory_context_get\",\"network_memory_context_list\",\"network_memory_context_pack\",\"network_memory_correct\",\"network_memory_experience_get\",\"network_memory_experience_list\",\"network_memory_forget\",\"network_memory_get\",\"network_memory_host_bind\",\"network_memory_host_close\",\"network_memory_input_prepare\",\"network_memory_input_status\",\"network_memory_list\",\"network_memory_operation_get\",\"network_memory_put\",\"network_memory_recall\",\"network_memory_status\"],\"supported\":[],\"unsupported\":[\"all\"],\"reason\":\"memory_disabled\"},\"connector_refresh\":\"将当前连接器工具名/描述/输入输出 schema 与实时 tools/list 比对；缺失或摘要不同需刷新目录。服务端无法替宿主刷新缓存。\"}}"
+              "text": "{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"agent_session_id\":\"sess_parity_owner\",\"name\":\"Parity Owner\",\"metadata\":{},\"pending_count\":0,\"inbox_head_seq\":\"0\",\"created_at\":\"<ts>\",\"share_url\":\"<origin>/a/sess_parity_owner\",\"avatar_url\":null,\"resources\":[\"agentnet://stream\"],\"service\":{\"protocol_version\":\"2026-07-28\",\"contract_version\":\"2026-11-27.4\",\"toolset_sha256\":\"b4a35926d398e9dc9e49b0e4c29f9c243e263de1179255f1e066cde0bc1265bb\",\"tool_count\":142,\"guide_tool\":\"network_client_guide\",\"files_enabled\":true,\"events_enabled\":false,\"memory\":{\"enabled\":false,\"contract_version\":\"2026-11-10.1\",\"capture\":false,\"engine_status\":\"unavailable\",\"host_modes\":[\"tool_only\"],\"recall_modes\":[\"bootstrap\",\"related\",\"task\",\"lookup\",\"reflect\"],\"tools\":[\"network_memory_admit\",\"network_memory_catchup_get\",\"network_memory_catchup_prepare\",\"network_memory_context_get\",\"network_memory_context_list\",\"network_memory_context_pack\",\"network_memory_correct\",\"network_memory_experience_get\",\"network_memory_experience_list\",\"network_memory_forget\",\"network_memory_get\",\"network_memory_host_bind\",\"network_memory_host_close\",\"network_memory_input_prepare\",\"network_memory_input_status\",\"network_memory_list\",\"network_memory_operation_get\",\"network_memory_put\",\"network_memory_recall\",\"network_memory_status\"],\"supported\":[],\"unsupported\":[\"all\"],\"reason\":\"memory_disabled\"},\"connector_refresh\":\"将当前连接器工具名/描述/输入输出 schema 与实时 tools/list 比对；缺失或摘要不同需刷新目录。服务端无法替宿主刷新缓存。\"}}"
             }
           ],
           "structuredContent": {
@@ -833,9 +829,9 @@
             ],
             "service": {
               "protocol_version": "2026-07-28",
-              "contract_version": "2026-11-13.2",
-              "toolset_sha256": "feb8656d3ef8329e52c5b8ae030e2e220ba8805473651d7c6898d4ccfa6889ee",
-              "tool_count": 143,
+              "contract_version": "2026-11-27.4",
+              "toolset_sha256": "b4a35926d398e9dc9e49b0e4c29f9c243e263de1179255f1e066cde0bc1265bb",
+              "tool_count": 142,
               "guide_tool": "network_client_guide",
               "files_enabled": true,
               "events_enabled": false,
@@ -1018,12 +1014,12 @@
               "uri": "skill://agent-network/agent-network/SKILL.md",
               "frontmatter": {
                 "name": "agent-network",
-                "description": "使用 WeBots MCP 服务：注册身份、管理好友与房间、收发消息、领取 Agent 待办、标记并列出/完成消息式 Task、读取摘要/Trace、归档 Agent、提交问题反馈、上传 Drive 文件与绑定房间文件，并订阅唯一 agentnet://stream 接收全部来源提示；支持 MCP Events webhook 事件订阅。"
+                "description": "使用 WeBots MCP 服务：注册身份、管理好友与房间、收发消息、领取 Agent 待办、归档 Agent、提交问题反馈、上传 Drive 文件与绑定房间文件，并订阅唯一 agentnet://stream 接收全部来源提示；支持 MCP Events webhook 事件订阅。"
               },
               "resources": [
                 {
                   "uri": "skill://agent-network/agent-network/SKILL.md",
-                  "digest": "sha256:368583d632eef5d8fee9551b1be6911740c3c57175e9ea3d63e9586daf7dccff"
+                  "digest": "sha256:63072448d47e1352839136428e4875a04d65c296101036e1a4d05bed9acb7ff3"
                 }
               ]
             }
@@ -1062,12 +1058,12 @@
             "uri": "skill://agent-network/agent-network/SKILL.md",
             "frontmatter": {
               "name": "agent-network",
-              "description": "使用 WeBots MCP 服务：注册身份、管理好友与房间、收发消息、领取 Agent 待办、标记并列出/完成消息式 Task、读取摘要/Trace、归档 Agent、提交问题反馈、上传 Drive 文件与绑定房间文件，并订阅唯一 agentnet://stream 接收全部来源提示；支持 MCP Events webhook 事件订阅。"
+              "description": "使用 WeBots MCP 服务：注册身份、管理好友与房间、收发消息、领取 Agent 待办、归档 Agent、提交问题反馈、上传 Drive 文件与绑定房间文件，并订阅唯一 agentnet://stream 接收全部来源提示；支持 MCP Events webhook 事件订阅。"
             },
             "resources": [
               {
                 "uri": "skill://agent-network/agent-network/SKILL.md",
-                "digest": "sha256:368583d632eef5d8fee9551b1be6911740c3c57175e9ea3d63e9586daf7dccff"
+                "digest": "sha256:63072448d47e1352839136428e4875a04d65c296101036e1a4d05bed9acb7ff3"
               }
             ]
           },
@@ -1101,7 +1097,7 @@
             {
               "uri": "skill://agent-network/agent-network/SKILL.md",
               "mimeType": "text/markdown",
-              "text": "<text:sha256:368583d632eef5d8:len=51052>"
+              "text": "<text:sha256:63072448d47e1352:len=46502>"
             }
           ],
           "resultType": "complete",
@@ -1459,7 +1455,7 @@
           "content": [
             {
               "type": "text",
-              "text": "{\"message\":{\"message_id\":\"<msg>\",\"room_id\":\"<rm>\",\"sender_id\":\"<agt>\",\"created_seq\":\"4\",\"preview\":\"<redacted>\",\"body_bytes\":11,\"created_at\":\"<ts>\",\"reply_to\":null,\"root_id\":null,\"task_root_id\":null,\"hop\":0,\"delivery_states\":{\"pending\":1},\"mentions\":[{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"source\":\"explicit\"}],\"delivery_claimed_at\":null,\"delivery_updated_at\":null},\"delivery_ids\":[\"<dlv>\"]}"
+              "text": "{\"message\":{\"message_id\":\"<msg>\",\"room_id\":\"<rm>\",\"sender_id\":\"<agt>\",\"created_seq\":\"4\",\"preview\":\"<redacted>\",\"body_bytes\":11,\"created_at\":\"<ts>\",\"reply_to\":null,\"root_id\":null,\"hop\":0,\"delivery_states\":{\"pending\":1},\"mentions\":[{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"source\":\"explicit\"}],\"delivery_claimed_at\":null,\"delivery_updated_at\":null},\"delivery_ids\":[\"<dlv>\"]}"
             }
           ],
           "structuredContent": {
@@ -1473,7 +1469,6 @@
               "created_at": "<ts>",
               "reply_to": null,
               "root_id": null,
-              "task_root_id": null,
               "hop": 0,
               "delivery_states": {
                 "pending": 1
@@ -1533,7 +1528,7 @@
           "content": [
             {
               "type": "text",
-              "text": "{\"items\":[{\"message_id\":\"<msg>\",\"room_id\":\"<rm>\",\"sender_id\":\"<agt>\",\"sender_kind\":\"agent\",\"sender_avatar_url\":null,\"created_seq\":\"4\",\"preview\":\"<redacted>\",\"body_bytes\":11,\"created_at\":\"<ts>\",\"reply_to\":null,\"root_id\":null,\"task_root_id\":null,\"hop\":0,\"delivery_states\":{\"pending\":1},\"mentions\":[{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"source\":\"explicit\"}],\"delivery_claimed_at\":null,\"delivery_updated_at\":null}],\"next_cursor\":null,\"has_more\":false,\"snapshot\":\"4\",\"head_seq\":\"4\",\"authorization\":\"<redacted>\"}"
+              "text": "{\"items\":[{\"message_id\":\"<msg>\",\"room_id\":\"<rm>\",\"sender_id\":\"<agt>\",\"sender_kind\":\"agent\",\"sender_avatar_url\":null,\"created_seq\":\"4\",\"preview\":\"<redacted>\",\"body_bytes\":11,\"created_at\":\"<ts>\",\"reply_to\":null,\"root_id\":null,\"hop\":0,\"delivery_states\":{\"pending\":1},\"mentions\":[{\"actor_id\":\"<agt>\",\"kind\":\"agent\",\"source\":\"explicit\"}],\"delivery_claimed_at\":null,\"delivery_updated_at\":null}],\"next_cursor\":null,\"has_more\":false,\"snapshot\":\"4\",\"head_seq\":\"4\",\"authorization\":\"<redacted>\"}"
             }
           ],
           "structuredContent": {
@@ -1550,7 +1545,6 @@
                 "created_at": "<ts>",
                 "reply_to": null,
                 "root_id": null,
-                "task_root_id": null,
                 "hop": 0,
                 "delivery_states": {
                   "pending": 1
@@ -1859,7 +1853,7 @@
           "content": [
             {
               "type": "text",
-              "text": "{\"message\":{\"message_id\":\"<msg>\",\"room_id\":\"<rm>\",\"sender_id\":\"<agt>\",\"created_seq\":\"8\",\"preview\":\"<redacted>\",\"body_bytes\":13,\"created_at\":\"<ts>\",\"reply_to\":\"<msg>\",\"root_id\":\"<msg>\",\"task_root_id\":null,\"hop\":1,\"delivery_states\":{},\"mentions\":[],\"delivery_claimed_at\":null,\"delivery_updated_at\":null},\"delivery_ids\":[]}"
+              "text": "{\"message\":{\"message_id\":\"<msg>\",\"room_id\":\"<rm>\",\"sender_id\":\"<agt>\",\"created_seq\":\"8\",\"preview\":\"<redacted>\",\"body_bytes\":13,\"created_at\":\"<ts>\",\"reply_to\":\"<msg>\",\"root_id\":\"<msg>\",\"hop\":1,\"delivery_states\":{},\"mentions\":[],\"delivery_claimed_at\":null,\"delivery_updated_at\":null},\"delivery_ids\":[]}"
             }
           ],
           "structuredContent": {
@@ -1873,7 +1867,6 @@
               "created_at": "<ts>",
               "reply_to": "<msg>",
               "root_id": "<msg>",
-              "task_root_id": null,
               "hop": 1,
               "delivery_states": {},
               "mentions": [],
@@ -1977,9 +1970,9 @@
       },
       "response": {
         "result": {
-          "toolCount": 143,
-          "toolset_sha256": "feb8656d3ef8329e52c5b8ae030e2e220ba8805473651d7c6898d4ccfa6889ee",
-          "listing_sha256": "39eed0bafbd1aa958512d7ac4cacc8f1a7654b1fdb889601e3fcfa5d291f7724",
+          "toolCount": 142,
+          "toolset_sha256": "b4a35926d398e9dc9e49b0e4c29f9c243e263de1179255f1e066cde0bc1265bb",
+          "listing_sha256": "e0724b7b731f84f8bafe0814d262a8d0b2310e148d68cab6c9de21a799575011",
           "tools": [
             {
               "name": "network_issue_token",
@@ -1991,15 +1984,15 @@
             },
             {
               "name": "network_me",
-              "digest": "59e701067881d4eeb95154321d473ff0abeb4281b3ee6527267bda123aff33a6"
+              "digest": "fbf13c6007396006d381354b0785ee440f08c9b41664c11650a778cec469b18b"
             },
             {
               "name": "network_client_guide",
-              "digest": "bef63eb708ac5dca2f9abc96b91eb3917b4259adcf5218deff59b5f73bdcf808"
+              "digest": "d4cfb83bc76d26a87ccdbe65e6525c8bb2bbee3195a4840f2398cca0d6bbd72c"
             },
             {
               "name": "network_login",
-              "digest": "0d2b369d1efbd6fe5e28e883840408c9f03c534c258a1fa0ddd3106886cfbe9c"
+              "digest": "8375d67977ccc9e2d8a99303a057b922caed7af4da97bcfeb31fd2a5c5d04012"
             },
             {
               "name": "network_profile_update",
@@ -2315,11 +2308,11 @@
             },
             {
               "name": "network_message_send",
-              "digest": "766f0dd067a1dd1ddf3fe48a6c34fa5203f6e5bb7c16bbb669218c5d17de4209"
+              "digest": "870384006ffc4e800c5b2ebe0227d00b9d97a56e1850c7c2dbabfcbf2de48179"
             },
             {
               "name": "network_message_recall",
-              "digest": "b1efdc1d514bf91eed794d3bbf8f03a5be8a4a8ad85980c1d661c7be3d460791"
+              "digest": "a527ad013cca321d5a31b5fbf0b6a857efd12b29351168990b348a094e00cc52"
             },
             {
               "name": "network_room_message_pin",
@@ -2331,39 +2324,11 @@
             },
             {
               "name": "network_history_list",
-              "digest": "67a17789618095480e0fe57f00c4b92986c5b4af93d9fa1ca6cd2ca9786325fd"
+              "digest": "876c89ed55695758ea563007e255fec191f75e9227c4011a50294506e7a451a2"
             },
             {
               "name": "network_message_search",
               "digest": "f80dc80383475df0323cb7955cf50fde21122f2affe8cff457cceedd3a5343e6"
-            },
-            {
-              "name": "network_task_mark",
-              "digest": "96a0da47235c206a027321fdaaf0b3d9a940d4b55cf2c77e8bffd47d825d218b"
-            },
-            {
-              "name": "network_task_unmark",
-              "digest": "11e184dfcc30cb1460d24514dd0b669c8c0f9d7b5c5fce0391054401375ed354"
-            },
-            {
-              "name": "network_task_summaries",
-              "digest": "9bd3c7ab2dffec53d325125a12a19377a8d15b2f8dbcf802996df2d07c81baf5"
-            },
-            {
-              "name": "network_task_trace",
-              "digest": "c10237a6c0b6e19e3f0a63adef5bd67352453c91e906120d3f6ce49b67edd3b2"
-            },
-            {
-              "name": "network_task_search",
-              "digest": "8325818c47c57f9dd592d1be3300daf0bcbd233a301be70ae37dbecc5e7a17a9"
-            },
-            {
-              "name": "network_task_list",
-              "digest": "ee2256e3a3b03a154eb9c3aeb97e67156bd621f02086655794f249e072bda79c"
-            },
-            {
-              "name": "network_task_complete",
-              "digest": "e33dcccf93ff0cb2848d895c77f3dffaf8b654e6564d568ebfa1f9739b43bc3b"
             },
             {
               "name": "network_message_context",
@@ -2395,7 +2360,7 @@
             },
             {
               "name": "network_delivery_complete",
-              "digest": "ca5699f59564313edea3d05a253f6c8d1cc2b464ff511b9b7e7e4ad9b0625611"
+              "digest": "2217926671516009074425dffea444f6d29331b6e08a61ad278a53f5191b2c48"
             },
             {
               "name": "network_delivery_fail",
@@ -2408,6 +2373,30 @@
             {
               "name": "network_delivery_retry",
               "digest": "2beeca5bbe13d5f0848fcbd1adb5b335e152d06a8c6cde57ca6c3182ffcbc510"
+            },
+            {
+              "name": "network_focus_status",
+              "digest": "158f82eea612708c7a62628e2b16365fcdd6798c768701bef52d0af79d4fe2ab"
+            },
+            {
+              "name": "network_focus_enable",
+              "digest": "3bf326e08fd6f00219f60367f749fd29d38c1604c0b33ce5e5ca1cbe02772a45"
+            },
+            {
+              "name": "network_focus_disable",
+              "digest": "27449a306694ec982c40b480206758b1a9985501bcbc044cc9b865b26bc03290"
+            },
+            {
+              "name": "network_focus_list",
+              "digest": "8ee2f237a7f11c0ceada6c1ef2bc9df846b89959f5affbb4496538e0ff8f0a48"
+            },
+            {
+              "name": "network_focus_get",
+              "digest": "7d91e21ff0b9bf8e1288f45ee1634f687e82e3a27517eecebe72f6a8a9601230"
+            },
+            {
+              "name": "network_focus_archive",
+              "digest": "0c84ebb1b1f0e8f63d9983a89ca3be21408530b714a203b66f2d4e2bd35c1a75"
             },
             {
               "name": "network_memory_status",
@@ -3380,5 +3369,5 @@
       "response": ""
     }
   ],
-  "digest": "122953da9e0082bb28adb3e96e6ba8157e8c8c31ab4d2fc5f2b731d3a553b09b"
+  "digest": "6f6043c2e93afa34dceb54459c9ebc2c27d734a7273ba5848aeedd87be045603"
 }

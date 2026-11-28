@@ -172,7 +172,7 @@ test.describe('会话历史搜索 UI', () => {
     await login(page, base, tokenA);
   });
 
-  test('模式与范围控件：精确/模糊、当前/全部，全部会话禁用只看任务', async ({ page }) => {
+  test('模式与范围控件：精确/模糊、当前/全部', async ({ page }) => {
     await openRoom(page, directRoomId);
     await openSearch(page);
     await expect(page.locator('#message-search-controls')).toBeVisible();
@@ -190,12 +190,14 @@ test.describe('会话历史搜索 UI', () => {
     ).toBeVisible();
 
     await selectScope(page, '全部会话');
-    await expect(page.locator('[data-task-only]')).toBeDisabled();
-    await expect(page.locator('#message-search-task-note')).toHaveText('全部会话不支持只看任务');
+    await expect(
+      page.locator('#message-search-dialog').getByRole('radio', { name: '全部会话' }),
+    ).toBeChecked();
 
     await selectScope(page, '当前会话');
-    await expect(page.locator('[data-task-only]')).toBeEnabled();
-    await expect(page.locator('#message-search-task-note')).toHaveCount(0);
+    await expect(
+      page.locator('#message-search-dialog').getByRole('radio', { name: '当前会话' }),
+    ).toBeChecked();
 
     const desktop = await page.locator('#message-search-dialog').evaluate((dialog) => {
       const controls = document.getElementById('message-search-controls')!;

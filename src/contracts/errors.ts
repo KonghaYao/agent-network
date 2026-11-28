@@ -42,6 +42,8 @@ export type BusinessErrorCode =
   | 'MEMORY_UNSUPPORTED_GRANULARITY'
   | 'MEMORY_TARGET_INVALID'
   | 'MEMORY_EVIDENCE_INSUFFICIENT'
+  // Task Focus 秘书运行时未配置或暂不可用；绑定与看板数据不受影响。
+  | 'FOCUS_RUNTIME_UNAVAILABLE'
   | 'CONFLICT';
 
 export interface BusinessErrorBody {

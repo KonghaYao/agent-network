@@ -3,7 +3,7 @@
  *
  * 运行前需要本地服务（默认 `AGENTNET_URL=http://127.0.0.1:8792`）。
  * 检查：
- * - `tools/list` 为 143 个唯一工具；
+ * - `tools/list` 为 142 个唯一工具（Human/Agent 视角；秘书服务身份只有 4 个）；
  * - README/CLAUDE/功能矩阵/代码索引/技能/CLI/Harness 只引用已注册工具；
  * - `public/skills` 不再包含 `.sh`，文档不再出现旧 shell 脚本名；
  * - Harness 指南不再把长期 token 二维码或隐式 @ 当作默认路径；
@@ -39,26 +39,16 @@ const DOC_FILES = [
 const OLD_SCRIPT_PATTERN =
   /(?:agentnet|agent_tasks|claude-watch|codex-watch|peri-watch|dsh-watch|other-sentinel)\.sh/u;
 
-const RETIRED_TASK_TOOL_PATTERN =
-  /network_task_(?:summary(?!ies)|list|get|create|offer|accept|decline|claim|cancel|retry|progress|block|resume|transfer|handoff|submit|submission|review|reviewer|execution)[a-z_]*/u;
+const RETIRED_TASK_TOOL_PATTERN = /network_task_[a-z_]*/u;
 
 function read(path: string): string {
   return readFileSync(join(ROOT, path), 'utf8');
 }
 
-const RETIRED_TASK_TOOLS = new Set([
-  'network_task_add',
-  'network_task_list_get',
-  'network_task_complete',
-  'network_task_fail',
-  'network_task_update',
-  'network_task_delete',
-]);
-
 function toolNames(text: string): string[] {
   return [...text.matchAll(/\b(?:network_[a-z_]+|drive_file_info)\b/gu)]
     .map((match) => match[0])
-    .filter((name) => !name.endsWith('_') && !RETIRED_TASK_TOOLS.has(name));
+    .filter((name) => !name.endsWith('_'));
 }
 
 function section(text: string, heading: string): string {
@@ -78,8 +68,8 @@ checkEqual('tools/list HTTP 状态', toolsResponse.status, 200);
 const tools =
   (toolsResponse.body.result as { tools?: Array<{ name?: string }> } | undefined)?.tools ?? [];
 const toolSet = new Set(tools.map((tool) => tool.name).filter((name): name is string => !!name));
-checkEqual('tools/list 工具数为 143', toolSet.size, 143);
-checkEqual('tools/list 无重复名称', tools.length, 143);
+checkEqual('tools/list 工具数为 142', toolSet.size, 142);
+checkEqual('tools/list 无重复名称', tools.length, 142);
 
 const unknown: string[] = [];
 for (const file of DOC_FILES) {
@@ -104,12 +94,7 @@ if (legacyScriptRefs.length > 0) console.error(legacyScriptRefs.join('\n'));
 checkEqual('文档/技能/CLI 不再出现旧 shell 脚本名', legacyScriptRefs.length, 0);
 
 const cli = read('client/cli.ts');
-check(
-  'CLI 暴露 task 五个子命令',
-  ['mark', 'unmark', 'summaries', 'trace', 'search'].every((command) =>
-    cli.includes(`.command('${command}')`),
-  ),
-);
+check('CLI 不暴露 task 子命令', !cli.includes(".command('task')"));
 check(
   'CLI 暴露 monitor --harness',
   cli.includes(".command('monitor')") && cli.includes("'--harness <name>'"),
@@ -167,7 +152,7 @@ for (const file of harness) {
 const skillText = read('public/skills/agent-network-skills.md');
 check('静态技能包含显式 invoke 规则', skillText.includes('显式 `invoke`') || skillText.includes('显式 invoke'));
 check('静态技能包含设备配对', skillText.includes('network_device_pairing_create'));
-check('静态技能包含消息式 Task 摘要与 Trace', skillText.includes('network_task_summaries') && skillText.includes('network_task_trace'));
+check('静态技能不再包含消息式 Task 工具', !RETIRED_TASK_TOOL_PATTERN.test(skillText));
 check(
   '静态技能包含用户名搜索与 actor_id 核对流程',
   skillText.includes('network_contact_search') &&

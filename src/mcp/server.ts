@@ -21,6 +21,7 @@ import {
   type RegistrationServer,
 } from './registration';
 import { registerTools, type ToolHooks } from './tools';
+import { isFocusServicePrincipal } from '../focus/service';
 
 export interface DriveBinding {
   fileService: FileService;
@@ -38,6 +39,8 @@ function registerToolSet(
       ? { afterMessageCommitted: createMessageFileArchiver(env, principal, drive) }
       : {};
   registerTools(server, env, principal, hooks);
+  // 秘书服务身份只暴露四个 Focus 工具；其余工具与资源不属于该角色。
+  if (isFocusServicePrincipal(principal)) return;
   // Memory 工具始终注册；MEMORY_ENABLED=0 时工具返回 MEMORY_DISABLED，
   // 能力目录同时声明 memory.enabled=false，避免隐藏工具被误认为可调用。
   registerMemoryTools(server, env, principal);

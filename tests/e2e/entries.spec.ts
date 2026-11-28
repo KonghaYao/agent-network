@@ -909,7 +909,7 @@ test.describe('SPA 剩余入口', () => {
     await expect(page.locator('#title')).toHaveText(renamed);
   });
 
-  test('群角色、邀请、策略、Task 搜索/Trace 与解散可用', async ({ page }) => {
+  test('群角色、邀请、策略、搜索与解散可用', async ({ page }) => {
     const base = await baseUrl();
     const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 8);
     const owner = await registerHuman(base, `Group Owner ${suffix}`);
@@ -1075,15 +1075,6 @@ test.describe('SPA 剩余入口', () => {
 
     const root = page.locator(`#messages [data-message-id="${rootId}"]`);
     await expect(root).toBeVisible();
-    await root.getByRole('button', { name: '消息操作' }).click();
-    await page.locator('#message-action-task').click();
-    await expect(root.locator('.task-bar')).toBeVisible();
-    await page.locator('#task-dock-toggle').click();
-    await expect(page.locator('.task-dock-meta')).toHaveCount(0);
-    await expect(page.locator('.task-dock-preview')).toHaveCSS('-webkit-line-clamp', '2');
-    await expect(page.locator('.task-dock-complete')).toHaveCSS('height', '32px');
-    await expect(page.locator('.task-dock-complete')).toHaveCSS('border-radius', '8px');
-    await page.locator('#task-dock-toggle').click();
 
     await page.locator('#message-search-button').click();
     await expect(page.locator('#message-search-dialog')).toBeVisible();
@@ -1101,18 +1092,8 @@ test.describe('SPA 剩余入口', () => {
     await page.locator('#message-search-input').fill('柠');
     await page.locator('#message-search-form button[type="submit"]').click();
     await expect(page.locator('#message-search-results .message-search-result')).toHaveCount(1);
-    const taskOnly = page.locator('[data-task-only]');
-    await expect(taskOnly).toHaveAttribute('data-lenso-slot', 'checkbox');
-    await expect(taskOnly).toHaveClass(/message-search-filter/u);
-    await taskOnly.check();
-    await expect(taskOnly).toHaveAttribute('aria-checked', 'true');
-    await page.locator('#message-search-form button[type="submit"]').click();
-    const taskResult = page.locator('#message-search-results .task-search-result').first();
-    await expect(taskResult).toBeVisible();
-    await taskResult.click();
-    await expect(page.locator('#task-trace-drawer')).toBeVisible();
-    await expect(page.locator('#task-trace-items .task-trace-item')).not.toHaveCount(0);
-    await page.locator('#task-trace-close').click();
+    await page.locator('#message-search-close').click();
+    await expect(page.locator('#message-search-dialog')).toHaveCount(0);
 
     await root.getByRole('button', { name: '消息操作' }).click();
     await page.locator('#message-action-forward').click();

@@ -3,7 +3,7 @@
  *
  * 不依赖外部服务：直接迁移内存库，经 D1 适配层调用域层搜索。
  * 覆盖迁移结构、回填/触发器同步、>=3 码点走 FTS、1–2 码点回退、
- * CJK/大小写/特殊字符、分页、历史可见性、撤回/删除、Task 搜索，
+ * CJK/大小写/特殊字符、分页、历史可见性、撤回/删除，
  * 以及真实 SQL 的 EXPLAIN 计划。
  */
 
@@ -23,7 +23,6 @@ import {
 import { FUZZY_CURSOR_VERSION } from '../../src/contracts/message-search-synonyms';
 import { messageSearch } from '../../src/domain/message-search';
 import { messageSearchFtsPhrase } from '../../src/domain/message-search-fts';
-import { messageTaskSearch } from '../../src/domain/message-task-search';
 import { historyList } from '../../src/domain/messages';
 import type { Principal } from '../../src/domain/principal';
 import { sha256Hex } from '../../src/storage/db';
@@ -361,26 +360,6 @@ async function searchChecks(): Promise<void> {
       11,
     );
 
-    sqlite
-      .prepare(
-        "UPDATE messages SET task_root_id = message_id, task_marked_by = 'usr_owner', task_marked_at = ? WHERE message_id = 'msg_1'",
-      )
-      .run(NOW);
-    const taskHit = await messageTaskSearch(db, owner, {
-      room_id: directRoom,
-      query: '启动会',
-    });
-    checkEqual('Task 搜索 >=3 字命中根消息', taskHit.items[0]?.task.root_message_id, 'msg_1');
-    checkEqual('Task 搜索仅返回命中根', taskHit.items.length, 1);
-    const taskShort = await messageTaskSearch(db, owner, {
-      room_id: directRoom,
-      query: '启动',
-    });
-    checkEqual(
-      'Task 搜索 2 字回退结果一致',
-      taskShort.items.map((item) => item.task.root_message_id).join(','),
-      taskHit.items.map((item) => item.task.root_message_id).join(','),
-    );
   } finally {
     sqlite.close();
   }
@@ -410,16 +389,6 @@ async function planChecks(): Promise<void> {
       ftsPlan,
     );
 
-    statements.length = 0;
-    await messageTaskSearch(recording, owner, { room_id: directRoom, query: '启动会' });
-    const taskSql = statements.find((sql) => sql.includes('matched AS')) ?? '';
-    check('Task 搜索包含 FTS 子查询', taskSql.includes('message_search_fts MATCH'));
-    const taskPlan = planOf(sqlite, taskSql);
-    check(
-      'Task 搜索走虚拟表索引',
-      taskPlan.includes('SCAN message_search_fts VIRTUAL TABLE INDEX'),
-      taskPlan,
-    );
 
     statements.length = 0;
     await messageSearch(recording, owner, { room_id: directRoom, query: '启动' });

@@ -11,7 +11,6 @@ import type { WebIdentity } from '../../lib/identity';
 import type { LocateResult, SearchNavigationTarget } from '../search/message-search-types';
 import { queryKeys } from '../../lib/query-keys';
 import type { RoomOverlay } from '../overlays/RoomMenu';
-import type { TaskTraceTarget } from '../tasks/useRoomTaskController';
 
 const ChatDialogs = lazy(() =>
   import('./ChatDialogs').then((module) => ({ default: module.ChatDialogs })),
@@ -50,13 +49,8 @@ export interface ChatDialogsMountProps {
   onSearchOpenChange: (open: boolean) => void;
   searchReturnFocusRef: RefObject<HTMLElement | null>;
   onLocateSearchResult: (target: SearchNavigationTarget) => Promise<LocateResult>;
-  onOpenTrace: (rootId: string, focusId: string | null) => void;
-  taskTrace: TaskTraceTarget | null;
-  onCloseTrace: () => void;
-  onJumpToMessage: (messageId: string) => void;
   forwardItem: HistoryMessage | null;
   onForwardItemChange: (item: HistoryMessage | null) => void;
-  invalidateTasks: () => void;
   setStatus: (message: string) => void;
 }
 
@@ -81,13 +75,8 @@ export function ChatDialogsMount({
   onSearchOpenChange,
   searchReturnFocusRef,
   onLocateSearchResult,
-  onOpenTrace,
-  taskTrace,
-  onCloseTrace,
-  onJumpToMessage,
   forwardItem,
   onForwardItemChange,
-  invalidateTasks,
   setStatus,
 }: ChatDialogsMountProps) {
   const queryClient = useQueryClient();
@@ -111,7 +100,6 @@ export function ChatDialogsMount({
           onRenameAgentOpenChange={roomActions.setRenameAgentOpen}
           onRenameAgentDone={() => {
             setStatus('已更新 Agent 名称');
-            invalidateTasks();
             void queryClient.invalidateQueries({
               queryKey: queryKeys.room(room.room_id),
             });
@@ -123,10 +111,6 @@ export function ChatDialogsMount({
           onSearchOpenChange={onSearchOpenChange}
           searchReturnFocusRef={searchReturnFocusRef}
           onLocateSearchResult={onLocateSearchResult}
-          onOpenTrace={onOpenTrace}
-          taskTrace={taskTrace}
-          onCloseTrace={onCloseTrace}
-          onJumpToMessage={onJumpToMessage}
           forwardItem={forwardItem}
           onForwardItemChange={onForwardItemChange}
           onForwardSent={(roomName) => {

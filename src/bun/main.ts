@@ -26,6 +26,10 @@ import { initEventsFileLog } from '../events/log-file';
 import { scheduleEventsTick, stopEventsRuntime } from '../events/runtime';
 import type { FileMount } from '@peri-code/mcpp/files';
 import { remindStaleDeliveries } from '../domain/delivery-reminders';
+import { resolveFocusConfig } from '../focus/config';
+import { recoverFocusJobs } from '../focus/jobs';
+import { ensureFocusServiceActor } from '../focus/service';
+import { wakeFocusWatch } from '../focus/watch';
 import { NotificationHub } from '../realtime/hub';
 import { scheduleOutboxDrain } from '../realtime/outbox';
 import { AgentPresenceTimeline } from '../realtime/presence-timeline';
@@ -134,6 +138,8 @@ if (applied.length > 0) {
 
 const environment = process.env.ENVIRONMENT ?? 'development';
 const eventsConfig = await loadEventsConfig(environment);
+// Task Focus 秘书运行时：五项全空表示未启用；部分填写在启动时失败，只列缺失变量名。
+const focusConfig = resolveFocusConfig(process.env);
 
 let hubRef: NotificationHub | null = null;
 let envRef: Env | null = null;
@@ -176,6 +182,7 @@ const env: Env = {
   MESSAGE_SEARCH_FTS: process.env.MESSAGE_SEARCH_FTS !== '0',
   FILE_TICKET_SECRET: fileTicketSecretValue,
   ...(eventsConfig ? { EVENTS: eventsConfig } : {}),
+  FOCUS: focusConfig,
 };
 envRef = env;
 
@@ -359,6 +366,14 @@ if (memoryRuntime) {
 // 启动扫描：崩溃遗留的 online 转为 pending/inferred；已到期的 pending 立即确认。
 await presence.recover();
 
+// 秘书服务身份在监听前登记：token 变化时撤销旧摘要并插入新摘要。
+if (focusConfig) {
+  await ensureFocusServiceActor(d1, focusConfig.serviceToken);
+  console.log('task focus runtime configured (service identity ready)');
+} else {
+  console.log('task focus runtime disabled: FOCUS_RUNTIME_UNAVAILABLE');
+}
+
 if (eventsConfig) {
   initEventsFileLog({ dataDir });
   console.log(
@@ -482,8 +497,19 @@ if (mount) console.log(`upload endpoint: ${publicOrigin}${mount.uploadPath}`);
 // 重启后立即接回持久队列；无需等待新的工具请求或一分钟维护周期。
 scheduleEventsTick(env);
 
+// Task Focus：先恢复遗留作业，再唤醒 Watch 补扫停机期间已提交的事件。
+// 两者都不阻塞监听；失败只记录固定分类。
+void recoverFocusJobs(env, { startup: true }).catch(() => {
+  console.error('agent-network focus recovery failed: startup');
+});
+wakeFocusWatch(env, [{ event_type: 'startup' }]);
+
 const schedule = setInterval(() => {
   void runScheduled(env);
+  wakeFocusWatch(env, [{ event_type: 'maintenance' }]);
+  void recoverFocusJobs(env).catch(() => {
+    console.error('agent-network focus recovery failed: maintenance');
+  });
 }, 60_000);
 
 // 上下线 grace 扫描独立于 60s 维护周期；阈值只在 contracts/limits.ts 维护。

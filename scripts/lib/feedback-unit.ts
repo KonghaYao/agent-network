@@ -233,7 +233,7 @@ function checkMigrationUpgrade(): void {
       '0044_files_public_backfill.sql,0045_memory_ledger.sql,0046_memory_experience_catchup.sql,' +
       '0047_message_search_fts.sql,0048_message_task_completion.sql,' +
       '0049_message_global_order_index.sql,0050_actor_avatar.sql,' +
-      '0051_group_message_moderation.sql',
+      '0051_group_message_moderation.sql,0052_focus_kanban.sql,0053_drop_message_tasks.sql',
   );
   checkEqual(
     '旧库升级保留原业务数据',

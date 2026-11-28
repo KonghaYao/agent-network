@@ -180,11 +180,6 @@ export const messages = sqliteTable(
     hop: integer('hop').notNull().default(0),
     root_invocations_used: integer('root_invocations_used').notNull().default(0),
     created_at: integer('created_at').notNull(),
-    task_root_id: text('task_root_id'),
-    task_marked_by: text('task_marked_by'),
-    task_marked_at: integer('task_marked_at'),
-    task_completed_at: integer('task_completed_at'),
-    task_completed_by: text('task_completed_by'),
   },
   (table) => [
     primaryKey({ columns: [table.message_id] }),
@@ -197,9 +192,6 @@ export const messages = sqliteTable(
     index('idx_messages_room_reply_to')
       .on(table.room_id, table.reply_to, table.created_seq)
       .where(sql`${table.reply_to} is not null`),
-    index('idx_messages_task_root')
-      .on(table.room_id, table.task_root_id, table.created_seq)
-      .where(sql`${table.task_root_id} is not null`),
     unique('messages_sender_client_unique').on(table.sender_id, table.client_message_id),
   ],
 );
