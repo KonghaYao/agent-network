@@ -28,7 +28,7 @@
 | P0-7 | 关页面、双端并发启停、迟到/乱序、模型故障、重启、普通 Agent 不在场 | E2E 停服重启后同一秘书/卡保留；运行时覆盖暂停/重开/代次拒绝/租约；真实模型故障与双端并发未跑 | 本地部分 |
 | P0-8 | 独立 Swarm 上同一 SDK 客户端运行秘书与普通群交付角色；双副本回调 | 本地 docker compose 启动 2 副本 + nginx + PG + Rivet；服务身份 `tools/list` 仅 4 个 Focus 工具；真实模型通过 MCP 建卡/改卡；未跑普通群交付测试角色 | 本地部分通过 |
 | P0-9 | 4.5 真实链路；断线恢复同一根；串用作业引用；撤权后模型实际输入 | 真实链路已通；断线恢复/同根撤权后的模型输入未做专门注入验证 | 本地部分 / 外部依赖 |
-| P0-10 | 10 万标注事件：新增 10 卡、更新 5 卡、归档复活 0；同一根会话 | 未跑；当前可用确定性夹具在本地跑业务计数，但缺少真实模型与 10 万规模环境 | 外部阻塞 |
+| P0-10 | 10 万标注事件：新增 10 卡、更新 5 卡、归档复活 0；同一根会话 | `verify-focus-load`：25 轮 Watch 扫描、100,000 候选、2,000 个作业；新增 10、5 张现有卡更新、归档复活 0、无遗留 assigned；确定性秘书不含真实模型 | 本地通过（业务负载；真实模型成本未测） |
 | P0-11 | 带草稿开窗原地收起；跨会话跳到未加载原消息；返回看板 | `verify-focus-web` 59 项：草稿保留、跨房原消息高亮、返回恢复 tab/列/选中/搜索词/滚动断点 | 本地通过 |
 | P1-1 | 桌面/手机走查：浮窗、快捷键、中文输入、三列、归档、重开、320px | `verify-focus-web` 覆盖 1440×900、390×844、⌘K、IME、归档、重开；来源会话筛选未实现 | 本地部分 |
 | P1-2 | 60 组标注事件评测真实模型；100 用户/10 群/10 msg/s | 未连接真实模型 | 外部阻塞 |
@@ -47,6 +47,7 @@
 | `bun scripts/verify-focus-e2e.ts` | 22 项 HTTP 端到端检查通过（假 Swarm；两 owner、归档、重启） |
 | `PERI_SWARM_API_KEY=... bun scripts/verify-focus-live.ts` | 20 项真实 Swarm/真实模型检查通过（两用户、私有群、私聊、归档、重启） |
 | `PERI_SWARM_API_KEY=... bun scripts/verify-focus-live-delivery.ts` | 12 项真实交付领取/完成/原卡更新检查通过 |
+| `bun scripts/verify-focus-load.ts` | 8 项检查通过：10 万事件、2,000 作业、10 新卡/5 更新/0 复活 |
 | `bun scripts/verify-drizzle-schema.ts` | `schema parity checks passed: 397`（49 个迁移） |
 | `bun scripts/verify-mcp-parity.ts` | `MCP parity passed`，Human/Agent 142 工具；服务身份 4 工具 |
 | `bun scripts/q01-upgrade-check.ts` | `Q01 升级检查通过: 81 项`（含 0053 零残留） |
