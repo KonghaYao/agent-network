@@ -35,6 +35,7 @@
     "test:focus-e2e": "bun scripts/verify-focus-e2e.ts",
     "test:focus-live": "bun scripts/verify-focus-live.ts",
     "test:focus-live-delivery": "bun scripts/verify-focus-live-delivery.ts",
+    "test:focus-live-two-agents": "bun scripts/verify-focus-live-two-agents.ts",
     "test:focus-load": "bun scripts/verify-focus-load.ts",
     "test:drizzle": "bun scripts/verify-drizzle-runtime.ts",
     "test:mcp-parity": "bun scripts/verify-mcp-parity.ts",
